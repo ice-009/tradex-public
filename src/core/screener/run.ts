@@ -3,7 +3,7 @@
 // loads the bars and calls these.
 
 import type { DailyBar } from "@/core/types";
-import { computeFeatures, rankRelativeStrength, type Features } from "./features";
+import { computeFeatures, rankRelativeStrength, volAdjustedMomentum, type Features } from "./features";
 import { factsFrom } from "./score";
 import { SCREENS, type MarketOverview, type MarketRow, type ScreenContext, type ScreenerRow, type SectorStat } from "./screens";
 import { warningsFor } from "./warnings";
@@ -129,12 +129,9 @@ export function marketOverview(features: Features[], members: Map<string, Member
   };
 }
 
-/** IBD-style weighted 12-month return — the same formula computeFeatures ranks on. NaN under ~3 months of bars. */
+/** Relative-strength score from daily bars: the same volatility-adjusted momentum computeFeatures ranks on. NaN under ~6 months. */
 export function rsScore(bars: DailyBar[]) {
-  const n = bars.length;
-  if (n < 64) return NaN;
-  const ret = (k: number) => (n > k ? (bars[n - 1].c / bars[n - 1 - k].c - 1) * 100 : NaN);
-  return 0.4 * ret(63) + 0.2 * ret(126) + 0.2 * ret(189) + 0.2 * ret(Math.min(252, n - 1));
+  return volAdjustedMomentum(bars.map((bar) => bar.c));
 }
 
 /** 1–99 percentile of `score` within ascending-sorted `peers` (50 when it can't be ranked). */

@@ -337,12 +337,45 @@ export function computeFeatures(symbol: string, input: DailyInput[], live: boole
     ret126,
     ret189,
     ret252,
-    rsScore: 0.4 * ret63 + 0.2 * ret126 + 0.2 * ret189 + 0.2 * ret252,
+    rsScore: volAdjustedMomentum(closes),
     rsRank: NaN,
     deliveryPct: deliveryIndex >= 0 ? (input[deliveryIndex].dp as number) : NaN,
     deliveryAvg20: priorDelivery.length >= 10 ? priorDelivery.reduce((sum, value) => sum + value, 0) / priorDelivery.length : NaN,
     deliveryDate: deliveryIndex >= 0 ? input[deliveryIndex].t : NaN,
   };
+}
+
+/** Annualised volatility (%) of daily log returns over the last `days` sessions; NaN with too little data. */
+export function annualVolatility(closes: number[], days: number): number {
+  const n = closes.length;
+  if (n < days + 1) return NaN;
+  const returns: number[] = [];
+  for (let i = n - days; i < n; i += 1) if (closes[i - 1] > 0 && closes[i] > 0) returns.push(Math.log(closes[i] / closes[i - 1]));
+  if (returns.length < days * 0.8) return NaN;
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+  const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (returns.length - 1);
+  return Math.sqrt(variance * 252) * 100;
+}
+
+/**
+ * Volatility-adjusted momentum, as NSE ranks its Nifty200 Momentum 30 index:
+ * the 6- and 12-month price returns, each divided by the stock's own volatility
+ * over that span, averaged. A steady +30% outranks a wild +30%, which is less
+ * reliable and crashes harder. Falls back to the 6-month ratio with under a
+ * year of history; NaN with under ~6 months.
+ */
+export function volAdjustedMomentum(closes: number[]): number {
+  const n = closes.length;
+  const ratio = (days: number) => {
+    if (n <= days) return NaN;
+    const ret = (closes[n - 1] / closes[n - 1 - days] - 1) * 100;
+    const vol = annualVolatility(closes, days);
+    return Number.isFinite(ret) && vol > 0 ? ret / vol : NaN;
+  };
+  const six = ratio(126);
+  const twelve = ratio(252);
+  if (!Number.isFinite(six)) return NaN;
+  return Number.isFinite(twelve) ? (six + twelve) / 2 : six;
 }
 
 /** Fill rsRank (1–99 percentile of rsScore) across a universe in place. */

@@ -5,7 +5,8 @@ import { PREFETCH_INDICES, PREFETCH_SPECS, estimateCalls, isCovered, planPrefetc
 import { dataEngine } from "@/server/data";
 import { dbStats, readSeriesMany } from "@/server/data/candleDb";
 import type { DataSource } from "@/server/data/types";
-import { asPriority, budgetFor } from "@/server/providers/fyers/budget";
+import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
+import { asPriority, budgetFor, fyersPlan } from "@/server/providers/fyers/budget";
 import { getUniverse } from "@/server/providers/universe";
 
 // "Download F&O history": fills the local market-data database with 5 years of
@@ -102,12 +103,28 @@ export function stopHistoryPrefetch() {
   if (job.state === "running") job.stop = true;
 }
 
+/**
+ * During market hours, leave enough of today's budget for live screening: about
+ * one quote refresh of the F&O list per minute until the close.
+ */
+function liveReserve(symbols: number): number {
+  const { minutes, weekday } = istParts();
+  if (weekday === 0 || weekday === 6 || minutes < SESSION_OPEN_MIN || minutes >= SESSION_CLOSE_MIN) return 0;
+  return Math.ceil(symbols / fyersPlan().limits.quoteBatch) * (SESSION_CLOSE_MIN - minutes);
+}
+
 async function run(jobs: PrefetchJob[]) {
   const queue = [...jobs];
   let pausedForBudget = false;
+  let pausedForMarket = false;
+  const reserveFor = new Set(jobs.map((entry) => entry.symbol)).size;
   const worker = async () => {
     for (let next = queue.shift(); next; next = queue.shift()) {
-      if (job.stop || pausedForBudget) return;
+      if (job.stop || pausedForBudget || pausedForMarket) return;
+      if (budgetFor("background").remainingToday < liveReserve(reserveFor) + next.spec.callsPerSymbol) {
+        pausedForMarket = true;
+        return;
+      }
       job.current = `${next.symbol} · ${next.spec.label}`;
       const from = Date.now() - next.spec.days * DAY_MS;
       const answer = await dataEngine().history({ symbol: next.symbol, interval: next.spec.interval, from, kinds: ["broker"] });
@@ -124,7 +141,9 @@ async function run(jobs: PrefetchJob[]) {
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
   const finishedAt = Date.now();
-  if (pausedForBudget) {
+  if (pausedForMarket) {
+    Object.assign(job, { state: "paused", current: null, finishedAt, message: "Paused to keep live screening going during market hours. Start it again after 15:30 — it continues where it stopped." });
+  } else if (pausedForBudget) {
     Object.assign(job, { state: "paused", current: null, finishedAt, message: "Today's API budget for background work is used up. Start it again tomorrow — it continues where it stopped." });
   } else if (job.stop) {
     Object.assign(job, { state: "paused", current: null, finishedAt, message: "Stopped. Start again to continue where it left off." });

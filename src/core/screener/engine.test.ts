@@ -27,8 +27,17 @@ describe("simulatePlan", () => {
 });
 
 describe("relative strength", () => {
-  it("needs ~3 months of bars", () => {
-    expect(rsScore(Array.from({ length: 63 }, () => bar(1, 1, 1, 1)))).toBeNaN();
+  it("needs ~6 months of bars", () => {
+    expect(rsScore(Array.from({ length: 126 }, () => bar(1, 1, 1, 1)))).toBeNaN();
+  });
+
+  it("ranks a steady rise above a choppy one with the same return (volatility-adjusted)", () => {
+    const path = (wiggle: number) =>
+      Array.from({ length: 260 }, (_, i) => {
+        const c = 100 * (1 + (0.3 * i) / 259) * (1 + (i % 2 ? wiggle : -wiggle));
+        return bar(c, c, c, c, i);
+      });
+    expect(rsScore(path(0.002))).toBeGreaterThan(rsScore(path(0.02)));
   });
 
   it("ranks a score as a 1–99 percentile", () => {

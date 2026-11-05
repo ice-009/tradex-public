@@ -1,5 +1,6 @@
 import type { Features, PatternSummary } from "@/core/screener/features";
 import type { TradePlan } from "@/core/screener/screens";
+import { REGIME_PENALTY, type RegimeState } from "@/core/screener/regime";
 
 // Setup score: 100 points across eight factors, minus penalties, so five or
 // ten candidates can be compared on one scale ("which one do I take?").
@@ -39,6 +40,12 @@ export interface StockFacts {
   support: number | null;
   chandelier: number;
   turnoverCr: number;
+  /** Close ÷ 52-week high (absent from older servers). */
+  ofHigh52?: number;
+  /** The stock's sector, ranked 0 (weakest) – 1 (strongest) by 1-month return among sectors (set by the screener). */
+  sectorPct?: number | null;
+  /** In NSE's F&O ban period today: no new futures positions (set by the screener). */
+  inBan?: boolean;
 }
 
 const finiteOrNull = (value: number) => (Number.isFinite(value) ? value : null);
@@ -64,6 +71,7 @@ export function factsFrom(f: Features): StockFacts {
     support: finiteOrNull(f.support),
     chandelier: f.chandelier,
     turnoverCr: f.turnoverCr20,
+    ofHigh52: f.high52 > 0 ? f.close / f.high52 : undefined,
   };
 }
 
@@ -95,6 +103,8 @@ export interface ScoreOptions {
   warnings?: string[];
   /** The setup buys weakness on purpose (mean reversion): a red day isn't penalised. */
   buysWeakness?: boolean;
+  /** Market regime from the screener (NIFTY trend + breadth). */
+  regime?: RegimeState;
 }
 
 const round1 = (value: number) => Math.round(value * 10) / 10;
@@ -120,8 +130,18 @@ export function scoreSetup(facts: StockFacts, plan: TradePlan, options: ScoreOpt
   });
 
   // Relative strength (15)
+  // 10 for the volatility-adjusted momentum rank (as NSE's Nifty200 Momentum 30 ranks),
+  // 5 for nearness to the 52-week high (a separate, robust effect in Indian data).
   const rs = Number.isFinite(facts.rsRank) ? facts.rsRank : 50;
-  parts.push({ key: "rs", label: "Relative strength", max: 15, points: round1((clamp(rs, 1, 99) / 99) * 15), detail: `RS rank ${Math.round(rs)} of 99 in the universe` });
+  const ofHigh = facts.ofHigh52;
+  const highPts = ofHigh === undefined || !Number.isFinite(ofHigh) ? 2.5 : ofHigh >= 0.95 ? 5 : ofHigh >= 0.85 ? 3 : ofHigh >= 0.75 ? 1 : 0;
+  parts.push({
+    key: "rs",
+    label: "Relative strength",
+    max: 15,
+    points: round1((clamp(rs, 1, 99) / 99) * 10 + highPts),
+    detail: `RS rank ${Math.round(rs)} of 99 (volatility-adjusted 6/12-month momentum)${ofHigh !== undefined && Number.isFinite(ofHigh) ? ` · ${((1 - ofHigh) * 100).toFixed(1)}% below the 52-week high` : ""}${facts.sectorPct !== undefined && facts.sectorPct !== null && facts.sectorPct >= 2 / 3 ? " · leading sector" : ""}`,
+  });
 
   // Accumulation (10): up/down volume (6) + delivery vs its average (4)
   const ud = Number.isFinite(facts.upDownVol20) ? facts.upDownVol20 : 1;
@@ -215,6 +235,11 @@ export function scoreSetup(facts: StockFacts, plan: TradePlan, options: ScoreOpt
   }
   if (facts.bearishPattern) penalties.push({ label: `${facts.bearishPattern} forming`, points: -5 });
   if (facts.turnoverCr < 5) penalties.push({ label: "Thin turnover (< ₹5 cr/day)", points: -5 });
+  if (facts.inBan) penalties.push({ label: "In the F&O ban period — no new futures positions today", points: -25 });
+  if (options.regime && REGIME_PENALTY[options.regime] < 0) {
+    penalties.push({ label: options.regime === "risk-off" ? "Market risk-off (NIFTY below its 200-day, weak breadth)" : "Market caution (weak trend or breadth)", points: REGIME_PENALTY[options.regime] });
+  }
+  if (facts.sectorPct !== undefined && facts.sectorPct !== null && facts.sectorPct < 1 / 3) penalties.push({ label: "Weak sector (bottom third over 1 month)", points: -4 });
 
   const total = clamp(Math.round(parts.reduce((sum, part) => sum + part.points, 0) + penalties.reduce((sum, p) => sum + p.points, 0)), 0, 100);
   return { total, parts, penalties, effectiveRR, resistanceInWay };

@@ -4,6 +4,11 @@ import type { ScreenerResponse, TrackResult } from "@/contracts/api";
 import { computeFeatures } from "@/core/screener/features";
 import { runTrackRecord } from "@/core/screener/backtest";
 import { buildFeatureSets, marketOverview, runScreens } from "@/core/screener/run";
+import { emptyFresh, freshKey, updateFresh, type FreshState } from "@/core/screener/fresh";
+import { marketRegime } from "@/core/screener/regime";
+import { getFnoBan } from "@/server/providers/fnoBan";
+import type { ScreenerRow } from "@/core/screener/screens";
+import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
 import type { DailyBar } from "@/core/types";
 import { screenerStore } from "@/server/providers/dailyStore";
 import { UNIVERSES, getUniverse, isUniverseId, type UniverseId } from "@/server/providers/universe";
@@ -22,6 +27,18 @@ export function parseUniverse(value: string | null): UniverseId {
 }
 
 /** Runs every screen over the universe in one pass; the first call for a universe starts a background history sync. */
+// First-seen times per universe, so new setups can be told apart from the morning's.
+const globalForFresh = globalThis as unknown as { screenerFresh?: Map<string, FreshState> };
+const freshByUniverse = (globalForFresh.screenerFresh ??= new Map());
+
+function stampFirstSeen(universeId: string, results: Record<string, ScreenerRow[]>) {
+  const now = Date.now();
+  const keys = Object.entries(results).flatMap(([screenId, rows]) => rows.map((row) => freshKey(screenId, row.symbol)));
+  const state = updateFresh(freshByUniverse.get(universeId) ?? emptyFresh(0), istParts(now).day, keys, now);
+  freshByUniverse.set(universeId, state);
+  for (const [screenId, rows] of Object.entries(results)) for (const row of rows) row.firstSeenAt = state.seen[freshKey(screenId, row.symbol)]?.first;
+}
+
 export async function runScreener(universeId: UniverseId, useLive: boolean): Promise<ScreenerResponse> {
   const members = await getUniverse(universeId);
   const symbols = members.map((member) => member.symbol);
@@ -37,21 +54,62 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
     return { status: "error", error: progress.message || "No screener data available yet.", progress, universe };
   }
 
-  const live = useLive ? await screenerStore.getLiveBars([...covered, BENCHMARK]) : new Map<string, DailyBar>();
+  const snapshot = useLive ? await screenerStore.liveSnapshot([...covered, BENCHMARK]) : { bars: new Map<string, DailyBar>(), quotesAt: null, paceMs: null, fromTicks: 0 };
+  const live = snapshot.bars;
   const stored = (symbol: string) => screenerStore.getBars(symbol);
   const sets = buildFeatureSets(covered, stored, live);
   const benchToday = live.get(BENCHMARK);
   const nifty = computeFeatures(BENCHMARK, benchToday ? [...stored(BENCHMARK), benchToday] : stored(BENCHMARK), Boolean(benchToday));
   const memberBySymbol = new Map(members.map((member) => [member.symbol, member]));
 
+  const results = runScreens(sets, { niftyRet126: nifty.ret126 }, memberBySymbol);
+  stampFirstSeen(universeId, results);
+  const market = marketOverview(sets.live, memberBySymbol);
+
+  // Market regime: NIFTY's trend and how much of the universe is above its 50-day average.
+  const regime = marketRegime({
+    niftyClose: nifty.close,
+    niftySma50: nifty.sma50,
+    niftySma200: nifty.sma200,
+    aboveSma50: sets.live.filter((f) => f.close > f.sma50).length,
+    counted: sets.live.filter((f) => Number.isFinite(f.sma50)).length,
+  });
+  // Sector strength: each sector's rank (0 weakest – 1 strongest) by median 1-month return.
+  const sectorsByReturn = [...market.sectors].filter((sector) => Number.isFinite(sector.ret21)).sort((a, b) => a.ret21 - b.ret21);
+  const sectorPct = new Map(sectorsByReturn.map((sector, index) => [sector.sector, sectorsByReturn.length > 1 ? index / (sectorsByReturn.length - 1) : 0.5]));
+  const ban = await getFnoBan();
+  const banned = new Set(ban.available ? ban.symbols : []);
+  for (const rows of Object.values(results)) {
+    for (const row of rows) {
+      if (row.facts) {
+        row.facts.sectorPct = sectorPct.get(row.industry || "Other") ?? null;
+        row.facts.inBan = banned.has(row.symbol);
+      }
+      if (banned.has(row.symbol) && !row.tags.includes("F&O ban")) row.tags = ["F&O ban", ...row.tags];
+    }
+  }
+  const now = Date.now();
+  const { minutes, weekday } = istParts(now);
+  const marketHours = weekday !== 0 && weekday !== 6 && minutes >= SESSION_OPEN_MIN + 2 && minutes <= SESSION_CLOSE_MIN;
+
   return {
     status: "ready",
     syncing: screenerStore.isSyncing(),
     progress,
     universe,
-    asOf: { eodDate: Math.max(0, ...sets.eod.map((feature) => feature.date)), live: live.size > 0, computedAt: Date.now() },
-    results: runScreens(sets, { niftyRet126: nifty.ret126 }, memberBySymbol),
-    market: marketOverview(sets.live, memberBySymbol),
+    asOf: {
+      eodDate: Math.max(0, ...sets.eod.map((feature) => feature.date)),
+      live: live.size > 0,
+      computedAt: now,
+      quotesAt: snapshot.quotesAt,
+      paceMs: snapshot.paceMs,
+      fromTicks: snapshot.fromTicks,
+      stale: useLive && marketHours && live.size === 0,
+    },
+    results,
+    market,
+    regime,
+    ban: { available: ban.available, tradeDate: ban.tradeDate, symbols: ban.symbols },
   };
 }
 

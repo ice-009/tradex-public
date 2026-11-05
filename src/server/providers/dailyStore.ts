@@ -3,8 +3,10 @@ import "server-only";
 import { DAY_MS, isWeekday, istDayKey, istParts } from "@/core/market/session";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { asPriority } from "@/server/providers/fyers/budget";
-import { dataEngine } from "@/server/data";
+import { SESSION_CLOSE_MIN } from "@/core/market/session";
+import { sweepIntervalMs } from "@/core/ratelimit/budget";
+import { asPriority, budgetFor, fyersPlan } from "@/server/providers/fyers/budget";
+import { dataEngine, marketStream } from "@/server/data";
 import { parseBhav, type BhavRow } from "@/core/parsers/bhavcopy";
 import type { DailyBar } from "@/core/types";
 
@@ -46,10 +48,26 @@ const STALE_AFTER_MS = 15 * 60 * 1000;
 const FYERS_CONCURRENCY = 2;
 const BACKFILL_ATTEMPTS = 4;
 const SPLIT_TOLERANCE = 0.015;
-/** Today's bar is rebuilt from quotes at most this often; the quotes come from the shared cache (often the high/low sweep). */
-const QUOTE_TTL_MS = 60 * 1000;
-/** Quotes this old are still fine for a screener refresh (swing/BTST screens, not ticks); same as the watchlist's, so they share one fetch. */
-const LIVE_QUOTE_MAX_AGE_MS = 5 * 60 * 1000;
+/** Fastest the screener's live quotes refresh, however much budget is left. */
+const MIN_LIVE_PACE_MS = 15 * 1000;
+
+/**
+ * How often to refresh live quotes for `count` symbols so that, at "refresh"
+ * priority, the budget lasts until the close (≈ 1 min for the F&O list on Fyers
+ * Standard, the 15 s floor on Prime). Ticks fill in between.
+ */
+function livePaceMs(count: number, minutes: number): number {
+  const refresh = budgetFor("refresh");
+  const interval = sweepIntervalMs({
+    requestsPerSweep: Math.ceil(count / fyersPlan().limits.quoteBatch),
+    remainingToday: refresh.remainingToday,
+    minutesLeft: Math.max(1, SESSION_CLOSE_MIN - minutes),
+    backgroundPerMinute: refresh.perMinute,
+    shareOfBackground: 0.4,
+    minMs: MIN_LIVE_PACE_MS,
+  });
+  return interval ?? 10 * 60 * 1000; // budget spent: every 10 minutes, ticks in between
+}
 const NSE_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
   Accept: "text/csv,*/*",
@@ -370,35 +388,70 @@ class ScreenerStore {
   // ---------------------------------------------------------------- live overlay
 
   /**
-   * Today's forming bar per symbol from Fyers batch quotes, for symbols whose
-   * stored history doesn't include today yet. Empty outside trading days/hours.
+   * Today's forming bar per symbol, for symbols whose stored history doesn't
+   * include today yet. Empty outside trading days/hours.
+   *
+   * Two layers, so screens can change during the day instead of sticking to the
+   * morning's picture:
+   *   1. Broker quotes for all of them, refreshed at a pace the API budget can
+   *      keep up for the rest of the session (≈ 1 min on Fyers Standard,
+   *      ≈ 15 s on Prime) — charged as "refresh", not background, so background
+   *      work (history downloads) can't starve it.
+   *   2. On top, any newer live tick from the market stream (charts, watchlist,
+   *      visible screener rows) — instant and free.
    */
-  async getLiveBars(symbols: string[]): Promise<Map<string, DailyBar>> {
+  async liveSnapshot(symbols: string[]): Promise<{ bars: Map<string, DailyBar>; quotesAt: number | null; paceMs: number | null; fromTicks: number }> {
     const { dayKey: today, minutes } = istNow();
-    const live = new Map<string, DailyBar>();
-    if (!isWeekday(today) || minutes < 9 * 60 + 15) return live;
+    const empty = { bars: new Map<string, DailyBar>(), quotesAt: null, paceMs: null, fromTicks: 0 };
+    if (!isWeekday(today) || minutes < 9 * 60 + 15) return empty;
     const wanted = symbols.filter((symbol) => {
       const series = this.bars.get(symbol);
       return series?.length && series[series.length - 1].t < today;
     });
-    if (!wanted.length) return live;
+    if (!wanted.length) return empty;
 
+    const paceMs = livePaceMs(wanted.length, minutes);
     const key = wanted.join(",");
-    const cached = this.quoteCache.get(key);
-    if (cached && Date.now() - cached.at < QUOTE_TTL_MS) return cached.bars;
-
-    // Live broker quotes only: an end-of-day close is already the last stored bar.
-    const quotes = await asPriority("background", () => dataEngine().quotes(wanted, { maxAgeMs: LIVE_QUOTE_MAX_AGE_MS, kinds: ["broker"] }));
-    for (const quote of quotes) {
-      if (!quote.ltp || !quote.open || !quote.high || !quote.low) continue;
-      // On an exchange holiday the quote still reports the previous session — skip it.
-      const series = this.bars.get(quote.symbol);
-      const last = series?.[series.length - 1];
-      if (last && quote.open === last.o && quote.high === last.h && quote.low === last.l) continue;
-      live.set(quote.symbol, { t: today, o: quote.open, h: quote.high, l: quote.low, c: quote.ltp, v: quote.volume });
+    let cached = this.quoteCache.get(key);
+    if (!cached || Date.now() - cached.at >= paceMs) {
+      // Live broker quotes only: an end-of-day close is already the last stored bar.
+      const fetchedAt = Date.now();
+      const quotes = await asPriority("refresh", () => dataEngine().quotes(wanted, { maxAgeMs: paceMs, kinds: ["broker"] }));
+      const bars = new Map<string, DailyBar>();
+      for (const quote of quotes) {
+        const bar = this.todayBar(quote.symbol, today, quote);
+        if (bar) bars.set(quote.symbol, bar);
+      }
+      // Keep the last good snapshot when this round got nothing (budget pause, broker hiccup).
+      if (bars.size || !cached) cached = { at: bars.size ? fetchedAt : (cached?.at ?? 0), bars };
+      this.quoteCache.set(key, cached);
     }
-    this.quoteCache.set(key, { at: Date.now(), bars: live });
-    return live;
+
+    // Newer ticks win: they're what the chart and watchlist already show.
+    const bars = new Map(cached.bars);
+    let fromTicks = 0;
+    for (const tick of marketStream().getLatest(wanted)) {
+      if (tick.ts < cached.at) continue;
+      const bar = this.todayBar(tick.symbol, today, { open: tick.open, high: tick.high, low: tick.low, ltp: tick.ltp, volume: tick.volume });
+      if (bar) {
+        bars.set(tick.symbol, bar);
+        fromTicks += 1;
+      }
+    }
+    return { bars, quotesAt: cached.at || null, paceMs, fromTicks };
+  }
+
+  async getLiveBars(symbols: string[]): Promise<Map<string, DailyBar>> {
+    return (await this.liveSnapshot(symbols)).bars;
+  }
+
+  /** Today's bar from a quote or tick; null when unusable or when it's really the previous session (exchange holiday). */
+  private todayBar(symbol: string, today: number, quote: { open: number; high: number; low: number; ltp: number; volume: number }): DailyBar | null {
+    if (!quote.ltp || !quote.open || !quote.high || !quote.low) return null;
+    const series = this.bars.get(symbol);
+    const last = series?.[series.length - 1];
+    if (last && quote.open === last.o && quote.high === last.h && quote.low === last.l) return null;
+    return { t: today, o: quote.open, h: quote.high, l: quote.low, c: quote.ltp, v: quote.volume };
   }
 }
 

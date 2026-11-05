@@ -88,3 +88,16 @@ describe("NSE bhavcopy", () => {
     expect(rows.XYZ.deliveryPct).toBeNull(); // trade-for-trade series kept; "-" delivery → null
   });
 });
+
+import { parseFnoBan } from "./fnoBan";
+
+describe("NSE F&O ban list", () => {
+  it("reads the trade date and the symbols", () => {
+    const list = parseFnoBan("Securities in Ban For Trade Date 05-NOV-2026:\r\n1,ABFRL\r\n2,HINDCOPPER\r\n3,M&MFIN\r\n");
+    expect(list).toEqual({ tradeDate: Date.UTC(2026, 10, 5), symbols: ["ABFRL", "HINDCOPPER", "M&MFIN"] });
+  });
+
+  it("handles a day with nothing in ban", () => {
+    expect(parseFnoBan("Securities in Ban For Trade Date 06-NOV-2026: NIL\n").symbols).toEqual([]);
+  });
+});
