@@ -14,6 +14,7 @@ import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
+import type { MarketRegime } from "@/core/screener/regime";
 
 export type { ResultsEvent };
 
@@ -138,9 +139,25 @@ export interface ScreenerResponse {
   syncing?: boolean;
   progress?: SyncProgressDto;
   universe?: { id: string; label?: string; count: number; covered: number };
-  asOf?: { eodDate: number; live: boolean; computedAt: number };
+  asOf?: {
+    eodDate: number;
+    live: boolean;
+    computedAt: number;
+    /** When the live quotes behind this run were fetched (null outside market hours or without a broker). */
+    quotesAt?: number | null;
+    /** How often live quotes are refreshed right now (budget-paced). */
+    paceMs?: number | null;
+    /** Stocks whose live bar came from a stream tick newer than the quotes. */
+    fromTicks?: number;
+    /** Market hours, but no live prices: screens are running on the last close. */
+    stale?: boolean;
+  };
   results?: Record<string, ScreenerRow[]>;
   market?: MarketOverview;
+  /** Is it a good time for long setups? NIFTY trend + breadth (src/core/screener/regime.ts). */
+  regime?: MarketRegime;
+  /** NSE's F&O ban list for today (best-effort; available=false when NSE couldn't be reached). */
+  ban?: { available: boolean; tradeDate: number | null; symbols: string[] };
 }
 
 // ------------------------------------------------------------------ GET /api/screener/track?universe

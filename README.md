@@ -31,6 +31,8 @@
 **Shortlisting**
 - 17 screens in four horizons: **BTST** (overnight), **Swing** (3–10 sessions), **15–30 days** and **Results** (post-earnings drift and gaps). Each cites its sources.
 - Every match comes with a **trade plan** (entry, stop, target, exit rule) and a **100-point setup score** across eight factors: trend, relative strength, accumulation, pattern, reward:risk, stop distance, extension and track record. Penalties apply for results inside the holding period, gaps and falling days.
+- **Live during the session:** setups are re-checked against fresh quotes every ~30–60 s (paced from the remaining API budget, with socket ticks laid over the top). Setups that appear after the opening scan get a **NEW** badge, and the **N new** button sorts them to the top.
+- **Market context:** a regime badge (NIFTY vs its 50/200-day averages plus breadth), sector strength and the NSE **F&O ban list** all feed the score. Relative strength is volatility-adjusted (6 and 12 months) with credit for trading near the 52-week high.
 - **Track record** shows how often each screen's past signals hit target before stop. **Compare** ranks a whole watchlist side by side.
 - Live watchlists (every F&O stock, grouped by sector), market movers, sector strength, an NSE results calendar and price alerts.
 - A **Day High / Low** scanner for F&O cash and near-month futures.

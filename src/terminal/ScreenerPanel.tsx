@@ -14,6 +14,8 @@ import { ResultsBadge } from "./MarketPanel";
 import { Icons } from "./icons";
 import { PriceCells, useVisibleLiveTick } from "./LivePrice";
 import { isBuyStop, planStatus } from "@/core/screener/planStatus";
+import { isNewSetup } from "@/core/screener/fresh";
+import type { ScreenerResponse } from "@/contracts/api";
 
 const UNIVERSES = [
   { id: "nifty50", label: "Nifty 50" },
@@ -24,7 +26,7 @@ const UNIVERSES = [
 
 const MIN_RR_OPTIONS = [0, 1.5, 2, 3];
 
-type SortKey = "setups" | "score" | "setupScore" | "symbol" | "changePct" | "volRatio" | "deliveryPct" | "rsi14" | "rsRank" | "rr" | "track";
+type SortKey = "setups" | "score" | "setupScore" | "symbol" | "changePct" | "volRatio" | "deliveryPct" | "rsi14" | "rsRank" | "rr" | "track" | "since";
 
 /** One table row: a stock plus the setup whose plan the row shows. */
 interface Line {
@@ -113,6 +115,9 @@ export function ScreenerPanel() {
           return scores.get(`${row.symbol}:${hit.screen.id}`)?.total ?? -Infinity;
         case "track":
           return records?.[hit.screen.id]?.avgR ?? -Infinity;
+        case "since":
+          // Newest setup on the stock (in "All setups" a stock can match several screens).
+          return Math.max(0, ...idea.hits.map((entry) => entry.row.firstSeenAt ?? 0), row.firstSeenAt ?? 0);
         default: {
           const raw = row[sort.key];
           return typeof raw === "number" && Number.isFinite(raw) ? raw : -Infinity;
@@ -185,10 +190,16 @@ export function ScreenerPanel() {
       : data?.status === "syncing"
         ? `${progress?.message ?? "Syncing"} ${progress?.total ? `${progress.done}/${progress.total}` : ""}`
         : data?.asOf
-          ? `${data.universe?.covered}/${data.universe?.count} stocks · EOD ${formatDay(data.asOf.eodDate)}${
-              data.asOf.live ? ` · live ${new Date(data.asOf.computedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""
-            }${data.syncing ? " · updating…" : ""}`
+          ? `${data.universe?.covered}/${data.universe?.count} stocks · EOD ${formatDay(data.asOf.eodDate)}${liveStatus(data.asOf)}${data.syncing ? " · updating…" : ""}`
           : "Loading…";
+
+  // New setups: appeared after the day's first scan, within the last 30 minutes.
+  const now = data?.asOf?.computedAt ?? 0;
+  const firstScanAt = useMemo(() => {
+    const times = Object.values(data?.results ?? {}).flatMap((rows) => rows.map((row) => row.firstSeenAt ?? Infinity));
+    return times.length ? Math.min(...times) : 0;
+  }, [data]);
+  const newCount = lines.filter(({ idea, row }) => idea.hits.some((entry) => isNewSetup(entry.row.firstSeenAt, firstScanAt, now)) || isNewSetup(row.firstSeenAt, firstScanAt, now)).length;
 
   const groupCount = (id: string) => [...ideas.values()].filter((idea) => idea.groups.includes(id as never)).length;
   const filtersActive = Boolean(query || prefs.sector || prefs.minRR || prefs.watchlistOnly);
@@ -243,7 +254,23 @@ export function ScreenerPanel() {
             </option>
           ))}
         </select>
-        <span className={`tx-scr-status ${data?.status === "error" ? "is-error" : ""}`} title={progress?.message}>
+        {data?.regime && (
+          <span
+            className={`tx-regime is-${data.regime.state}`}
+            title={[
+              `Market regime: ${data.regime.label}`,
+              ...data.regime.reasons,
+              data.regime.state === "healthy" ? "Long setups get no penalty." : `Long setups lose ${data.regime.state === "risk-off" ? 10 : 4} points.`,
+              data.ban ? (data.ban.available ? `F&O ban today: ${data.ban.symbols.length ? data.ban.symbols.join(", ") : "none"}` : "F&O ban list: NSE couldn't be reached") : "",
+            ]
+              .filter(Boolean)
+              .join("\n")}
+          >
+            <i aria-hidden />
+            Market: {data.regime.label}
+          </span>
+        )}
+        <span className={`tx-scr-status ${data?.status === "error" || data?.asOf?.stale ? "is-error" : ""}`} title={data?.asOf?.stale ? "Market is open but no live prices are arriving (broker disconnected or today's API budget used up): the screens show the last close." : progress?.message}>
           {syncing && <span className="tx-spinner tx-spinner-sm" />}
           {status}
         </span>
@@ -299,6 +326,15 @@ export function ScreenerPanel() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className={`tx-btn-outline tx-scr-new ${sort.key === "since" ? "is-on" : ""}`}
+            disabled={!newCount && sort.key !== "since"}
+            title="Setups that appeared in the last 30 minutes (not the ones from the open). Click to sort newest first."
+            onClick={() => setSort(sort.key === "since" ? { key: "setupScore", dir: -1 } : { key: "since", dir: -1 })}
+          >
+            {newCount ? `${newCount} new` : "Newest"}
+          </button>
           <button
             type="button"
             className={`tx-scr-chip ${prefs.watchlistOnly ? "is-active" : ""}`}
@@ -364,6 +400,8 @@ export function ScreenerPanel() {
                   score={scores.get(`${symbol}:${hit.screen.id}`) ?? null}
                   record={records?.[hit.screen.id]}
                   shortlisted={shortlisted.has(symbol)}
+                  firstScanAt={firstScanAt}
+                  now={now}
                 />
               ))}
             </tbody>
@@ -418,23 +456,60 @@ export function ScreenerPanel() {
 }
 
 /** One screener row. It follows the live price while on screen and checks the plan against it. */
-function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, record, shortlisted }: { symbol: string; idea: TradeIdea; hit: SetupHit; row: ScreenerRow; allView: boolean; active: boolean; score: SetupScore | null; record?: TrackRecord; shortlisted: boolean }) {
+/** Compact tag for the entry cell (the full explanation is in the cell's tooltip). */
+function shortStatus(status: Exclude<ReturnType<typeof planStatus>, { kind: "ok" }>): string {
+  switch (status.kind) {
+    case "stop-broken":
+      return "stop";
+    case "triggered":
+      return "hit";
+    case "far":
+      return "far";
+    case "moved":
+      return `${status.pct >= 0 ? "+" : ""}${status.pct.toFixed(1)}%`;
+  }
+}
+
+/** NEW badge for a setup that appeared in the last 30 minutes (not one that was there at the open); the time is in the tooltip. */
+function NewBadge({ firstSeenAt, firstScanAt, now }: { firstSeenAt?: number; firstScanAt: number; now: number }) {
+  if (!firstSeenAt || !isNewSetup(firstSeenAt, firstScanAt, now)) return null;
+  const time = new Date(firstSeenAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata" });
+  return (
+    <span className="tx-new-badge" title={`New setup: first matched at ${time}`}>
+      NEW
+    </span>
+  );
+}
+
+/** "· prices 40 s old · refresh ~1 min" (or a warning when live prices aren't arriving). */
+function liveStatus(asOf: NonNullable<ScreenerResponse["asOf"]>): string {
+  if (asOf.stale) return " · ⚠ no live prices — showing the last close";
+  if (!asOf.live || !asOf.quotesAt) return "";
+  const age = Math.max(0, Math.round((asOf.computedAt - asOf.quotesAt) / 1000));
+  const pace = asOf.paceMs ? (asOf.paceMs >= 60_000 ? `${Math.round(asOf.paceMs / 60_000)} min` : `${Math.round(asOf.paceMs / 1000)} s`) : null;
+  return ` · live · quotes ${age} s old${pace ? `, refresh ~${pace}` : ""}${asOf.fromTicks ? ` · ${asOf.fromTicks} on ticks` : ""}`;
+}
+
+function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, record, shortlisted, firstScanAt, now }: { symbol: string; idea: TradeIdea; hit: SetupHit; row: ScreenerRow; allView: boolean; active: boolean; score: SetupScore | null; record?: TrackRecord; shortlisted: boolean; firstScanAt: number; now: number }) {
   const { ref, tick } = useVisibleLiveTick<HTMLTableRowElement>(symbol);
   const rr = riskReward(row);
   const buyStop = isBuyStop(row.plan, row.close);
   // The plan was made at the scan; check it against the live price (stale entry, broken stop, trigger out of reach).
   const status = tick ? planStatus(row.plan, row.close, tick.ltp, row.facts?.atr14 ?? NaN) : ({ kind: "ok" } as const);
+  const newest = Math.max(0, ...idea.hits.map((entry) => entry.row.firstSeenAt ?? 0), row.firstSeenAt ?? 0) || undefined;
+  const isNew = isNewSetup(newest, firstScanAt, now);
   return (
     <tr ref={ref} className={`${active ? "is-active" : ""} ${status.kind === "stop-broken" || status.kind === "moved" || status.kind === "far" ? "is-stale" : ""}`} onClick={() => openIdea(symbol, hit.screen.id)}>
       <td className="is-left" title={`${idea.name}${idea.industry ? ` · ${idea.industry}` : ""}`}>
         <span className="tx-scr-symbol">{symbol}</span>
+        <NewBadge firstSeenAt={newest} firstScanAt={firstScanAt} now={now} />
         <ResultsBadge symbol={symbol} compact />
         {row.warnings?.length ? (
           <span className="tx-warn-dot" title={row.warnings.join("\n")}>
             !
           </span>
         ) : null}
-        {idea.live && <span className="tx-tag tx-tag-index">live</span>}
+        {idea.live && !isNew && <span className="tx-tag tx-tag-index">live</span>}
       </td>
       <PriceCells tick={tick} close={idea.close} changePct={idea.changePct} priceClassName="col-price" />
       {allView ? (
@@ -467,9 +542,9 @@ function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, recor
         </>
       )}
       <td title={status.kind === "ok" ? (buyStop ? "Buy-stop: enter only on a break above this price" : "Enter at the close") : status.detail}>
-        {buyStop && <span className="tx-dim">↑ </span>}
+        {buyStop && <span className="tx-dim tx-plan-dir">↑ </span>}
         {formatPrice(row.plan.entry)}
-        {status.kind !== "ok" && <span className={`tx-plan-status is-${status.kind}`}>{status.label}</span>}
+        {status.kind !== "ok" && <span className={`tx-plan-status is-${status.kind}`} aria-label={status.detail}>{shortStatus(status)}</span>}
       </td>
       <td className="is-down">{formatPrice(row.plan.stop)}</td>
       <td className="is-up">{row.plan.target !== null ? formatPrice(row.plan.target) : "trail"}</td>

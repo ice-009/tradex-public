@@ -20,7 +20,8 @@ export { isMarketOpen };
 // watchlist badges, the setup card and the chart's plan overlay all read the
 // same response, so a stock's setups are visible wherever that stock appears.
 
-const LIVE_REFRESH_MS = 60_000;
+/** During market hours: the server refreshes quotes at a budget-paced rate and applies live ticks in between, so polling it often costs no API calls. */
+const LIVE_REFRESH_MS = 10_000;
 const SYNC_POLL_MS = 2_000;
 /** After an error (e.g. Fyers not connected yet), try again instead of giving up. */
 const ERROR_RETRY_MS = 30_000;
@@ -324,6 +325,7 @@ export function scorePlan(
     holdDays: options.group ? HOLD_BARS[options.group] : 15,
     warnings: options.warnings,
     buysWeakness: options.screenId ? SCREEN_MAP[options.screenId]?.buysWeakness : false,
+    regime: feed.data?.regime?.state,
   });
 }
 

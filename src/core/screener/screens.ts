@@ -46,8 +46,10 @@ export interface ScreenerRow {
   plan: TradePlan;
   /** Cautions that don't block the setup (e.g. a recent heavy gap-down). */
   warnings?: string[];
-  /** Inputs for the setup score (src/lib/screener/score.ts). */
+  /** Inputs for the setup score (src/core/screener/score.ts). */
   facts?: StockFacts;
+  /** When this setup first matched today (epoch ms), from the screener's live re-runs. */
+  firstSeenAt?: number;
 }
 
 /** One stock in the market overview (movers / sectors), whether or not it matched a screen. */

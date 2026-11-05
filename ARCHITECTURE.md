@@ -130,12 +130,13 @@ Every data call goes through `src/server/providers/fyers/budget.ts`, which appli
 Tradex is for shortlisting; orders are placed in the broker's own app. So the defaults favour a low call count over tick-fresh numbers:
 
 - The Day High/Low scan runs only while its panel is open.
-- Watchlist and screener quotes may be up to 5 minutes old; on-screen rows and charts stream live over the socket at no API cost.
+- Watchlist quotes may be up to 5 minutes old; on-screen rows and charts stream live over the socket at no API cost.
+- Screener quotes are refreshed during market hours at a pace worked out from the `refresh` budget left for the session (`livePaceMs` in `dailyStore.ts`; ~35 s for the F&O list on Standard, never under 15 s). Socket ticks newer than the snapshot are laid over it. The history backfill pauses during market hours if it would eat into that reserve.
 - The order ticket uses cached quotes; it is a planning aid only.
 
 How the app keeps its calls down:
 
-- **Quotes:** one cache in the data engine serves every reader. Each caller says how old a quote it accepts: the order ticket takes 5 s; the watchlist and screener take 5 min on Standard, so they share one fetch. The high/low sweep usually pays for everyone.
+- **Quotes:** one cache in the data engine serves every reader. Each caller says how old a quote it accepts: the order ticket takes 5 s; the watchlist takes 5 min on Standard; the screener takes its live pace (above), so readers share fetches. The high/low sweep usually pays for everyone.
 - **Day high/low sweep:**
   - It is paced from what's left of the background budget for the rest of the session (`sweepIntervalMs`), about every 1½ min on Standard.
   - Symbols on the live socket are checked on every tick at no cost.

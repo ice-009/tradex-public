@@ -1609,6 +1609,8 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 .tx-confluence-n.is-3 { background: var(--accent-soft); color: var(--accent-text); }
 .tx-confluence-n.is-4 { background: rgba(59, 130, 246, 0.28); color: #fff; }
 .tx-confluence-name { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+/* Keep long screen names from pushing R:R / Score / Track off narrow screens (full name in the tooltip). */
+.tx-scr-table .tx-confluence-name { display: inline-block; max-width: 190px; white-space: nowrap; vertical-align: bottom; }
 .tx-confluence-dots { display: inline-flex; gap: 3px; }
 
 /* Rules / track-record side panel */
@@ -2009,11 +2011,14 @@ button, a, [role="button"], input, select { touch-action: manipulation; }
 }
 @container scr (max-width: 1100px) {
   .tx-scr-horizon { display: none; }
+  /* Plan status as a coloured dot (the full text is in the cell's tooltip). */
+  .tx-scr-table td .tx-plan-status { width: 7px; height: 7px; padding: 0; border-radius: 50%; font-size: 0; line-height: 0; vertical-align: 2px; background: currentColor; }
+  .tx-scr-table .tx-plan-dir { display: none; }
 }
 @container scr (max-width: 1000px) {
   .tx-scr-table .col-extra { display: none; }
   .tx-scr-horizon { display: none; }
-  .tx-confluence-name { max-width: 150px; }
+  .tx-scr-table .tx-confluence-name { max-width: 150px; }
 }
 @container scr (max-width: 820px) {
   .tx-scr-table .col-price, .tx-scr-table .col-signals { display: none; }
@@ -2023,14 +2028,14 @@ button, a, [role="button"], input, select { touch-action: manipulation; }
   .tx-scr-filters { flex-wrap: wrap; width: 100%; margin-left: 0; }
   .tx-scr-search { flex: 1; }
   .tx-scr-search input { width: 100%; }
-  .tx-confluence-name { max-width: 96px; }
+  .tx-scr-table .tx-confluence-name { max-width: 96px; }
   .tx-confluence-dots { display: none; }
   .tx-scr-table th, .tx-scr-table td { padding: 0 6px; }
   .tx-hl-note { display: none; }
   .tx-hl .tx-scr-head { flex-wrap: wrap; height: auto; padding: 6px var(--sp-2); row-gap: 6px; }
 }
 @container scr (max-width: 640px) {
-  .tx-scr-table .col-track, .tx-confluence-name { display: none; }
+  .tx-scr-table .col-track, .tx-scr-table .tx-confluence-name, .tx-confluence-name { display: none; }
   .tx-scr-universe { max-width: 110px; }
 }
 
@@ -2182,3 +2187,17 @@ button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 .tx-mdata-progress { display: flex; align-items: center; gap: var(--sp-2, 8px); font-variant-numeric: tabular-nums; color: var(--text-muted, var(--text-subtle)); }
 .tx-mdata-actions { display: flex; align-items: center; gap: var(--sp-3, 12px); flex-wrap: wrap; }
 @media (max-width: 640px) { .tx-mdata-facts { grid-template-columns: 1fr; } .tx-mdata-row { grid-template-columns: auto 1fr auto; } .tx-mdata-row .tx-mdata-bar { display: none; } }
+
+/* ---------- Screener: fresh setups (src/core/screener/fresh.ts) ---------- */
+.tx-new-badge { display: inline-block; margin-left: 6px; font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: var(--r-sm, 4px); font-size: var(--fs-2xs, 10px); font-weight: 600; line-height: 16px; letter-spacing: 0.02em; color: var(--accent-text); background: var(--accent-soft); }
+.tx-scr-new.is-on { color: var(--accent-text); border-color: var(--accent-border); background: var(--accent-soft); }
+
+/* ---------- Screener: market regime badge (src/core/screener/regime.ts) ---------- */
+.tx-regime { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; font-size: var(--fs-xs, 11px); font-weight: 600; white-space: nowrap; color: var(--text-muted, var(--text-subtle)); background: var(--surface-2); cursor: default; }
+.tx-regime i { width: 7px; height: 7px; border-radius: 999px; background: var(--text-subtle); }
+.tx-regime.is-healthy { color: var(--pos); }
+.tx-regime.is-healthy i { background: var(--pos); }
+.tx-regime.is-caution { color: var(--warn); }
+.tx-regime.is-caution i { background: var(--warn); }
+.tx-regime.is-risk-off { color: var(--neg); }
+.tx-regime.is-risk-off i { background: var(--neg); }
