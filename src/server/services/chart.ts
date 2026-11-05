@@ -21,9 +21,16 @@ export async function getChart(email: string, params: { symbol?: string | null; 
   const aggregate = unit === "weeks" || unit === "months" ? unit : null;
   const base: BaseInterval = aggregate ? "1d" : (interval as BaseInterval);
 
-  const answer = await dataEngine().history({ symbol, interval: base, from: Date.now() - CHART_RANGE_DAYS[range] * DAY_MS, email });
+  // With a broker connected, a failed download must show its error, not sample candles that look real.
+  const engine = dataEngine();
+  const brokers = engine.sources.filter((source) => source.kind === "broker" && source.history);
+  const brokerReady = (await Promise.all(brokers.map((source) => engine.unavailable(source, email)))).some((reason) => reason === null);
+  const answer = await engine.history({ symbol, interval: base, from: Date.now() - CHART_RANGE_DAYS[range] * DAY_MS, email, ...(brokerReady ? { kinds: ["broker", "eod"] as const } : {}) });
+  if (!answer.source && brokerReady) {
+    return { symbol, interval, range, source: "broker", sourceId: null, sourceReason: null, error: `Couldn't load ${interval} candles for ${symbol}. ${answer.skipped.join(" · ") || "No data."}`, priceSeries: [] };
+  }
   const candles = aggregate ? aggregateDaily(answer.candles, aggregate) : answer.candles;
-  const first = dataEngine().sources.find((source) => source.history?.supports(base));
+  const first = engine.sources.find((source) => source.history?.supports(base));
   return {
     symbol,
     interval,

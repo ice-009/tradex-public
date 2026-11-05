@@ -34,7 +34,10 @@ export interface SyncProgress {
 const CACHE_DIR = path.join(process.cwd(), ".cache", "screener");
 const DAILY_DIR = path.join(CACHE_DIR, "daily");
 const BHAV_DIR = path.join(CACHE_DIR, "bhav");
+/** First download per symbol: one ≤ 360-day request, so a new universe is ready in minutes. */
 const BACKFILL_DAYS = 360;
+/** How far back the market-data database can extend the screener's daily history (5 years). */
+const DEEP_HISTORY_DAYS = 5 * 365 - 3;
 const BHAV_LOOKBACK_DAYS = 45; // ≥ 25 sessions for a 20-day delivery average
 const STALE_AFTER_MS = 15 * 60 * 1000;
 // Every history call is background priority in the request budget, so on Fyers
@@ -132,6 +135,9 @@ class ScreenerStore {
     await mkdir(DAILY_DIR, { recursive: true });
     await mkdir(BHAV_DIR, { recursive: true });
     await Promise.all(symbols.map((symbol) => this.loadFromDisk(symbol)));
+    // Older daily history already in the market-data database (from "Download F&O history"):
+    // free to use, no API calls.
+    const extended = await this.extendFromDatabase(symbols);
 
     const bhavDays = await this.loadRecentBhav();
     const latestBhavDay = bhavDays[bhavDays.length - 1] ?? 0;
@@ -148,10 +154,11 @@ class ScreenerStore {
     };
 
     let pending = symbols.filter(needsBackfill);
-    const dirty = new Set<string>();
+    const dirty = new Set<string>(extended);
     for (let pass = 0; pass < 2; pass += 1) {
       if (pending.length) {
-        await this.backfill(pending, pass === 0 ? "Downloading daily history" : "Re-downloading adjusted history");
+        // Pass 0 (new symbols) may use what the database already holds; pass 1 (adjusted for a split) must re-download.
+        await this.backfill(pending, pass === 0 ? "Downloading daily history" : "Re-downloading adjusted history", pass > 0);
         pending.forEach((symbol) => dirty.add(symbol));
       }
       const broken = this.applyBhav(symbols, bhavDays, dirty);
@@ -181,7 +188,29 @@ class ScreenerStore {
     };
   }
 
-  private async backfill(symbols: string[], label: string) {
+  /**
+   * Prepend older daily bars from the market-data database to series that start
+   * later than it covers (never downloads). Returns the symbols that grew.
+   */
+  private async extendFromDatabase(symbols: string[]): Promise<string[]> {
+    const { dayKey: today } = istNow();
+    const target = today - DEEP_HISTORY_DAYS * DAY_MS;
+    const grew: string[] = [];
+    for (const symbol of symbols) {
+      const series = this.bars.get(symbol);
+      if (!series?.length || series[0].t <= target + 30 * DAY_MS) continue;
+      const answer = await dataEngine().history({ symbol, interval: "1d", from: target, kinds: ["broker"], offline: true });
+      const older = answer.candles
+        .map((point) => ({ t: toDayKey(point.date), o: point.open, h: point.high, l: point.low, c: point.close, v: point.volume }))
+        .filter((bar) => bar.t < series[0].t);
+      if (!older.length) continue;
+      this.bars.set(symbol, [...older, ...series]);
+      grew.push(symbol);
+    }
+    return grew;
+  }
+
+  private async backfill(symbols: string[], label: string, reload: boolean) {
     const { dayKey: today, minutes } = istNow();
     // Today's daily candle is still forming until well after the 15:30 close.
     const storeToday = minutes >= 16 * 60;
@@ -194,8 +223,9 @@ class ScreenerStore {
       for (let symbol = queue.shift(); symbol; symbol = queue.shift()) {
         for (let attempt = 1; attempt <= BACKFILL_ATTEMPTS; attempt += 1) {
           try {
-            // Broker only, and a full download (`reload`): this runs for new symbols and after splits.
-            const answer = await dataEngine().history({ symbol, interval: "1d", from, kinds: ["broker"], reload: true });
+            // Broker only. `reload` (after a split) forces a full download; otherwise
+            // history already in the market-data database is used.
+            const answer = await dataEngine().history({ symbol, interval: "1d", from, kinds: ["broker"], reload });
             if (!answer.source) throw new Error(answer.skipped.join("; ") || "no broker data");
             const series = answer.candles
               .map((point) => ({ t: toDayKey(point.date), o: point.open, h: point.high, l: point.low, c: point.close, v: point.volume }))

@@ -46,6 +46,8 @@ export interface ChartResponse {
   sourceId: string | null;
   /** Why a fallback source was used (null when the first-choice source answered). */
   sourceReason: string | null;
+  /** Set when no source could answer and sample data wasn't appropriate (the broker is connected but failed): show this instead of a chart. */
+  error?: string | null;
   priceSeries: PricePoint[];
 }
 
@@ -297,3 +299,32 @@ export interface DataSourcesResponse {
   sources: DataSourceStatus[];
   stream: { mode: StreamStatus["mode"]; source: string | null; live: number; polled: number };
 }
+
+// ------------------------------------------------------------------ GET/POST /api/data/history-db
+
+export type HistoryKind = "daily" | "m15";
+
+/** The local market-data database and the "Download F&O history" job. */
+export interface HistoryDbStatus {
+  job: {
+    state: "idle" | "running" | "paused" | "done" | "error";
+    kinds: HistoryKind[];
+    /** Series downloaded / to download in this run. */
+    done: number;
+    total: number;
+    /** Symbols that failed in this run (no data, or a broker error). */
+    failed: string[];
+    current: string | null;
+    message: string;
+    startedAt: number | null;
+    finishedAt: number | null;
+  };
+  /** How many of the F&O stocks + indices are stored, per kind. */
+  coverage: Array<{ kind: HistoryKind; label: string; covered: number; total: number; missing: number; estimatedCalls: number }>;
+  db: { series: number; candles: number; bytes: number; path: string };
+  /** Broker calls background work may still make today (Fyers budget). */
+  backgroundCallsLeft: number | null;
+  brokerConnected: boolean;
+}
+
+export type HistoryDbAction = { action: "start"; kinds: HistoryKind[] } | { action: "stop" };

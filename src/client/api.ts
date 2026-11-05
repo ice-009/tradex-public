@@ -8,6 +8,8 @@
 import type {
   AnalyzeResponse,
   ApiUsageResponse,
+  HistoryDbAction,
+  HistoryDbStatus,
   BacktestInfoResponse,
   BacktestRequest,
   BacktestResponse,
@@ -56,6 +58,14 @@ async function getStatusJson<T extends { status: string }>(path: string, params:
 }
 
 /** POST a JSON body; answers in the endpoint's own `{ status: "error" }` shape are returned, other failures throw. */
+/** POST a JSON body; non-2xx throws ApiError with the server's `error` message. */
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) throw new ApiError((json as { error?: string } | null)?.error ?? `${path} failed (${response.status})`, response.status);
+  return json as T;
+}
+
 async function postStatusJson<T extends { status: string }>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), cache: "no-store", signal });
   const json = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
@@ -92,6 +102,10 @@ export const api = {
   lots: () => getJson<LotsResponse>("/api/lots"),
 
   usage: () => getJson<ApiUsageResponse>("/api/broker/usage"),
+
+  /** The local market-data database and its "Download F&O history" job. */
+  historyDb: () => getJson<HistoryDbStatus>("/api/data/history-db"),
+  historyDbAction: (action: HistoryDbAction) => postJson<HistoryDbStatus>("/api/data/history-db", action),
 
   /** Ready-made lists; fetched once per page load and shared. */
   presets: (() => {

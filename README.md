@@ -75,6 +75,22 @@ Set `FYERS_PLAN=prime` if you're on Prime, so the request budget uses Prime's li
 
 On first run with a broker, the screener downloads about a year of daily history for the F&O list. That's one API call per stock, paced inside the rate limits, so it takes roughly 10 minutes. After that, history is extended every evening from NSE's free bhavcopy files.
 
+**Recommended: download the F&O history once.** Click the **API** meter in the top bar → **Market data** → **Download F&O history**. It stores in a local database (`.cache/market.db`), for every F&O stock plus NIFTY, BANKNIFTY and FINNIFTY:
+- 5 years of daily candles;
+- 1 year of 15-minute candles.
+
+| | Daily + 15-minute | Daily only |
+|---|---|---|
+| API calls | about 2,000 (40% of a Fyers Standard day) | about 1,100 |
+| Time | about 2½ hours | about 1 hour |
+
+The download runs in the background, never slows charts, and can be stopped and resumed. If it runs out of the day's budget, it continues the next day.
+
+Afterwards:
+- Charts open from disk.
+- The screener and backtests use the full 5 years.
+- Only the newest candles are fetched.
+
 ### Without a broker
 
 The app runs, but with less:
@@ -118,7 +134,7 @@ Tradex is a Next.js 16 app (React 19, TypeScript). The server side runs in the s
 |---|---|---|
 | Engine | `src/core` | Indicators, patterns, screens, scoring, backtester, tick/futures maths, IST session rules, file parsers, rate-limit policy. Pure functions, no I/O. |
 | Contracts | `src/contracts/api.ts` | The JSON shape of every API response, shared by both ends. |
-| Data engine | `src/server/data` | `DataSource` adapters (Fyers, NSE end-of-day, sample), the `DataEngine` (ordered fallback, rests failing sources, incremental disk history, quote cache) and the `MarketStream` (one live price pipeline: socket or polling, with a watchdog). |
+| Data engine | `src/server/data` | `DataSource` adapters (Fyers, NSE end-of-day, sample), the `DataEngine` (ordered fallback, rests failing sources, quote cache, incremental history in a local SQLite candle database) and the `MarketStream` (one live price pipeline: socket or polling, with a watchdog). |
 | Providers | `src/server/providers` | Raw clients: Fyers REST/socket/auth, the API request budget, the NSE bhavcopy daily store, lot sizes, results calendar, universes. |
 | Services and routes | `src/server/services`, `src/app/api` | One use case per service; routes only parse, call and return. |
 | Client data | `src/client` | Typed API fetchers and feeds (market data, screener, high/low, lots). |
@@ -179,7 +195,7 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 | `FYERS_PLAN` | `standard` or `prime`: sets the request budget |
 | `DATA_SOURCES` | Source order for the data engine, e.g. `fyers,eod,sample` |
 
-Runtime caches (daily bars, NSE files, chart history, API usage) are written to `.cache/`, which is git-ignored.
+Runtime data is written to `.cache/`, which is git-ignored: the candle database `market.db`, screener daily bars, NSE files and API usage. Set `MARKET_DB_PATH` to keep the candle database elsewhere.
 
 ## Roadmap
 
