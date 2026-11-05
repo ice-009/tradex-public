@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useLiveTick } from "./LivePrice";
+import { planStatus } from "@/core/screener/planStatus";
 import type { Drawing } from "@/chart/types";
 import { formatCompact, formatPrice } from "@/core/format";
 import { HOLD_BARS, verdictFor } from "@/core/screener/backtest";
@@ -59,6 +61,7 @@ export function SetupCard({ symbol }: { symbol: string }) {
   const results = useScreenerFeed((feed) => feed.results);
   const { lot } = useLotSize(symbol);
   const shortlisted = useTerminal((state) => state.watchlist.includes(symbol));
+  const tick = useLiveTick(symbol);
 
   if (!idea) return null;
   const hit = focusedHit(idea, focus);
@@ -66,6 +69,8 @@ export function SetupCard({ symbol }: { symbol: string }) {
   const risk = plan.entry - plan.stop;
   const rr = hit.rr;
   const buyStop = plan.entry > hit.row.close * 1.0005;
+  // The plan was made at the last scan: check it against the live price.
+  const status = tick ? planStatus(plan, hit.row.close, tick.ltp, hit.row.facts?.atr14 ?? NaN) : null;
 
   // Size by the most this trade may lose at the stop, capped by the capital itself.
   // Futures: size in lots from the max loss (the margin, not the contract value, comes out of capital).
@@ -113,6 +118,12 @@ export function SetupCard({ symbol }: { symbol: string }) {
       </div>
 
       <SetupNotices symbol={symbol} warnings={hit.row.warnings ?? []} btst={hit.screen.group === "btst"} />
+
+      {status && status.kind !== "ok" && (
+        <div className={`tx-setup-status is-${status.kind}`} role="status">
+          <strong>{status.label}</strong> {status.detail}
+        </div>
+      )}
 
       {/* Price ladder, top to bottom like the chart: target, entry, stop. */}
       <div className="tx-ladder">

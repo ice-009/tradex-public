@@ -2147,3 +2147,17 @@ button, a, [role="button"], input, select { touch-action: manipulation; }
   .reveal, .flash-up, .flash-down, .tx-status-live .tx-status-dot, .tx-hl-status.is-live i, .tx-hl-row,
   .tx-toast, .tx-alert-toast, .tx-menu, .tx-flyout, .tx-modal { animation: none !important; }
 }
+
+/* ---------- Screener: plan checked against the live price (src/core/screener/planStatus.ts) ---------- */
+.tx-plan-status { display: inline-block; margin-left: var(--sp-1, 4px); padding: 0 5px; border-radius: var(--r-sm, 4px); font-size: var(--fs-2xs, 10px); font-weight: 600; line-height: 16px; vertical-align: 1px; white-space: nowrap; background: var(--surface-3); color: var(--text-muted, var(--text-subtle)); }
+.tx-plan-status.is-stop-broken { color: var(--neg); background: color-mix(in srgb, var(--neg) 14%, transparent); }
+.tx-plan-status.is-moved, .tx-plan-status.is-far { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.tx-plan-status.is-triggered { color: var(--pos); background: color-mix(in srgb, var(--pos) 14%, transparent); }
+tr.is-stale > td:not(.tx-scr-actions) { opacity: 0.55; }
+tr.is-stale:hover > td { opacity: 0.85; }
+.tx-setup-status { margin: var(--sp-2, 8px) 0; padding: var(--sp-2, 8px) var(--sp-3, 12px); border-radius: var(--r-md, 6px); font-size: var(--fs-xs, 11px); line-height: 1.45; color: var(--text-muted, var(--text-subtle)); background: var(--surface-2); border-left: 2px solid var(--warn); }
+.tx-setup-status strong { color: var(--warn); margin-right: 4px; }
+.tx-setup-status.is-stop-broken { border-left-color: var(--neg); }
+.tx-setup-status.is-stop-broken strong { color: var(--neg); }
+.tx-setup-status.is-triggered { border-left-color: var(--pos); }
+.tx-setup-status.is-triggered strong { color: var(--pos); }

@@ -1,4 +1,5 @@
 import { roundToTick } from "@/core/market/ticks";
+import { FAR_ATR } from "@/core/screener/planStatus";
 import type { Features } from "@/core/screener/features";
 import type { StockFacts } from "@/core/screener/score";
 
@@ -496,6 +497,7 @@ export const SCREENS: ScreenDef[] = [
       { label: "≥ 30% above 52-week low", test: (f) => f.close >= 1.3 * f.low52 },
       { label: "Within 25% of 52-week high", test: (f) => f.close >= 0.75 * f.high52 },
       { label: "Relative strength rank ≥ 70 (in universe)", test: (f) => f.rsRank >= 70 },
+      { label: `Buy point within ${FAR_ATR} ATR of the close (can fill next session)`, test: (f) => confirmedEntry(f).entry - f.close <= FAR_ATR * f.atr14 },
     ],
     score: (f) => f.rsRank + (f.close / f.high52) * 20,
     plan: (f) => {
@@ -516,6 +518,7 @@ export const SCREENS: ScreenDef[] = [
       { label: "Within 5% of 52-week high", test: (f) => f.close >= 0.95 * f.high52 },
       { label: "6-month return beats NIFTY 50", test: (f, ctx) => f.ret126 > ctx.niftyRet126 },
       { label: "Uptrend: close > 50 SMA > 200 SMA", test: (f) => f.close > f.sma50 && f.sma50 > f.sma200 },
+      { label: `Buy point within ${FAR_ATR} ATR of the close (can fill next session)`, test: (f) => confirmedEntry(f).entry - f.close <= FAR_ATR * f.atr14 },
       liquid(5),
     ],
     score: (f) => (f.close / f.high52) * 60 + capped(f.ret126, 80) * 0.5,

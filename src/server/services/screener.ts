@@ -15,7 +15,7 @@ export const BENCHMARK = "NIFTY";
 /** Below this share of the universe with history, keep showing the sync progress instead of results. */
 const MIN_COVERAGE = 0.95;
 /** Bump when the replay rules change so a running server drops cached results. */
-const TRACK_VERSION = 5;
+const TRACK_VERSION = 6;
 
 export function parseUniverse(value: string | null): UniverseId {
   return value && isUniverseId(value) ? value : "nifty200";

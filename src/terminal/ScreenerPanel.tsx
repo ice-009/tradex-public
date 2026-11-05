@@ -12,7 +12,8 @@ import { ScoreChip } from "./ScoreBits";
 import type { SetupScore } from "@/core/screener/score";
 import { ResultsBadge } from "./MarketPanel";
 import { Icons } from "./icons";
-import { LivePriceCells } from "./LivePrice";
+import { PriceCells, useVisibleLiveTick } from "./LivePrice";
+import { isBuyStop, planStatus } from "@/core/screener/planStatus";
 
 const UNIVERSES = [
   { id: "nifty50", label: "Nifty 50" },
@@ -351,92 +352,20 @@ export function ScreenerPanel() {
               </tr>
             </thead>
             <tbody>
-              {lines.map(({ symbol, idea, hit, row }) => {
-                const rr = riskReward(row);
-                const buyStop = row.plan.entry > row.close * 1.0005;
-                return (
-                  <tr key={symbol} className={symbol === activeSymbol ? "is-active" : ""} onClick={() => openIdea(symbol, hit.screen.id)}>
-                    <td className="is-left" title={`${idea.name}${idea.industry ? ` · ${idea.industry}` : ""}`}>
-                      <span className="tx-scr-symbol">{symbol}</span>
-                      <ResultsBadge symbol={symbol} compact />
-                      {row.warnings?.length ? (
-                        <span className="tx-warn-dot" title={row.warnings.join("\n")}>
-                          !
-                        </span>
-                      ) : null}
-                      {idea.live && <span className="tx-tag tx-tag-index">live</span>}
-                    </td>
-                    <LivePriceCells symbol={symbol} close={idea.close} changePct={idea.changePct} priceClassName="col-price" />
-                    {allView ? (
-                      <td className="is-left" title={idea.hits.map((entry) => `${GROUP_LABEL[entry.screen.group]} · ${entry.screen.name}`).join("\n")}>
-                        <span className="tx-confluence">
-                          <span className={`tx-confluence-n is-${Math.min(idea.hits.length, 4)}`}>{idea.hits.length}</span>
-                          <span className={`tx-confluence-name tx-hz-${hit.screen.group}`}>{hit.screen.name}</span>
-                          <span className="tx-confluence-dots">
-                            {idea.groups.map((groupId) => (
-                              <span key={groupId} className={`tx-hz-dot tx-hz-${groupId}`} />
-                            ))}
-                          </span>
-                        </span>
-                      </td>
-                    ) : (
-                      <>
-                        <td className="col-extra">{Number.isFinite(row.volRatio) ? `${row.volRatio.toFixed(1)}×` : "—"}</td>
-                        <td className="col-extra">{row.deliveryPct !== null ? `${row.deliveryPct.toFixed(0)}%` : "—"}</td>
-                        <td className="col-extra">{Number.isFinite(row.rsi14) ? row.rsi14.toFixed(0) : "—"}</td>
-                        <td className="col-extra">{Number.isFinite(row.rsRank) ? row.rsRank : "—"}</td>
-                        <td className="is-left col-signals">
-                          <span className="tx-scr-tags">
-                            {row.tags.map((tag) => (
-                              <span key={tag} className="tx-tag">
-                                {tag}
-                              </span>
-                            ))}
-                          </span>
-                        </td>
-                      </>
-                    )}
-                    <td title={buyStop ? "Buy-stop: enter only on a break above this price" : "Enter at the close"}>
-                      {buyStop && <span className="tx-dim">↑ </span>}
-                      {formatPrice(row.plan.entry)}
-                    </td>
-                    <td className="is-down">{formatPrice(row.plan.stop)}</td>
-                    <td className="is-up">{row.plan.target !== null ? formatPrice(row.plan.target) : "trail"}</td>
-                    <td>{rr !== null ? rr.toFixed(1) : "—"}</td>
-                    <td>
-                      <ScoreChip score={scores.get(`${symbol}:${hit.screen.id}`) ?? null} />
-                    </td>
-                    <td className="col-track">
-                      <TrackCell record={records?.[hit.screen.id]} />
-                    </td>
-                    <td className="tx-scr-actions">
-                      <button
-                        type="button"
-                        className="col-plan"
-                        title="Save this plan on the chart as a Long Position (P)"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          drawPlanOnChart(hit);
-                        }}
-                      >
-                        <Icons.long size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        className={`tx-star ${shortlisted.has(symbol) ? "is-on" : ""}`}
-                        title={shortlisted.has(symbol) ? "Remove from shortlist (W)" : "Shortlist (W)"}
-                        aria-pressed={shortlisted.has(symbol)}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          toggleShortlist(symbol);
-                        }}
-                      >
-                        <Icons.star size={15} filled={shortlisted.has(symbol)} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {lines.map(({ symbol, idea, hit, row }) => (
+                <ScreenerRowView
+                  key={symbol}
+                  symbol={symbol}
+                  idea={idea}
+                  hit={hit}
+                  row={row}
+                  allView={allView}
+                  active={symbol === activeSymbol}
+                  score={scores.get(`${symbol}:${hit.screen.id}`) ?? null}
+                  record={records?.[hit.screen.id]}
+                  shortlisted={shortlisted.has(symbol)}
+                />
+              ))}
             </tbody>
           </table>
           {data?.status === "ready" && lines.length === 0 && (
@@ -485,6 +414,98 @@ export function ScreenerPanel() {
         )}
       </div>
     </section>
+  );
+}
+
+/** One screener row. It follows the live price while on screen and checks the plan against it. */
+function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, record, shortlisted }: { symbol: string; idea: TradeIdea; hit: SetupHit; row: ScreenerRow; allView: boolean; active: boolean; score: SetupScore | null; record?: TrackRecord; shortlisted: boolean }) {
+  const { ref, tick } = useVisibleLiveTick<HTMLTableRowElement>(symbol);
+  const rr = riskReward(row);
+  const buyStop = isBuyStop(row.plan, row.close);
+  // The plan was made at the scan; check it against the live price (stale entry, broken stop, trigger out of reach).
+  const status = tick ? planStatus(row.plan, row.close, tick.ltp, row.facts?.atr14 ?? NaN) : ({ kind: "ok" } as const);
+  return (
+    <tr ref={ref} className={`${active ? "is-active" : ""} ${status.kind === "stop-broken" || status.kind === "moved" || status.kind === "far" ? "is-stale" : ""}`} onClick={() => openIdea(symbol, hit.screen.id)}>
+      <td className="is-left" title={`${idea.name}${idea.industry ? ` · ${idea.industry}` : ""}`}>
+        <span className="tx-scr-symbol">{symbol}</span>
+        <ResultsBadge symbol={symbol} compact />
+        {row.warnings?.length ? (
+          <span className="tx-warn-dot" title={row.warnings.join("\n")}>
+            !
+          </span>
+        ) : null}
+        {idea.live && <span className="tx-tag tx-tag-index">live</span>}
+      </td>
+      <PriceCells tick={tick} close={idea.close} changePct={idea.changePct} priceClassName="col-price" />
+      {allView ? (
+        <td className="is-left" title={idea.hits.map((entry) => `${GROUP_LABEL[entry.screen.group]} · ${entry.screen.name}`).join("\n")}>
+          <span className="tx-confluence">
+            <span className={`tx-confluence-n is-${Math.min(idea.hits.length, 4)}`}>{idea.hits.length}</span>
+            <span className={`tx-confluence-name tx-hz-${hit.screen.group}`}>{hit.screen.name}</span>
+            <span className="tx-confluence-dots">
+              {idea.groups.map((groupId) => (
+                <span key={groupId} className={`tx-hz-dot tx-hz-${groupId}`} />
+              ))}
+            </span>
+          </span>
+        </td>
+      ) : (
+        <>
+          <td className="col-extra">{Number.isFinite(row.volRatio) ? `${row.volRatio.toFixed(1)}×` : "—"}</td>
+          <td className="col-extra">{row.deliveryPct !== null ? `${row.deliveryPct.toFixed(0)}%` : "—"}</td>
+          <td className="col-extra">{Number.isFinite(row.rsi14) ? row.rsi14.toFixed(0) : "—"}</td>
+          <td className="col-extra">{Number.isFinite(row.rsRank) ? row.rsRank : "—"}</td>
+          <td className="is-left col-signals">
+            <span className="tx-scr-tags">
+              {row.tags.map((tag) => (
+                <span key={tag} className="tx-tag">
+                  {tag}
+                </span>
+              ))}
+            </span>
+          </td>
+        </>
+      )}
+      <td title={status.kind === "ok" ? (buyStop ? "Buy-stop: enter only on a break above this price" : "Enter at the close") : status.detail}>
+        {buyStop && <span className="tx-dim">↑ </span>}
+        {formatPrice(row.plan.entry)}
+        {status.kind !== "ok" && <span className={`tx-plan-status is-${status.kind}`}>{status.label}</span>}
+      </td>
+      <td className="is-down">{formatPrice(row.plan.stop)}</td>
+      <td className="is-up">{row.plan.target !== null ? formatPrice(row.plan.target) : "trail"}</td>
+      <td>{rr !== null ? rr.toFixed(1) : "—"}</td>
+      <td>
+        <ScoreChip score={score} />
+      </td>
+      <td className="col-track">
+        <TrackCell record={record} />
+      </td>
+      <td className="tx-scr-actions">
+        <button
+          type="button"
+          className="col-plan"
+          title="Save this plan on the chart as a Long Position (P)"
+          onClick={(event) => {
+            event.stopPropagation();
+            drawPlanOnChart(hit);
+          }}
+        >
+          <Icons.long size={15} />
+        </button>
+        <button
+          type="button"
+          className={`tx-star ${shortlisted ? "is-on" : ""}`}
+          title={shortlisted ? "Remove from shortlist (W)" : "Shortlist (W)"}
+          aria-pressed={shortlisted}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleShortlist(symbol);
+          }}
+        >
+          <Icons.star size={15} filled={shortlisted} />
+        </button>
+      </td>
+    </tr>
   );
 }
 
