@@ -55,6 +55,8 @@ export interface ScreenerPrefs {
   sector: string;
   minRR: number;
   watchlistOnly: boolean;
+  /** Flash live BTST setups (toast, tone, notification) from 3:10 to 3:25 PM. */
+  btstAlerts: boolean;
 }
 
 export interface WatchList {
@@ -175,6 +177,7 @@ function defaultState(): TerminalState {
       sector: "",
       minRR: 0,
       watchlistOnly: false,
+      btstAlerts: false,
     },
     layoutGuide: null,
   };
