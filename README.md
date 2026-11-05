@@ -40,8 +40,8 @@
 **Requirements:** Node.js 20.9 or newer, and npm.
 
 ```bash
-git clone https://github.com/ice-009/tradex.git
-cd tradex
+git clone https://github.com/ice-009/tradex-public.git
+cd tradex-public
 npm install                 # also generates the Prisma client
 cp .env.example .env        # then set NEXTAUTH_SECRET (openssl rand -base64 32)
 npm run db:setup            # creates the local SQLite database
