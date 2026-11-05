@@ -1,0 +1,42 @@
+import { useSyncExternalStore } from "react";
+import { api } from "@/client/api";
+
+// Stock-futures lot sizes, loaded once per page from /api/lots.
+
+interface LotFeed {
+  lots: Record<string, number>;
+  source: "nse" | "fyers" | "disk" | "none" | "loading";
+}
+let lotFeed: LotFeed = { lots: {}, source: "loading" };
+let lotsRequested = false;
+const lotListeners = new Set<() => void>();
+
+function loadLots() {
+  if (lotsRequested) return;
+  lotsRequested = true;
+  api
+    .lots()
+    .then((json) => {
+      lotFeed = { lots: json.lots ?? {}, source: json.source ?? "none" };
+    })
+    .catch(() => {
+      lotFeed = { lots: {}, source: "none" };
+    })
+    .finally(() => lotListeners.forEach((listener) => listener()));
+}
+
+/** Futures lot size for a stock (null while loading or when no source had it). */
+export function useLotSize(symbol: string): { lot: number | null; source: LotFeed["source"] } {
+  const feedNow = useSyncExternalStore(
+    (listener) => {
+      loadLots();
+      lotListeners.add(listener);
+      return () => {
+        lotListeners.delete(listener);
+      };
+    },
+    () => lotFeed,
+    () => lotFeed,
+  );
+  return { lot: feedNow.lots[symbol] ?? null, source: feedNow.source };
+}

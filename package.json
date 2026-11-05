@@ -1,0 +1,45 @@
+{
+  "name": "tradex-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:webpack": "next dev --webpack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p .",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "db:setup": "prisma db push",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@types/bcryptjs": "^2.4.6",
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.4.2",
+    "fyers-api-v3": "^2.0.0",
+    "next": "16.2.4",
+    "next-auth": "^4.24.14",
+    "prisma": "^7.8.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^3.2.7"
+  },
+  "description": "Open-source trading terminal for Indian (NSE) stock futures: charts, screeners, setup scores, backtests and a source-independent market-data engine.",
+  "license": "MIT"
+}
