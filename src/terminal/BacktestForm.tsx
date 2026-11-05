@@ -139,7 +139,7 @@ export function BacktestFormView({
               <div className="tx-bt-group-head">
                 <span className="tx-hz-dot" />
                 <span className="tx-bt-group-name">{group.label}</span>
-                <span className="tx-dim">hold {HOLD_BARS[group.id]}d</span>
+                <span className="tx-dim">{screens.every((screen) => screen.exit === "next-open") ? "sell at next open" : `hold ${HOLD_BARS[group.id]}d`}</span>
                 <button
                   type="button"
                   className="tx-bt-link"

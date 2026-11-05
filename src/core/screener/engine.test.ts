@@ -24,6 +24,15 @@ describe("simulatePlan", () => {
   it("skips a buy-stop that never triggers", () => {
     expect(simulatePlan([signal, bar(100, 101.5, 99, 101)], 0, { entry: 102, stop: 97, target: 112 }, 10)).toBeNull();
   });
+
+  it("sells an overnight trade at the next open, ignoring that session's range", () => {
+    const overnight = { entry: 100, stop: 95, target: null };
+    expect(simulatePlan([signal, bar(102, 103, 90, 91)], 0, overnight, 1, "next-open")).toEqual({ kind: "open", r: 0.4 });
+  });
+
+  it("books an overnight gap below the stop at the open", () => {
+    expect(simulatePlan([signal, bar(93, 96, 92, 95)], 0, { entry: 100, stop: 95, target: null }, 1, "next-open")).toEqual({ kind: "stop", r: -1.4 });
+  });
 });
 
 describe("relative strength", () => {

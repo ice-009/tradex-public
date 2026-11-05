@@ -16,7 +16,8 @@ import type { Signal, SignalScan } from "./signals";
 //        - a bar that touches both the stop and the target counts as the stop;
 //        - a gap through a level fills at the open (worse than the level);
 //        - on a buy-stop's fill bar there is no gap logic (it filled inside the bar);
-//        - at the holding horizon the position is closed at the close.
+//        - at the holding horizon the position is closed at the close — or, for
+//          overnight (BTST) screens, at that session's open.
 //   3. Equity is marked to the close.
 //   4. Today's signals are ranked by the screen's score (highest first) and
 //      take the free slots; one position per stock across all screens. Scores
@@ -28,6 +29,8 @@ import type { Signal, SignalScan } from "./signals";
 // decided on day i's close and filled at the next session's open (default), or
 // at day i's close itself ("signal-close", as the screens are meant to be run
 // at 3:15–3:25 PM — slightly optimistic, since the real close isn't known yet).
+// Overnight (BTST) screens always enter at the signal close: a next-open entry
+// with a next-open exit would hold nothing.
 // A plan whose entry is above the signal close is a buy-stop: it must trade
 // through on the next session or the signal is dropped.
 
@@ -181,6 +184,9 @@ export function holdFor(screenId: string, override: number | null): number {
   const screen = screenById.get(screenId);
   return screen ? HOLD_BARS[screen.group] : 10;
 }
+
+/** Overnight screens (BTST) are bought at the signal close and sold at an open — see ScreenDef.exit. */
+export const exitsAtOpen = (screenId: string) => screenById.get(screenId)?.exit === "next-open";
 
 /** A plan entry above the signal close is a buy-stop for the next session (same threshold as simulatePlan). */
 export const isBuyStop = (signal: Pick<Signal, "entry" | "close">) => signal.entry > signal.close * 1.0005;
@@ -347,6 +353,10 @@ export function runPortfolio(scan: SignalScan, config: BacktestConfig): Backtest
       const bar = series.bars[i];
       const { stop, target } = position.signal;
       const gaps = i !== position.fillBar;
+      if (exitsAtOpen(position.signal.screenId) && i >= position.lastIndex) {
+        close(position, i, date, bar.o, bar.o <= stop ? "stop" : target !== null && bar.o >= target ? "target" : "time");
+        continue;
+      }
       if (bar.l <= stop) close(position, i, date, gaps ? Math.min(stop, bar.o) : stop, "stop");
       else if (target !== null && bar.h >= target) close(position, i, date, gaps ? Math.max(target, bar.o) : target, "target");
       else if (i >= position.lastIndex) close(position, i, date, bar.c, "time");
@@ -392,7 +402,7 @@ export function runPortfolio(scan: SignalScan, config: BacktestConfig): Backtest
         if (config.lots && !lot) unlotted += 1;
         busy.add(signal.symbol);
         const order: Pending = { signal, qty, lots, buyStop: isBuyStop(signal) };
-        if (config.entry === "signal-close" && !order.buyStop) open(order, signal.index, date, signal.close, -1);
+        if ((config.entry === "signal-close" || exitsAtOpen(signal.screenId)) && !order.buyStop) open(order, signal.index, date, signal.close, -1);
         else pending.push(order);
       }
     }

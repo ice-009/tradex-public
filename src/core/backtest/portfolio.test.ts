@@ -128,13 +128,25 @@ describe("portfolio simulation", () => {
     expect(gapped.skipped.gapped).toBe(1);
   });
 
-  it("never sells on the entry session at the time exit (BTST held overnight)", () => {
-    const bars = flat(10);
-    const btst = signal("AAA", 0, { screenId: "btst-closing-strength", target: 120 });
+  it("holds BTST overnight: buys the signal close and sells the next open, even in next-open mode", () => {
+    // The next session gaps up to 102, then falls through the stop — the trade is already out at the open.
+    const bars = flat(10, { 1: { o: 102, h: 103, l: 90, c: 91 } });
+    const btst = signal("AAA", 0, { screenId: "btst-closing-strength", target: null });
     const result = runPortfolio(scanOf({ AAA: bars }, [btst]), { ...base, entry: "next-open" });
-    expect(result.trades[0].entryDate).toBe(day(1));
-    expect(result.trades[0].exitDate).toBe(day(2));
+    expect(result.trades[0].entryDate).toBe(day(0));
+    expect(result.trades[0].entryPrice).toBe(100);
+    expect(result.trades[0].exitDate).toBe(day(1));
+    expect(result.trades[0].exitPrice).toBe(102);
     expect(result.trades[0].exitReason).toBe("time");
+    expect(result.trades[0].r).toBeCloseTo(simulatePlan(bars, 0, btst, 1, "next-open")!.r, 9);
+  });
+
+  it("books a BTST gap below the stop at the open", () => {
+    const bars = flat(10, { 1: { o: 93, h: 96, l: 92, c: 95 } });
+    const btst = signal("AAA", 0, { screenId: "btst-closing-strength", target: null });
+    const result = runPortfolio(scanOf({ AAA: bars }, [btst]), base);
+    expect(result.trades[0].exitPrice).toBe(93);
+    expect(result.trades[0].exitReason).toBe("stop");
   });
 
   it("drops a buy-stop that doesn't trade through the next session", () => {
