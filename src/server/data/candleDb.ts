@@ -13,6 +13,8 @@ import type { PricePoint } from "@/contracts/api";
 //   series   key, covered_from (complete back to this time), synced_at, count, first_t, last_t
 //   candles  key, t (epoch ms), o, h, l, c, v      — primary key (key, t)
 //
+// Other modules may add their own tables through `marketDb()` (src/server/providers/btstRecord.ts).
+//
 // The file lives in .cache/ (git-ignored). Set MARKET_DB_PATH to put it elsewhere.
 
 export interface SeriesMeta {
@@ -55,6 +57,9 @@ function db(): Database.Database {
   globalForDb.marketDb ??= open();
   return globalForDb.marketDb;
 }
+
+/** The shared connection, for other tables kept in the same file (the BTST live record). */
+export const marketDb = db;
 
 interface SeriesRow {
   key: string;
