@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest an idea, a screen, an indicator or a data source
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve?
+      description: How you trade or shortlist today, and where Tradex gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Proposed solution
+      description: For screens or scoring rules, please link the source (book, paper, article) and say how you'd backtest it.
+    validations:
+      required: true
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to help build this

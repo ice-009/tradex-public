@@ -1,4 +1,18 @@
+<div align="center">
+
 # Tradex
+
+**Shortlist stock-futures trades on NSE: charts, screeners, setup scores and backtests in one open-source terminal.**
+
+[![CI](https://github.com/ice-009/tradex-public/actions/workflows/ci.yml/badge.svg)](https://github.com/ice-009/tradex-public/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node](https://img.shields.io/badge/node-%E2%89%A520.9-339933?logo=node.js&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=next.js)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+
+[Features](#features) · [Getting started](#getting-started) · [Architecture](#architecture) · [Roadmap](#roadmap) · [Contributing](#contributing)
+
+</div>
 
 **An open-source trading terminal for Indian (NSE) stock futures, built to shortlist trades.** Tradex combines TradingView-style charts with screeners, a 100-point setup score, a portfolio backtester and live prices, so you can narrow 200+ F&O stocks down to the one or two worth taking. You place orders in your broker's app; Tradex never sends one.
 
@@ -166,6 +180,19 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 | `DATA_SOURCES` | Source order for the data engine, e.g. `fyers,eod,sample` |
 
 Runtime caches (daily bars, NSE files, chart history, API usage) are written to `.cache/`, which is git-ignored.
+
+## Roadmap
+
+Tradex is young. These are the next things that would help most, and good places to contribute:
+
+- [ ] **More brokers.** Data-source adapters for Upstox, Zerodha Kite and Angel One (one file each in `src/server/data/sources/`).
+- [ ] **Longer history.** An opt-in multi-year daily backfill, so backtests cover several market phases instead of about a year.
+- [ ] **Backtest comparisons.** "Enter at close" vs "wait for strength", and parameter sweeps with walk-forward validation.
+- [ ] **Futures-native data.** Continuous futures series with roll handling instead of cash prices as a proxy.
+- [ ] **Alerts that run without the browser open** (server-side, with push notifications).
+- [ ] A light theme, and more indicators and drawing tools.
+
+Have an idea? [Open an issue](https://github.com/ice-009/tradex-public/issues/new/choose).
 
 ## Contributing
 

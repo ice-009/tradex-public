@@ -1,5 +1,7 @@
 # Contributing to Tradex
 
+Please read and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 Thanks for helping. Bug reports, data-source adapters, screens, indicators and UI fixes are all welcome.
 
 ## Setup
