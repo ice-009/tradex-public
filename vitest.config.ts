@@ -4,6 +4,6 @@ import { defineConfig } from "vitest/config";
 // Unit tests for the pure layers (src/core, src/contracts). They need no
 // server, browser or network: `npm test`.
 export default defineConfig({
-  resolve: { alias: { "@": path.resolve(__dirname, "src") } },
+  resolve: { alias: { "@": path.resolve(__dirname, "src"), "server-only": path.resolve(__dirname, "src/test/server-only.ts") } },
   test: { include: ["src/**/*.test.ts"], environment: "node" },
 });

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { getHistory } from "@/server/data/historyStore";
+import { getHistory, peekHistory } from "@/server/data/historyStore";
 import { DataEngine } from "@/server/data/engine";
 import { MarketStream } from "@/server/data/stream";
 import { eodSource } from "@/server/data/sources/eod";
@@ -40,7 +40,7 @@ const globalForData = globalThis as unknown as { dataEngine?: DataEngine; market
 /** The app's one data engine (built on first use, kept across hot reloads). */
 export function dataEngine(): DataEngine {
   if (!(globalForData.dataEngine instanceof DataEngine)) {
-    globalForData.dataEngine = new DataEngine(configuredSources(), { historyStore: { get: getHistory } });
+    globalForData.dataEngine = new DataEngine(configuredSources(), { historyStore: { get: getHistory, peek: peekHistory } });
   }
   return globalForData.dataEngine;
 }

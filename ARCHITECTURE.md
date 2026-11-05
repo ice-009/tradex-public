@@ -139,7 +139,14 @@ How the app keeps its calls down:
 - **Day high/low sweep:**
   - It is paced from what's left of the background budget for the rest of the session (`sweepIntervalMs`), about every 1½ min on Standard.
   - Symbols on the live socket are checked on every tick at no cost.
-- **Chart history:** candles are stored per symbol and resolution in `.cache/history`. A chart opened before costs one "tail" call, or nothing within its freshness window. It does not refetch every 90/360-day chunk.
+- **Chart history:** candles live in a local SQLite database, `.cache/market.db` (`src/server/data/candleDb.ts`), one series per source, symbol and interval.
+  - A chart opened before costs one "tail" call, or nothing within its freshness window.
+  - Downloads use Fyers' request limits: 90 days per intraday request, 365 per daily request.
+  - Fyers' `{ s: "error" }` replies (sent with HTTP 200) are treated as errors. With a broker connected, a failed load shows that error instead of sample candles.
+- **Download F&O history** (`src/server/services/historyPrefetch.ts`, `/api/data/history-db`, the Market data dialog):
+  - fills the database with 5 years of daily and 1 year of 15-minute candles for every F&O stock plus NIFTY, BANKNIFTY and FINNIFTY;
+  - runs at background priority, skips what's stored (resumable), and pauses when the day's background budget is spent;
+  - the screener's daily store extends itself from the database with `history({ offline: true })`, which reads the database only and never calls the API, so backtests get the full 5 years.
 - **Live socket:** charts get the 100 symbols first, then alerts, then watchlist rows in list order. Symbols that don't fit fall back to the quote refresh.
 
 ## Backtesting (`src/core/backtest`)

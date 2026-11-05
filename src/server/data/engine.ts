@@ -24,6 +24,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Disk-backed incremental history (see ../providers/historyStore.ts); injected so tests can pass a fake. */
 export interface HistoryStore {
   get(params: { key: string; from: number; freshMs: number; overlapMs: number; reload?: boolean; download: (fromMs: number) => Promise<HistoryResult> }): Promise<PricePoint[]>;
+  /** Stored candles from `from` on without downloading; null when the store doesn't cover `from`. */
+  peek?(key: string, from: number): Promise<PricePoint[] | null>;
 }
 
 export interface EngineOptions {
@@ -73,11 +75,21 @@ export class DataEngine {
    * built from daily ones. `kinds` limits which kinds of source may answer (the
    * screener only accepts real broker data); `reload` forces a full download.
    */
-  async history(request: { symbol: string; interval: BaseInterval; from: number; email?: string | null; kinds?: SourceKind[]; reload?: boolean }): Promise<HistoryAnswer> {
+  async history(request: { symbol: string; interval: BaseInterval; from: number; email?: string | null; kinds?: SourceKind[]; reload?: boolean; offline?: boolean }): Promise<HistoryAnswer> {
     const skipped: string[] = [];
     for (const source of this.sources) {
       const history = source.history;
       if (!history || !history.supports(request.interval) || (request.kinds && !request.kinds.includes(source.kind))) continue;
+      // `offline`: answer only from what's already stored — no download, works with the source disconnected.
+      if (request.offline) {
+        if (!history.cacheable || !this.options.historyStore.peek) continue;
+        const window = history.windowDays?.(request.interval);
+        const from = window ? Math.max(request.from, this.now() - window * DAY_MS) : request.from;
+        const candles = await this.options.historyStore.peek(this.historyKey(source, request.symbol, request.interval), from);
+        if (candles?.length) return { candles, source: { id: source.id, label: source.label, kind: source.kind }, skipped };
+        skipped.push(`${source.label}: nothing stored for ${request.symbol}`);
+        continue;
+      }
       const reason = await this.unavailable(source, request.email);
       if (reason) {
         skipped.push(`${source.label}: ${reason}`);
@@ -89,7 +101,7 @@ export class DataEngine {
         const download = (fromMs: number) => history.fetch({ symbol: request.symbol, interval: request.interval, from: fromMs, email: request.email });
         const candles = history.cacheable
           ? await this.options.historyStore.get({
-              key: history.cacheKey?.(request.symbol, request.interval) ?? `${source.id}:${request.symbol}:${request.interval}`,
+              key: this.historyKey(source, request.symbol, request.interval),
               from,
               reload: request.reload,
               ...freshness(request.interval),
@@ -103,6 +115,11 @@ export class DataEngine {
       }
     }
     return { candles: [], source: null, skipped };
+  }
+
+  /** The store key of a source's series for a symbol and interval. */
+  historyKey(source: DataSource, symbol: string, interval: BaseInterval): string {
+    return source.history?.cacheKey?.(symbol, interval) ?? `${source.id}:${symbol}:${interval}`;
   }
 
   // ------------------------------------------------------------------ quotes

@@ -26,6 +26,7 @@ export interface HistoryResult {
 export async function fetchHistory(symbol: string, interval: ChartInterval, signal?: AbortSignal): Promise<HistoryResult> {
   const meta = INTERVAL_META[interval];
   const data = await api.chart(symbol, interval, meta.range, signal);
+  if (data.error) throw new Error(data.error);
   const bars: Bar[] = (data.priceSeries ?? [])
     .map((point) => ({
       time: Date.parse(point.date),

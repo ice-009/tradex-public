@@ -6,6 +6,7 @@ import { CHART_TYPES } from "@/chart/types";
 import { FAVORITE_INTERVALS, INTERVALS, INTERVAL_META } from "@/core/market/intervals";
 import { liveHub, type LiveStatus } from "@/client/marketData";
 import { useApiUsage } from "@/client/usageFeed";
+import { MarketDataDialog } from "./MarketDataDialog";
 import { LAYOUTS, setLayout, updateActiveCell, useTerminal } from "./store";
 import { Icons, LayoutIcon } from "./icons";
 import { LayoutsMenu, type LayoutDialogState } from "./LayoutsMenu";
@@ -190,6 +191,7 @@ const compact = (value: number) => (value >= 10_000 ? `${Math.round(value / 1000
 /** Today's broker API calls against the daily cap; turns amber past 70 %, red past 90 % or after a 429. */
 function ApiUsageMeter() {
   const usage = useApiUsage();
+  const [open, setOpen] = useState(false);
   if (!usage) return null;
   const share = usage.dayCap ? usage.usedToday / usage.dayCap : 0;
   const tone = usage.strikes > 0 || share >= 0.9 ? "is-bad" : share >= 0.7 ? "is-warn" : "";
@@ -198,13 +200,17 @@ function ApiUsageMeter() {
     `Last minute: ${usage.usedThisMinute} of ${usage.minuteCap} (limit ${usage.limits.perMinute})`,
     `Charts & searches ${usage.byPriority.user} · watchlist & alerts ${usage.byPriority.refresh} · scans ${usage.byPriority.background}`,
     usage.strikes ? `Rate-limited ${usage.strikes}× today${usage.coolingDown ? " — paused for a minute" : ""} (Fyers blocks the day after more than 3)` : "No rate-limit hits today",
+    "Click for market data and the history database",
   ].join("\n");
   return (
-    <span className={`tx-api-meter ${tone}`} title={title}>
-      <span className="tx-api-meter-bar" aria-hidden>
-        <i style={{ width: `${Math.min(100, share * 100)}%` }} />
-      </span>
-      API {compact(usage.usedToday)}/{compact(usage.dayCap)}
-    </span>
+    <>
+      <button type="button" className={`tx-api-meter ${tone}`} title={title} onClick={() => setOpen(true)}>
+        <span className="tx-api-meter-bar" aria-hidden>
+          <i style={{ width: `${Math.min(100, share * 100)}%` }} />
+        </span>
+        API {compact(usage.usedToday)}/{compact(usage.dayCap)}
+      </button>
+      {open && <MarketDataDialog onClose={() => setOpen(false)} />}
+    </>
   );
 }

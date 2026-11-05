@@ -227,11 +227,13 @@ function getSeriesCacheTtl(unit: ChartIntervalUnit) {
 // "1M") requests whose range exceeds 366 days ("Date range cannot exceed 366
 // days"). Intraday resolutions allow larger spans. Longer chart ranges are
 // stitched together from multiple ≤-cap chunks in fetchFyersChartSeries.
-// Sized so the plan's whole window takes the fewest calls: 4 × 91 days covers the
-// intraday year, 5 × 365 days the 5 daily years (Fyers rejects daily spans > 366 days).
+// Sized so the plan's whole window takes the fewest calls: 4 × 90 days covers the
+// intraday window, 5 × 365 days the 5 daily years (Fyers rejects daily spans > 366 days).
+// Intraday stays at 90 days per request, the size verified against the live API
+// (a 91-day trial coincided with intraday charts falling back to sample data).
 const MAX_CHUNK_DAYS_BY_UNIT: Record<ChartIntervalUnit, number> = {
-  minutes: 91,
-  hours: 91,
+  minutes: 90,
+  hours: 90,
   days: 365,
   weeks: 365,
   months: 365,
@@ -241,8 +243,8 @@ const MAX_CHUNK_DAYS_BY_UNIT: Record<ChartIntervalUnit, number> = {
 // earlier fails with 422). Asking for more only wastes a call on every new symbol,
 // so requests are clamped to this, with a few days' margin.
 const HISTORY_WINDOW_DAYS: Record<ChartIntervalUnit, number> = {
-  minutes: 365 - 3,
-  hours: 365 - 3,
+  minutes: 4 * 90,
+  hours: 4 * 90,
   days: 5 * 365 - 3,
   weeks: 5 * 365 - 3,
   months: 5 * 365 - 3,
@@ -616,6 +618,12 @@ async function fetchFyersHistoricalChunk(params: {
       }
 
       const data = await response.json();
+      // Fyers reports many errors with HTTP 200 and { s: "error", code, message }. Treating
+      // those as "no candles" hid the real problem (and charts fell back to sample data).
+      // "no_data" is a genuine empty answer (e.g. a range with no sessions).
+      if (data?.s && data.s !== "ok" && data.s !== "no_data") {
+        throw new Error(`Fyers history error${data.code !== undefined ? ` ${data.code}` : ""}: ${data.message ?? data.s} (${params.symbol} ${params.resolution}, ${query.get("range_from")} → ${query.get("range_to")})`);
+      }
       const candles = Array.isArray(data.candles) ? (data.candles as FyersCandleTuple[]) : [];
       return convertFyersCandlesToPricePoints(candles);
     },
