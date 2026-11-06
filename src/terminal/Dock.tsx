@@ -7,6 +7,8 @@ import { stepIdea } from "./ideaActions";
 import { Icons } from "./icons";
 import { useHighLowFeed } from "@/client/highLowFeed";
 import { istParts } from "@/core/market/session";
+import { usePlanFeed } from "@/client/planFeed";
+import { useDailyPlan } from "./usePlan";
 
 /**
  * Bottom panel strip, always visible under the charts (like a trading
@@ -21,16 +23,29 @@ export function BottomDock() {
   const hlStatus = useHighLowFeed((feed) => feed.status);
   const ideas = useScreenerFeed((feed) => feed.ideas.size);
   const status = useScreenerFeed((feed) => feed.data?.status);
+  const plan = useDailyPlan();
+  const planned = plan?.ideas.filter((idea) => idea.size.status === "ok").length ?? 0;
+  const urgent = usePlanFeed((feed) => Object.values(feed.trades?.tracks ?? {}).filter((track) => track.urgent).length);
 
   return (
     <div className="tx-dock">
       <button
         type="button"
+        className={`tx-dock-tab ${open && view === "plan" ? "is-active" : ""}`}
+        onClick={() => updateScreener(open && view === "plan" ? { open: false, maximized: false } : { open: true, view: "plan" })}
+        title="Today's trade plan: which setups to take, how many lots, and what to do with your open trades"
+      >
+        Plan
+        {planned > 0 && <span className="tx-dock-count">{planned}</span>}
+        {urgent > 0 && <span className="tx-dock-dot is-error" title={`${urgent} open trade${urgent === 1 ? " needs" : "s need"} action today`} />}
+      </button>
+      <button
+        type="button"
         className={`tx-dock-tab ${open && view === "screener" ? "is-active" : ""}`}
         onClick={() => updateScreener(open && view === "screener" ? { open: false, maximized: false } : { open: true, view: "screener" })}
-        title="Stock screener: BTST, swing and 15–30 day setups"
+        title="Explore every screen's matches: BTST, swing and 15–30 day setups"
       >
-        Stock Screener
+        Explore
         {ideas > 0 && <span className="tx-dock-count">{ideas}</span>}
         {status === "error" && <span className="tx-dock-dot is-error" title="No data" />}
       </button>

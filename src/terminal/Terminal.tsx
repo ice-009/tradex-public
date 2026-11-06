@@ -16,6 +16,8 @@ import { AlertWatcher } from "./Alerts";
 import { BtstAlertWatcher } from "./ScreenerAlerts";
 import { HighLowPanel } from "./HighLowPanel";
 import { BacktestPanel } from "./BacktestPanel";
+import { PlanPanel } from "./PlanPanel";
+import { usePlanPolling } from "@/client/planFeed";
 import { useHighLowPolling } from "@/client/highLowFeed";
 import { SmcGuide } from "./SmcGuide";
 import { LayoutGuide } from "./LayoutGuide";
@@ -70,6 +72,7 @@ function Workspace() {
   const [layoutDialog, setLayoutDialog] = useState<LayoutDialogState | null>(null);
   useScreenerPolling(useTerminal((state) => state.screener.universe));
   useHighLowPolling(screenerOpen && screenerView === "highlow");
+  usePlanPolling();
 
   // First run after this update: make the full F&O list the default watchlist (once — later changes stick).
   useEffect(() => {
@@ -162,7 +165,7 @@ function Workspace() {
           <div className={`tx-center ${screenerOpen && screenerMax ? "is-max" : ""}`}>
             <ChartGrid layout={layout} cellCount={cellCount} activeCell={activeCell} />
             <LayoutGuide />
-            {screenerOpen && (screenerView === "compare" ? <ComparePanel /> : screenerView === "highlow" ? <HighLowPanel /> : screenerView === "backtest" ? <BacktestPanel /> : <ScreenerPanel />)}
+            {screenerOpen && (screenerView === "compare" ? <ComparePanel /> : screenerView === "highlow" ? <HighLowPanel /> : screenerView === "backtest" ? <BacktestPanel /> : screenerView === "plan" ? <PlanPanel /> : <ScreenerPanel />)}
             <BottomDock />
           </div>
           {watchlistOpen && <Watchlist />}

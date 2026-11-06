@@ -52,6 +52,7 @@ model User {
   sessions             Session[]
   subscription         Subscription?
   portfolioPositions   PortfolioPosition[]
+  trades               Trade[]
 }
 
 model VerificationToken {
@@ -93,4 +94,41 @@ model PortfolioPosition {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, symbol])
+}
+
+// A trade taken from the daily plan (the journal). Long only for now; `side`
+// is stored so short strategies can be added later. The plan's levels are
+// copied in when the trade is taken, so the journal can compare your fills
+// with the plan and track the exit rule even if the screen changes later.
+model Trade {
+  id           String    @id @default(cuid())
+  userId       String
+  symbol       String
+  screenId     String
+  side         String    @default("long")
+  plannedEntry Float
+  stop         Float
+  target       Float?
+  // "next-open", "stop-target", "time" or "trail-low:10" (src/core/plan/instructions.ts)
+  exitRule     String
+  holdSessions Int
+  entryPrice   Float
+  entryAt      DateTime
+  lots         Int
+  lotSize      Int
+  quantity     Int
+  // "open" or "closed"
+  status       String    @default("open")
+  exitPrice    Float?
+  exitAt       DateTime?
+  // "open", "stop", "target", "trail", "time" or "manual"
+  exitReason   String?
+  plannedExit  Float?
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
 }

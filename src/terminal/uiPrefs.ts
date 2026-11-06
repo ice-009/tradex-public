@@ -16,10 +16,13 @@ export interface UIPrefs {
   /** Position sizing (setup card): trading capital in ₹ and the most one trade may lose, % of capital. */
   capital: number;
   riskPct: number;
+  /** Daily plan: most trades open at once, and the cap on total open notional as a multiple of capital. */
+  maxOpen: number;
+  maxLeverage: number;
 }
 
 const STORAGE_KEY = "tradex.uiprefs.v1";
-const DEFAULTS: UIPrefs = { hideDrawings: false, syncCrosshair: true, groupTools: {}, showPlans: true, autoPatterns: true, capital: 500_000, riskPct: 1 };
+const DEFAULTS: UIPrefs = { hideDrawings: false, syncCrosshair: true, groupTools: {}, showPlans: true, autoPatterns: true, capital: 500_000, riskPct: 1, maxOpen: 5, maxLeverage: 4 };
 
 let prefs: UIPrefs | null = null;
 const listeners = new Set<() => void>();
@@ -86,7 +89,7 @@ export function toggleShowPlans() {
   setPrefs((current) => ({ ...current, showPlans: !current.showPlans }));
 }
 
-export function setSizing(patch: Partial<Pick<UIPrefs, "capital" | "riskPct">>) {
+export function setSizing(patch: Partial<Pick<UIPrefs, "capital" | "riskPct" | "maxOpen" | "maxLeverage">>) {
   setPrefs((current) => ({ ...current, ...patch }));
 }
 

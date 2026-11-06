@@ -1,0 +1,122 @@
+/* ============================================================
+   Plan panel (src/terminal/PlanPanel.tsx)
+   Uses the theme tokens from globals.css; nothing here overrides them.
+   ============================================================ */
+
+.tx-plan { container-type: inline-size; container-name: plan; }
+.tx-center.is-max > .tx-plan { flex: 1; height: auto; }
+
+.tx-plan-head { gap: var(--sp-3); overflow-x: auto; scrollbar-width: none; }
+.tx-plan-head::-webkit-scrollbar { display: none; }
+.tx-plan-head > * { flex-shrink: 0; }
+.tx-plan-head .tx-scr-status { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tx-plan-market { font-size: var(--fs-sm); color: var(--text-muted); letter-spacing: 0.02em; white-space: nowrap; }
+.tx-plan-market b { font-weight: var(--fw-semibold); }
+.tx-plan-market.is-up b { color: var(--pos); }
+.tx-plan-market.is-down b { color: var(--neg); }
+.tx-plan-market.is-unknown b { color: var(--warn); }
+.tx-plan-risk { font-size: var(--fs-sm); color: var(--text-muted); white-space: nowrap; }
+.tx-plan-risk b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+.tx-plan-settings { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); background: var(--bg-2); font-size: var(--fs-sm); }
+.tx-plan-settings label { display: flex; flex-direction: column; gap: 3px; color: var(--text-muted); font-size: var(--fs-xs); }
+.tx-plan-settings .tx-input { height: 28px; }
+.tx-plan-settings .tx-dim { flex-basis: 100%; font-size: var(--fs-xs); }
+
+/* Two columns when there's room (plan | open trades + journal), stacked when not. */
+.tx-plan-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 0 var(--sp-4);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+}
+@container plan (min-width: 880px) {
+  .tx-plan-body { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+  .tx-plan-foot { grid-column: 1 / -1; }
+}
+.tx-plan-col { min-width: 0; }
+
+.tx-plan-section { margin-bottom: var(--sp-3); }
+.tx-plan-title { display: flex; align-items: baseline; gap: var(--sp-2); margin: var(--sp-1) 0 6px; color: var(--text-muted); font-size: var(--fs-xs); font-weight: var(--fw-semibold); letter-spacing: 0.06em; }
+.tx-plan-title .tx-dim { font-weight: var(--fw-regular); letter-spacing: 0; }
+.tx-plan-slots { margin-left: auto; color: var(--text-subtle); font-weight: var(--fw-regular); letter-spacing: 0; }
+.tx-plan-empty { padding: var(--sp-2) var(--sp-3); border: 1px dashed var(--border-strong); border-radius: var(--r-md); color: var(--text-muted); font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.tx-plan-warn { margin-bottom: var(--sp-2); padding: 6px var(--sp-3); border: 1px solid var(--neg-border); border-radius: var(--r-md); background: var(--neg-soft); color: var(--text); font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.tx-plan-error { flex-basis: 100%; color: var(--neg); font-size: var(--fs-sm); }
+
+/* ---------------------------------------------------------------- ideas */
+.tx-plan-ideas { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.tx-plan-ideas.is-more { margin-top: 6px; opacity: 0.85; }
+.tx-plan-idea { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 var(--sp-2); padding: 6px var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.tx-plan-idea.is-active { border-color: var(--accent-border); }
+.tx-plan-idea.is-unsized { background: transparent; }
+.tx-plan-idea-main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  flex: 1 1 280px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tx-plan-rank { grid-row: 1 / 4; color: var(--text-subtle); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.tx-plan-line1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-2); font-size: var(--fs-md); }
+.tx-plan-symbol { font-weight: var(--fw-semibold); letter-spacing: 0.01em; }
+.tx-plan-setup { color: var(--text-muted); }
+.tx-plan-setup.tx-hz-btst { color: var(--hz-btst); }
+.tx-plan-setup.tx-hz-swing { color: var(--hz-swing); }
+.tx-plan-setup.tx-hz-positional { color: var(--hz-positional); }
+.tx-plan-setup.tx-hz-results { color: var(--hz-results); }
+.tx-plan-size { margin-left: auto; font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tx-plan-size.is-too-big, .tx-plan-size.is-no-room { color: var(--warn); font-weight: var(--fw-medium); }
+.tx-plan-ltp { font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.tx-plan-line2 { color: var(--text); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.tx-plan-line3 { color: var(--text-subtle); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.tx-plan-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.tx-plan-took { padding: 0 10px; }
+.tx-plan-more { margin-top: 6px; font-size: var(--fs-sm); }
+.tx-plan-unsized { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; font-size: var(--fs-sm); }
+.tx-plan-chip { height: 22px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--r-full); background: transparent; color: var(--text); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.tx-plan-chip:hover { background: var(--surface-2); }
+
+.tx-plan-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-2); flex-basis: 100%; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-subtle); font-size: var(--fs-sm); }
+.tx-plan-form label { display: flex; flex-direction: column; gap: 3px; color: var(--text-muted); font-size: var(--fs-xs); }
+.tx-plan-form .tx-input { height: 28px; }
+.tx-plan-form .tx-input-num { width: 92px; }
+.tx-plan-notes { flex: 1 1 140px; }
+.tx-plan-form .tx-btn-small { flex: none; padding: 0 var(--sp-3); }
+.tx-plan-form .tx-dim { align-self: center; font-size: var(--fs-xs); }
+.tx-plan-delete { align-self: center; color: var(--neg); }
+
+/* ---------------------------------------------------------------- open trades */
+.tx-plan-open { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.tx-plan-trade { display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--sp-2); padding: 5px var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); }
+.tx-plan-trade.is-urgent { border-color: var(--warn-border); background: var(--warn-soft); }
+.tx-plan-trade-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-3); flex: 1 1 260px; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: var(--fs-md); text-align: left; cursor: pointer; }
+.tx-plan-hold { color: var(--text-muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.tx-plan-r { font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.tx-plan-action { color: var(--text-muted); font-size: var(--fs-sm); }
+.tx-plan-action.is-urgent { color: var(--warn); font-weight: var(--fw-semibold); }
+
+/* ---------------------------------------------------------------- journal + evidence */
+.tx-plan-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px var(--sp-4); font-size: var(--fs-sm); color: var(--text-muted); }
+.tx-plan-summary b { color: var(--text); font-variant-numeric: tabular-nums; }
+.tx-plan-table-wrap { margin-top: 6px; overflow-x: auto; }
+.tx-plan-table-wrap table { min-width: 100%; }
+.tx-plan-evidence td, .tx-plan-evidence th, .tx-plan-closed td, .tx-plan-closed th { white-space: nowrap; }
+.tx-plan-evidence .is-left, .tx-plan-closed .is-left { max-width: none; }
+.tx-plan-verdict { margin-left: 6px; padding: 0 5px; border-radius: var(--r-full); background: var(--surface-3); color: var(--text-subtle); font-size: var(--fs-2xs); }
+.tx-plan-verdict.is-any { background: var(--pos-soft); color: var(--pos); }
+.tx-plan-verdict.is-uptrend, .tx-plan-verdict.is-downtrend { background: var(--info-soft); color: var(--info); }
+.tx-plan-verdict.is-none { background: var(--neg-soft); color: var(--neg); }
+.tx-plan-foot { min-width: 0; }
+.tx-plan .is-up { color: var(--pos); }
+.tx-plan .is-down { color: var(--neg); }

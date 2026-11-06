@@ -47,7 +47,7 @@ export const DEFAULT_FORM: BacktestForm = {
   riskPct: 1,
   maxPositions: 5,
   maxLeverage: 4,
-  entry: "next-open",
+  entry: "signal-close",
   costPreset: "futures-2026",
   slippagePct: "",
   sizing: "lots",
@@ -267,8 +267,8 @@ export function BacktestFormView({
           <label className="tx-bt-field">
             <span>Entry</span>
             <select className="tx-input" value={form.entry} onChange={(event) => onChange({ entry: event.target.value as BacktestForm["entry"] })}>
+              <option value="signal-close">Signal close (3:15–3:25 PM)</option>
               <option value="next-open">Next open</option>
-              <option value="signal-close">Signal close</option>
             </select>
           </label>
           <label className="tx-bt-field" title="The last part of the period is held out to check whether results hold up.">

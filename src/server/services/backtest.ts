@@ -29,7 +29,7 @@ import { BENCHMARK, parseUniverse } from "./screener";
 // Every result says which list was used on how many sessions.
 
 /** Bump when the scan or simulation rules change, so a running server drops cached results. */
-const BACKTEST_VERSION = 4;
+const BACKTEST_VERSION = 5;
 const MAX_RESULTS = 24;
 
 const globalForBacktest = globalThis as unknown as {
@@ -109,7 +109,7 @@ export function parseBacktestRequest(body: unknown): BacktestRequest {
     riskPct: num(raw.riskPct, 1, 0.05, 10),
     maxPositions: Math.round(num(raw.maxPositions, 5, 1, 50)),
     maxLeverage: num(raw.maxLeverage, 4, 0.5, 10),
-    entry: raw.entry === "signal-close" ? "signal-close" : "next-open",
+    entry: raw.entry === "next-open" ? "next-open" : "signal-close",
     costPreset: preset in COST_PRESETS ? (preset as CostPresetId) : "futures-2026",
     slippage:
       slip && (slip.mode === "pct" || slip.mode === "ticks") ? { mode: slip.mode, value: num(slip.value, 0, 0, slip.mode === "pct" ? 2 : 50) } : undefined,

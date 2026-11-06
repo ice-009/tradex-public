@@ -195,6 +195,9 @@ export function confirmedEntry(f: Features): { entry: number; confirmed: boolean
   return { entry: roundToTick(Math.max(f.maxHigh5, f.close) * 1.001, "up"), confirmed: false };
 }
 
+/** Market-entry plans are bought at the signal close: the screens are run at 3:15–3:25 PM (research on five years of F&O history found that beat the next open). */
+const AT_CLOSE = "Buy near the close (3:15–3:25 PM). ";
+
 const WAIT_FOR_STRENGTH = "Today isn't showing strength, so this is a buy-stop just above the 5-day high: it fills only if the stock turns back up. ";
 
 /** Plan from the chart pattern: stop under the structure (capped at 8% — O'Neil), target = measured move (at least 1.5R). */
@@ -293,7 +296,7 @@ export const SCREENS: ScreenDef[] = [
     ],
     score: (f) => 60 - Math.abs(f.rsi14 - 50) + (f.clv * 20) + capped(f.volRatio20, 3) * 5,
     plan: (f) =>
-      rPlan(f.close, Math.max(f.minLow5 - 0.1 * f.atr14, f.close - 2 * f.atr14), 2, "Target 2R; stop under the pullback low (max 2 ATR). Exit early on a close below the 50 EMA."),
+      rPlan(f.close, Math.max(f.minLow5 - 0.1 * f.atr14, f.close - 2 * f.atr14), 2, `${AT_CLOSE}Target 2R; stop under the pullback low (max 2 ATR). Exit early on a close below the 50 EMA.`),
     tags: (f) => [`RSI ${f.rsi14.toFixed(0)}`, `${(((f.close - f.ema25) / f.ema25) * 100).toFixed(1)}% over 25 EMA`],
     sources: [S.varsityMa, S.varsityRsi, S.varsityFinale],
   },
@@ -315,7 +318,7 @@ export const SCREENS: ScreenDef[] = [
       entry: f.close,
       stop: f.close - 2 * f.atr14,
       target: f.sma5 > f.close ? f.sma5 : null,
-      exit: "Exit on a close above the 5-day SMA (target shown = today's 5-SMA). Connors uses no stop; 2 ATR shown as a risk reference.",
+      exit: `${AT_CLOSE}Exit on a close above the 5-day SMA (target shown = today's 5-SMA). Connors uses no stop; 2 ATR shown as a risk reference.`,
     }),
     tags: (f) => [`RSI(2) ${f.rsi2.toFixed(1)}`, ...(f.rsi2 <= 5 ? ["≤ 5"] : [])],
     sources: [S.rsi2],
@@ -354,7 +357,7 @@ export const SCREENS: ScreenDef[] = [
       liquid(5),
     ],
     score: (f) => capped(f.deliveryPct / f.deliveryAvg20, 4) * 20 + capped(f.volRatio20, 4) * 8 + f.clv * 10,
-    plan: (f) => rPlan(f.close, Math.max(f.low, f.close - 1.5 * f.atr14), 2, "Target 2R; stop under the delivery day's low (max 1.5 ATR)."),
+    plan: (f) => rPlan(f.close, Math.max(f.low, f.close - 1.5 * f.atr14), 2, `${AT_CLOSE}Target 2R; stop under the delivery day's low (max 1.5 ATR).`),
     tags: (f) => [`Deliv ${f.deliveryPct.toFixed(0)}% vs ${f.deliveryAvg20.toFixed(0)}%`, `Vol ${f.volRatio20.toFixed(1)}×`],
     sources: [S.kiteDelivery, S.upstoxDelivery, S.nseReports],
   },
@@ -393,7 +396,7 @@ export const SCREENS: ScreenDef[] = [
     ],
     score: (f) => f.clv * 30 + capped(f.volRatio20, 3) * 10 + capped(f.changePct, 5) * 4,
     plan: (f) =>
-      rPlan(f.close, Math.max(f.minLow5 - 0.1 * f.atr14, f.close - 2 * f.atr14), 2, "Target 2R; stop under the 5-session low (max 2 ATR). Exit early on a close back below the 20-day SMA."),
+      rPlan(f.close, Math.max(f.minLow5 - 0.1 * f.atr14, f.close - 2 * f.atr14), 2, `${AT_CLOSE}Target 2R; stop under the 5-session low (max 2 ATR). Exit early on a close back below the 20-day SMA.`),
     tags: (f) => [`${(((f.close - f.sma20) / f.sma20) * 100).toFixed(1)}% over 20 SMA`, `Vol ${f.volRatio20.toFixed(1)}×`],
     sources: [S.dayTraderScanner, S.varsityMa],
   },
@@ -412,7 +415,7 @@ export const SCREENS: ScreenDef[] = [
     ],
     score: (f) => (30 - capped(f.rsi14Prev, 30)) * 2 + f.clv * 20 + (f.close > f.sma200 ? 15 : 0),
     plan: (f) =>
-      rPlan(f.close, Math.max(f.minLow3 - 0.1 * f.atr14, f.close - 1.5 * f.atr14), 1.5, "Target 1.5R; stop under the 3-session low (max 1.5 ATR). Counter-trend — don't hold for more."),
+      rPlan(f.close, Math.max(f.minLow3 - 0.1 * f.atr14, f.close - 1.5 * f.atr14), 1.5, `${AT_CLOSE}Target 1.5R; stop under the 3-session low (max 1.5 ATR). Counter-trend — don't hold for more.`),
     tags: (f) => [`RSI ${f.rsi14Prev.toFixed(0)} → ${f.rsi14.toFixed(0)}`, ...(f.close > f.sma200 ? ["> 200 SMA"] : [])],
     sources: [S.dayTraderScanner, S.varsityRsi],
   },
@@ -451,7 +454,7 @@ export const SCREENS: ScreenDef[] = [
       liquid(5),
     ],
     score: (f) => (f.pattern?.quality ?? 0) + capped(f.volRatio20, 4) * 5,
-    plan: (f) => patternPlan(f, f.close, "Stop under the pattern (max 8%); target = measured move. Trail with the chandelier stop once it's 1R in profit; exit on a close back inside the pattern."),
+    plan: (f) => patternPlan(f, f.close, `${AT_CLOSE}Stop under the pattern (max 8%); target = measured move. Trail with the chandelier stop once it's 1R in profit; exit on a close back inside the pattern.`),
     tags: (f) => [f.pattern!.name, `Q${f.pattern!.quality}`, `Vol ${f.volRatio20.toFixed(1)}×`],
     sources: [S.chartPatterns, S.loMamayskyWang, S.ibdBreakout, S.marketsmith],
   },
@@ -473,7 +476,7 @@ export const SCREENS: ScreenDef[] = [
     ],
     score: (f) => capped(f.gapPct, 15) * 4 + capped(f.volRatio50, 10) * 4 + f.clv * 20 + (f.close > f.sma200 ? 10 : 0),
     plan: (f) =>
-      rPlan(f.close, Math.max(f.low, f.close - 2 * f.atr14), 2, "Target 2R; stop under the gap day's low (max 2 ATR). A close back below the day's low means the gap failed — get out."),
+      rPlan(f.close, Math.max(f.low, f.close - 2 * f.atr14), 2, `${AT_CLOSE}Target 2R; stop under the gap day's low (max 2 ATR). A close back below the day's low means the gap failed — get out.`),
     tags: (f) => [`Gap +${f.gapPct.toFixed(1)}%`, `Vol ${f.volRatio50.toFixed(1)}× 50D`],
     sources: [S.episodicPivot, S.bernardThomas, S.iimbPead, S.nsePeadEfficient],
   },
@@ -493,7 +496,7 @@ export const SCREENS: ScreenDef[] = [
     ],
     score: (f) => capped(f.eventGapPct, 15) * 3 + ((f.close / f.eventClose - 1) * 100) * 2 + (11 - f.eventAgo) * 2,
     plan: (f) =>
-      rPlan(f.close, Math.max(f.eventLow, f.close - 2.5 * f.atr14), 2, "Target 2R; stop under the gap day's low (max 2.5 ATR). Exit early on a close back below the gap day's close."),
+      rPlan(f.close, Math.max(f.eventLow, f.close - 2.5 * f.atr14), 2, `${AT_CLOSE}Target 2R; stop under the gap day's low (max 2.5 ATR). Exit early on a close back below the gap day's close.`),
     tags: (f) => [`Gap +${f.eventGapPct.toFixed(1)}% ${f.eventAgo}d ago`, `${(((f.close - f.eventClose) / f.eventClose) * 100).toFixed(1)}% above gap close`],
     sources: [S.bernardThomas, S.iimbPead, S.bse500Pead, S.episodicPivot],
   },
@@ -520,7 +523,7 @@ export const SCREENS: ScreenDef[] = [
     score: (f) => f.rsRank + (f.close / f.high52) * 20,
     plan: (f) => {
       const { entry, confirmed } = confirmedEntry(f);
-      return rPlan(entry, Math.max(entry * 0.92, entry - 2.5 * f.atr14), 3, `${confirmed ? "" : WAIT_FOR_STRENGTH}Target 3R; hard stop ≤ 8%. Trail under the 50-day SMA for the rest of the move.`);
+      return rPlan(entry, Math.max(entry * 0.92, entry - 2.5 * f.atr14), 3, `${confirmed ? AT_CLOSE : WAIT_FOR_STRENGTH}Target 3R; hard stop ≤ 8%. Trail under the 50-day SMA for the rest of the move.`);
     },
     tags: (f) => [`RS ${f.rsRank}`, `${((1 - f.close / f.high52) * 100).toFixed(1)}% off high`],
     sources: [S.minervini, S.chartmill],
@@ -542,7 +545,7 @@ export const SCREENS: ScreenDef[] = [
     score: (f) => (f.close / f.high52) * 60 + capped(f.ret126, 80) * 0.5,
     plan: (f) => {
       const { entry, confirmed } = confirmedEntry(f);
-      return rPlan(entry, Math.max(entry * 0.92, entry - 2.5 * f.atr14), 3, `${confirmed ? "" : WAIT_FOR_STRENGTH}Target 3R; stop ≤ 8% (or 2.5 ATR). Exit on a close below the 50-day SMA.`);
+      return rPlan(entry, Math.max(entry * 0.92, entry - 2.5 * f.atr14), 3, `${confirmed ? AT_CLOSE : WAIT_FOR_STRENGTH}Target 3R; stop ≤ 8% (or 2.5 ATR). Exit on a close below the 50-day SMA.`);
     },
     tags: (f) => [`${((1 - f.close / f.high52) * 100).toFixed(1)}% off high`, `6M ${f.ret126.toFixed(0)}%`],
     sources: [S.georgeHwang, S.varsityMa],
@@ -563,7 +566,7 @@ export const SCREENS: ScreenDef[] = [
       liquid(5),
     ],
     score: (f) => capped(f.volRatio50, 5) * 15 + (1 - (f.baseHigh - f.baseLow) / f.baseHigh) * 30,
-    plan: (f) => rPlan(f.close, f.close * 0.92, 3, "Target 3R; sell if it falls 8% below entry (O'Neil/MarketSmith rule) or closes back inside the base."),
+    plan: (f) => rPlan(f.close, f.close * 0.92, 3, `${AT_CLOSE}Target 3R; sell if it falls 8% below entry (O'Neil/MarketSmith rule) or closes back inside the base.`),
     tags: (f) => [`Vol ${f.volRatio50.toFixed(1)}× 50D`, `Base ${(((f.baseHigh - f.baseLow) / f.baseHigh) * 100).toFixed(0)}% deep`],
     sources: [S.ibdBreakout, S.marketsmith],
   },
@@ -585,7 +588,7 @@ export const SCREENS: ScreenDef[] = [
       entry: f.close,
       stop: f.close - 2 * f.atr20,
       target: null,
-      exit: `Stop 2N (2 × ATR20). Trail: exit on a close below the 10-session low (now ${f.low10Prev.toFixed(2)}).`,
+      exit: `${AT_CLOSE}Stop 2N (2 × ATR20). Trail: exit on a close below the 10-session low (now ${f.low10Prev.toFixed(2)}).`,
     }),
     tags: (f) => [`ADX ${f.adx14.toFixed(0)}`, `+DI ${f.plusDI.toFixed(0)} / −DI ${f.minusDI.toFixed(0)}`],
     sources: [S.turtle, S.varsityAdx],

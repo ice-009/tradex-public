@@ -47,8 +47,8 @@ export interface ScreenerPrefs {
   height: number;
   /** Panel fills the center column (charts hidden), like a maximized bottom panel. */
   maximized: boolean;
-  /** Bottom panel tab: the stock screener, the Compare ranking, the day high/low feed, or the strategy backtester. */
-  view: "screener" | "compare" | "highlow" | "backtest";
+  /** Bottom panel tab: the daily trade plan, the stock screener ("Explore"), the Compare ranking, the day high/low feed, or the strategy backtester. */
+  view: "plan" | "screener" | "compare" | "highlow" | "backtest";
   /** Day high/low feed filters. */
   hl: { kind: "all" | "high" | "low"; segment: "both" | "cash" | "fut"; listOnly: boolean; from930: boolean; latestOnly: boolean };
   showInfo: boolean;
@@ -57,6 +57,8 @@ export interface ScreenerPrefs {
   watchlistOnly: boolean;
   /** Flash live BTST setups (toast, tone, notification) from 3:10 to 3:25 PM. */
   btstAlerts: boolean;
+  /** Explore: also list screens with no edge in the 5-year evidence (hidden by default). */
+  showAllScreens: boolean;
 }
 
 export interface WatchList {
@@ -117,6 +119,8 @@ export interface TerminalState {
   fnoSeeded: boolean;
   /** Futures-only defaults applied once: screener on the F&O universe, high/low feed on futures. */
   futuresDefaults: boolean;
+  /** The Plan tab was made the bottom panel's default once (later choices stick). */
+  planIntroduced: boolean;
   drawings: Record<string, Drawing[]>;
   savedLayouts: SavedLayout[];
   screener: ScreenerPrefs;
@@ -162,6 +166,7 @@ function defaultState(): TerminalState {
     alerts: [],
     fnoSeeded: false,
     futuresDefaults: true,
+    planIntroduced: true,
     drawings: {},
     savedLayouts: [],
     screener: {
@@ -171,13 +176,14 @@ function defaultState(): TerminalState {
       screenId: "btst-closing-strength",
       height: 340,
       maximized: false,
-      view: "screener",
+      view: "plan",
       hl: { kind: "all", segment: "fut", listOnly: false, from930: true, latestOnly: false },
       showInfo: false,
       sector: "",
       minRR: 0,
       watchlistOnly: false,
       btstAlerts: false,
+      showAllScreens: false,
     },
     layoutGuide: null,
   };
@@ -257,6 +263,10 @@ function load(): TerminalState {
             futuresDefaults: true,
             screener: { ...fallback.screener, ...(saved.screener ?? {}), universe: "fno", hl: fallback.screener.hl },
           }),
+      // The daily plan arrived: open it as the bottom panel's tab once.
+      ...(saved.planIntroduced
+        ? {}
+        : { planIntroduced: true, screener: { ...fallback.screener, ...(saved.screener ?? {}), ...(saved.futuresDefaults ? {} : { universe: "fno", hl: fallback.screener.hl }), view: "plan" as const } }),
       alerts: Array.isArray(saved.alerts) ? saved.alerts.filter((alert) => alert && typeof alert.symbol === "string" && alert.price > 0) : [],
     };
   } catch {

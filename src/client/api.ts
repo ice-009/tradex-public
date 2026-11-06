@@ -14,6 +14,7 @@ import type {
   BacktestRequest,
   BacktestResponse,
   ChartResponse,
+  EvidenceResponse,
   HighLowResponse,
   LiveRecordResponse,
   LotsResponse,
@@ -24,6 +25,11 @@ import type {
   ScreenerResponse,
   SymbolsResponse,
   TrackResult,
+  TradeCloseRequest,
+  TradeCreateRequest,
+  TradeDto,
+  TradesResponse,
+  TradeUpdateRequest,
 } from "@/contracts/api";
 
 export class ApiError extends Error {
@@ -58,10 +64,14 @@ async function getStatusJson<T extends { status: string }>(path: string, params:
   throw new ApiError(body?.error ?? `${path} failed (${response.status})`, response.status);
 }
 
-/** POST a JSON body; answers in the endpoint's own `{ status: "error" }` shape are returned, other failures throw. */
-/** POST a JSON body; non-2xx throws ApiError with the server's `error` message. */
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+/** Send a JSON body (POST by default); non-2xx throws ApiError with the server's `error` message. */
+async function postJson<T>(path: string, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<T> {
+  const response = await fetch(path, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: "no-store",
+  });
   const json = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError((json as { error?: string } | null)?.error ?? `${path} failed (${response.status})`, response.status);
   return json as T;
@@ -90,6 +100,16 @@ export const api = {
 
   /** What the BTST setups did live (recorded at 3:10–3:25 PM, settled at the next open). */
   liveRecord: () => getJson<LiveRecordResponse>("/api/screener/live-record"),
+
+  /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
+  evidence: () => getStatusJson<EvidenceResponse>("/api/plan/evidence", {}),
+
+  /** The trade journal: open trades with today's action, closed ones with the summary. */
+  trades: () => getJson<TradesResponse>("/api/trades"),
+  createTrade: (body: TradeCreateRequest) => postJson<TradeDto>("/api/trades", body),
+  updateTrade: (id: string, body: TradeUpdateRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}`, body, "PATCH"),
+  closeTrade: (id: string, body: TradeCloseRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}/close`, body),
+  deleteTrade: (id: string) => postJson<{ ok: boolean }>(`/api/trades/${encodeURIComponent(id)}`, undefined, "DELETE"),
 
   /** Stored history a backtest can use for a universe. */
   backtestInfo: (universe: string, signal?: AbortSignal) => getJson<BacktestInfoResponse>("/api/backtest", { universe }, signal),
