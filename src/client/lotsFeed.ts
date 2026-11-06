@@ -25,9 +25,8 @@ function loadLots() {
     .finally(() => lotListeners.forEach((listener) => listener()));
 }
 
-/** Futures lot size for a stock (null while loading or when no source had it). */
-export function useLotSize(symbol: string): { lot: number | null; source: LotFeed["source"] } {
-  const feedNow = useSyncExternalStore(
+function useLotFeed(): LotFeed {
+  return useSyncExternalStore(
     (listener) => {
       loadLots();
       lotListeners.add(listener);
@@ -38,5 +37,15 @@ export function useLotSize(symbol: string): { lot: number | null; source: LotFee
     () => lotFeed,
     () => lotFeed,
   );
+}
+
+/** Futures lot size for a stock (null while loading or when no source had it). */
+export function useLotSize(symbol: string): { lot: number | null; source: LotFeed["source"] } {
+  const feedNow = useLotFeed();
   return { lot: feedNow.lots[symbol] ?? null, source: feedNow.source };
+}
+
+/** Every known lot size (empty while loading). */
+export function useLotSizes(): LotFeed {
+  return useLotFeed();
 }

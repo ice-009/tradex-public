@@ -19,6 +19,8 @@ import { BTST_WINDOW, mutedReason } from "@/core/screener/btstAlerts";
 import { liveRecordLine, signedPct, type LiveScreenRecord } from "@/core/screener/liveRecord";
 import { requestAlertPermission } from "./Alerts";
 import type { LiveRecordResponse, ScreenerResponse, TrackResult } from "@/contracts/api";
+import { useEvidenceScreens } from "@/client/planFeed";
+import { VERDICT_LABEL, signedR, type ScreenEvidence } from "@/core/plan/evidence";
 
 const UNIVERSES = [
   { id: "nifty50", label: "Nifty 50" },
@@ -43,6 +45,20 @@ function formatDay(time: number) {
   return new Date(time).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
+/** Screens with a tested edge in at least one market state (the rest are hidden unless "Show all screens" is on). */
+const hasEdge = (evidence?: ScreenEvidence) => evidence?.verdict === "any" || evidence?.verdict === "uptrend" || evidence?.verdict === "downtrend";
+
+/** "works in any market" / "uptrends only" / "no edge in 5-year test", from the evidence engine. */
+function VerdictTag({ evidence }: { evidence?: ScreenEvidence }) {
+  if (!evidence) return null;
+  const short = { any: "any market", uptrend: "uptrends only", downtrend: "downtrends only", none: "no edge", few: "too few" }[evidence.verdict];
+  return (
+    <span className={`tx-plan-verdict is-${evidence.verdict}`} title={`${VERDICT_LABEL[evidence.verdict]}: ${signedR(evidence.up.mean)} a trade with NIFTY above its 200-day average (${evidence.up.n} trades), ${signedR(evidence.down.mean)} below it (${evidence.down.n}).`}>
+      {short}
+    </span>
+  );
+}
+
 function TrackCell({ record }: { record?: TrackRecord }) {
   if (!record) return <span className="tx-dim">…</span>;
   if (!record.signals) return <span className="tx-dim">—</span>;
@@ -65,6 +81,10 @@ export function ScreenerPanel() {
   const track = useScreenerFeed((feed) => feed.track);
   const liveRecord = useScreenerFeed((feed) => feed.liveRecord);
   const results = useScreenerFeed((feed) => feed.results);
+  const evidence = useEvidenceScreens();
+  // Until the evidence is in, every screen shows; after that, screens with no edge only on request.
+  const showAll = prefs.showAllScreens || !evidence;
+  const visible = useMemo(() => new Set(SCREENS.filter((entry) => showAll || hasEdge(evidence?.[entry.id])).map((entry) => entry.id)), [showAll, evidence]);
   // One setup score per (stock, setup) shown — cached until the feed changes.
   const scores = useMemo(() => {
     const map = new Map<string, SetupScore | null>();
@@ -88,9 +108,12 @@ export function ScreenerPanel() {
     const needle = query.trim().toUpperCase();
     const inWatchlist = new Set(watchlist);
     const base: Line[] = allView
-      ? [...ideas.values()].map((idea) => {
-          const hit = focusedHit(idea, focus);
-          return { symbol: idea.symbol, idea, hit, row: hit.row };
+      ? [...ideas.values()].flatMap((idea) => {
+          const shown = idea.hits.filter((entry) => visible.has(entry.screen.id));
+          if (!shown.length) return [];
+          const focused = focusedHit(idea, focus);
+          const hit = visible.has(focused.screen.id) ? focused : shown[0];
+          return [{ symbol: idea.symbol, idea, hit, row: hit.row }];
         })
       : (data?.results?.[screen.id] ?? []).flatMap((row) => {
           const idea = ideas.get(row.symbol);
@@ -133,7 +156,7 @@ export function ScreenerPanel() {
       const right = value(b);
       return (left < right ? -1 : left > right ? 1 : 0) * sort.dir;
     });
-  }, [allView, data, ideas, focus, screen.id, query, prefs.sector, prefs.minRR, prefs.watchlistOnly, watchlist, sort, records, scores]);
+  }, [allView, data, ideas, focus, screen.id, query, prefs.sector, prefs.minRR, prefs.watchlistOnly, watchlist, sort, records, scores, visible]);
 
   // Publish the visible order so [ / ] can step through it from anywhere.
   useEffect(() => setIdeaOrder(lines.map((line) => line.symbol)), [lines]);
@@ -205,7 +228,7 @@ export function ScreenerPanel() {
   }, [data]);
   const newCount = lines.filter(({ idea, row }) => idea.hits.some((entry) => isNewSetup(entry.row.firstSeenAt, firstScanAt, now)) || isNewSetup(row.firstSeenAt, firstScanAt, now)).length;
 
-  const groupCount = (id: string) => [...ideas.values()].filter((idea) => idea.groups.includes(id as never)).length;
+  const groupCount = (id: string) => [...ideas.values()].filter((idea) => idea.hits.some((hit) => hit.screen.group === id && visible.has(hit.screen.id))).length;
   const filtersActive = Boolean(query || prefs.sector || prefs.minRR || prefs.watchlistOnly);
 
   return (
@@ -223,7 +246,7 @@ export function ScreenerPanel() {
             title="Every setup from every screen, one row per stock"
           >
             All setups
-            <span className="tx-scr-count">{ideas.size || "–"}</span>
+            <span className="tx-scr-count">{ideas.size ? [...ideas.values()].filter((idea) => idea.hits.some((hit) => visible.has(hit.screen.id))).length : "–"}</span>
           </button>
           {SCREEN_GROUPS.map((entry) => (
             <button
@@ -235,7 +258,10 @@ export function ScreenerPanel() {
               onClick={() =>
                 updateScreener({
                   group: entry.id,
-                  screenId: screen.group === entry.id ? screen.id : SCREENS.find((s) => s.group === entry.id)?.id ?? prefs.screenId,
+                  screenId:
+                    screen.group === entry.id
+                      ? screen.id
+                      : (SCREENS.find((s) => s.group === entry.id && visible.has(s.id)) ?? SCREENS.find((s) => s.group === entry.id))?.id ?? prefs.screenId,
                 })
               }
             >
@@ -295,7 +321,7 @@ export function ScreenerPanel() {
 
       <div className="tx-scr-chips">
         {!allView &&
-          SCREENS.filter((entry) => entry.group === group.id).map((entry) => {
+          SCREENS.filter((entry) => entry.group === group.id && (visible.has(entry.id) || entry.id === screen.id)).map((entry) => {
             const count = data?.results?.[entry.id]?.length;
             return (
               <button
@@ -306,6 +332,7 @@ export function ScreenerPanel() {
                 title={entry.summary}
               >
                 {entry.name}
+                <VerdictTag evidence={evidence?.[entry.id]} />
                 <span className="tx-scr-count">{count ?? "–"}</span>
               </button>
             );
@@ -351,6 +378,16 @@ export function ScreenerPanel() {
             <Icons.bell size={13} />
             BTST alerts
           </button>
+          {evidence && (
+            <button
+              type="button"
+              className={`tx-scr-chip ${prefs.showAllScreens ? "is-active" : ""}`}
+              onClick={() => updateScreener({ showAllScreens: !prefs.showAllScreens })}
+              title={`Also list the ${SCREENS.length - SCREENS.filter((entry) => hasEdge(evidence[entry.id])).length} screens that showed no edge (or too few signals) in the 5-year test`}
+            >
+              Show all screens
+            </button>
+          )}
           <button
             type="button"
             className={`tx-scr-chip ${prefs.watchlistOnly ? "is-active" : ""}`}
@@ -466,7 +503,7 @@ export function ScreenerPanel() {
             {allView ? (
               <AllInfo records={records} sessions={track?.sessions} live={liveRecord} />
             ) : (
-              <ScreenInfo screenId={screen.id} record={records?.[screen.id]} sessions={track?.sessions} live={liveRecord} />
+              <ScreenInfo screenId={screen.id} record={records?.[screen.id]} sessions={track?.sessions} live={liveRecord} evidence={evidence?.[screen.id]} />
             )}
           </aside>
         )}
@@ -759,7 +796,7 @@ function ScreenLiveRecord({ screenId, live }: { screenId: string; live: LiveReco
   );
 }
 
-function ScreenInfo({ screenId, record, sessions, live }: { screenId: string; record?: TrackRecord; sessions?: number; live: LiveRecordResponse | null }) {
+function ScreenInfo({ screenId, record, sessions, live, evidence }: { screenId: string; record?: TrackRecord; sessions?: number; live: LiveRecordResponse | null; evidence?: ScreenEvidence }) {
   const screen = SCREEN_MAP[screenId];
   const group = SCREEN_GROUPS.find((entry) => entry.id === screen.group) ?? SCREEN_GROUPS[0];
   return (
@@ -769,6 +806,16 @@ function ScreenInfo({ screenId, record, sessions, live }: { screenId: string; re
         {screen.horizon} · {screen.basis === "eod" ? "last completed session" : "includes today's live candle in market hours"}
       </div>
       <p>{screen.summary}</p>
+      {evidence && (
+        <>
+          <div className="tx-section-label">5-year test · net of costs</div>
+          <div className={`tx-scr-verdict tx-tone-${hasEdge(evidence) ? "good" : evidence.verdict === "few" ? "none" : "bad"}`}>
+            <strong>{VERDICT_LABEL[evidence.verdict]}.</strong> NIFTY above its 200-day average: {signedR(evidence.up.mean)} a trade over {evidence.up.n} trades
+            {evidence.up.t !== null && ` (t ${evidence.up.t.toFixed(1)})`}; below it: {signedR(evidence.down.mean)} over {evidence.down.n}. Last 12 months {signedR(evidence.all.recent.mean)}.
+            {evidence.all.score && ` The score ${evidence.all.score.ranks ? "does" : "doesn't"} pick better trades.`}
+          </div>
+        </>
+      )}
       {record && screen.exit === "next-open" && <div className="tx-section-label">Track record · backtest, last {sessions} sessions</div>}
       {record && (
         <div className={`tx-scr-verdict tx-tone-${record.tone}`}>
