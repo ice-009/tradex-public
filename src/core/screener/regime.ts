@@ -19,6 +19,9 @@ export interface MarketRegime {
   niftyAbove50: boolean | null;
   /** Share (0–1) of the universe above its 50-day average. */
   breadth50: number | null;
+  /** NIFTY's close (live in market hours) and its 200-day average: the daily plan's market gate. */
+  niftyClose?: number;
+  niftySma200?: number | null;
 }
 
 /** Score penalty for long setups in each regime. */
@@ -38,5 +41,14 @@ export function marketRegime(input: { niftyClose: number; niftySma50: number; ni
   if (above200 === false && breadth !== null && breadth < 0.35) state = "risk-off";
   else if (above200 !== false && above50 !== false && breadth !== null && breadth >= 0.55) state = "healthy";
   const label = state === "healthy" ? "Healthy" : state === "caution" ? "Caution" : "Risk-off";
-  return { state, label, reasons, niftyAbove200: above200, niftyAbove50: above50, breadth50: breadth };
+  return {
+    state,
+    label,
+    reasons,
+    niftyAbove200: above200,
+    niftyAbove50: above50,
+    breadth50: breadth,
+    niftyClose: input.niftyClose,
+    niftySma200: Number.isFinite(input.niftySma200) ? input.niftySma200 : null,
+  };
 }

@@ -13,6 +13,9 @@ import type { ResultsEvent } from "@/core/parsers/resultsCalendar";
 import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
+import type { EvidenceTable } from "@/core/plan/evidence";
+import type { ExitReason, JournalSummary } from "@/core/plan/journal";
+import type { TradeTrack } from "@/core/plan/tracker";
 import type { StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
 import type { MarketRegime } from "@/core/screener/regime";
@@ -180,6 +183,103 @@ export interface LiveRecordResponse {
   days: number;
   /** The cost model behind the net returns. */
   costs: { preset: CostPresetId; label: string };
+}
+
+// ------------------------------------------------------------------ GET /api/plan/evidence
+
+/**
+ * Which screens have an edge, per market state (NIFTY above / below its 200-day
+ * average), from replaying them over the stored daily history (up to 5 years).
+ * Computed in the background: "computing" until the first table is ready.
+ */
+export type EvidenceResponse =
+  | { status: "computing"; error?: undefined; startedAt: number; progress: { done: number; total: number } }
+  | {
+      status: "ready";
+      error?: undefined;
+      table: EvidenceTable;
+      computedAt: number;
+      /** How long the replay took. */
+      ms: number;
+      /** A newer table (a new session was stored) is being computed; this one is still valid until then. */
+      updating: boolean;
+      /** Which F&O list decided membership (point-in-time or today's). */
+      universeNote: string;
+      /** The cost model behind the net R, and what one round trip costs. */
+      costs: { preset: CostPresetId; label: string; roundTripPct: number };
+      /** The BTST live record per overnight screen (null when it couldn't be read). */
+      live: Record<string, LiveScreenRecord> | null;
+    }
+  | { status: "error"; error: string };
+
+// ------------------------------------------------------------------ /api/trades (the trade journal)
+
+/** One trade you took from the plan. Long only for now. */
+export interface TradeDto {
+  id: string;
+  symbol: string;
+  screenId: string;
+  side: "long";
+  /** The plan when you took it. */
+  plannedEntry: number;
+  stop: number;
+  target: number | null;
+  /** See ExitRule in src/core/plan/instructions.ts ("next-open", "stop-target", "time", "trail-low:10"). */
+  exitRule: string;
+  holdSessions: number;
+  /** Your fill. */
+  entryPrice: number;
+  /** Epoch ms of the entry, and its IST session (day key). */
+  entryAt: number;
+  entryDay: number;
+  lots: number;
+  lotSize: number;
+  quantity: number;
+  status: "open" | "closed";
+  exitPrice: number | null;
+  exitAt: number | null;
+  exitReason: ExitReason | null;
+  /** What the plan would have exited at (for slippage). */
+  plannedExit: number | null;
+  notes: string | null;
+  createdAt: number;
+}
+
+export interface TradesResponse {
+  trades: TradeDto[];
+  /** Per open trade: session of the hold, R at the last stored close, today's action (the browser re-checks it on live prices). */
+  tracks: Record<string, TradeTrack>;
+  /** Closed trades only. */
+  journal: JournalSummary;
+}
+
+/** POST /api/trades: "I took it". */
+export interface TradeCreateRequest {
+  symbol: string;
+  screenId: string;
+  plannedEntry: number;
+  stop: number;
+  target: number | null;
+  exitRule: string;
+  holdSessions: number;
+  entryPrice: number;
+  /** Epoch ms; default now. */
+  entryAt?: number;
+  lots: number;
+  lotSize: number;
+  notes?: string | null;
+}
+
+/** PATCH /api/trades/:id: fix a fill, the size, the stop or the notes. */
+export type TradeUpdateRequest = Partial<Pick<TradeCreateRequest, "entryPrice" | "entryAt" | "lots" | "stop" | "target" | "notes">>;
+
+/** POST /api/trades/:id/close */
+export interface TradeCloseRequest {
+  exitPrice: number;
+  /** Epoch ms; default now. */
+  exitAt?: number;
+  reason: ExitReason;
+  notes?: string | null;
 }
 
 // ------------------------------------------------------------------ GET /api/backtest?universe
