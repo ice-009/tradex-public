@@ -26,9 +26,11 @@ import type { Signal, SignalScan } from "./signals";
 //      score among those), then each screen's second best, and so on.
 //
 // Entries never use information from after the signal: a signal on day i is
-// decided on day i's close and filled at the next session's open (default), or
-// at day i's close itself ("signal-close", as the screens are meant to be run
-// at 3:15–3:25 PM — slightly optimistic, since the real close isn't known yet).
+// decided on day i's close and filled at day i's close itself ("signal-close",
+// the default since the screens are meant to be run at 3:15–3:25 PM — slightly
+// optimistic, since the real close isn't known yet; research on five years of
+// F&O history found it beat the next open on the market-entry screens), or at
+// the next session's open ("next-open").
 // Overnight (BTST) screens always enter at the signal close: a next-open entry
 // with a next-open exit would hold nothing.
 // A plan whose entry is above the signal close is a buy-stop: it must trade
