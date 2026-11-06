@@ -4,8 +4,10 @@ import type { BacktestInfoResponse, BacktestRequest, BacktestResponse } from "@/
 import { COST_PRESETS, type CostModel, type CostPresetId } from "@/core/backtest/costs";
 import { BacktestInputError, runPortfolio, type BacktestResult } from "@/core/backtest/portfolio";
 import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/signals";
+import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { SCREENS } from "@/core/screener/screens";
 import { screenerStore } from "@/server/providers/dailyStore";
+import { foMembership } from "@/server/providers/foBhavStore";
 import { getLotSizes } from "@/server/providers/lotSizes";
 import { UNIVERSES, getUniverse } from "@/server/providers/universe";
 import { BENCHMARK, parseUniverse } from "./screener";
@@ -20,9 +22,14 @@ import { BENCHMARK, parseUniverse } from "./screener";
 //  - the signal scan per universe (the slow part: features for every stock on
 //    every session, ~5–10 s for ~240 stocks × 250 sessions);
 //  - finished results per request (the portfolio pass itself takes milliseconds).
+//
+// The F&O universe is point-in-time when the NSE F&O bhavcopy has been
+// imported (src/core/backtest/universe.ts): on a session it covers, only stocks
+// that had stock futures that day can signal; other sessions use today's list.
+// Every result says which list was used on how many sessions.
 
 /** Bump when the scan or simulation rules change, so a running server drops cached results. */
-const BACKTEST_VERSION = 3;
+const BACKTEST_VERSION = 4;
 const MAX_RESULTS = 24;
 
 const globalForBacktest = globalThis as unknown as {
@@ -34,13 +41,35 @@ const results = (globalForBacktest.backtestResults ??= new Map());
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+interface Membership {
+  byDay: Map<number, Set<string>>;
+  isMember: (symbol: string, date: number) => boolean;
+  /** Former members (not on today's list) with no stored daily bars: they can't be replayed. */
+  noHistory: string[];
+  /** Changes when more F&O days are imported, so the scan cache refreshes. */
+  key: string;
+}
+
 async function coveredSymbols(universe: string) {
   const id = parseUniverse(universe);
   const symbols = (await getUniverse(id)).map((member) => member.symbol);
+  // Point-in-time F&O membership from the imported bhavcopy (read from disk; never downloads).
+  const byDay = id === "fno" ? foMembership() : new Map<number, Set<string>>();
+  const pit = byDay.size ? pointInTimeUniverse({ byDay, today: symbols }) : null;
+  const wanted = pit ? pit.symbols : symbols;
   // Disk only: hasData reads what's stored and never starts a download.
-  await screenerStore.hasData([...symbols, BENCHMARK]);
-  const covered = symbols.filter((symbol) => screenerStore.getBars(symbol).length > 0);
-  return { id, symbols, covered };
+  await screenerStore.hasData([...wanted, BENCHMARK]);
+  const hasBars = (symbol: string) => screenerStore.getBars(symbol).length > 0;
+  const today = new Set(symbols);
+  const membership: Membership | null = pit
+    ? {
+        byDay,
+        isMember: pit.isMember,
+        noHistory: pit.symbols.filter((symbol) => !today.has(symbol) && !hasBars(symbol)),
+        key: `pit${byDay.size}-${Math.max(...byDay.keys())}`,
+      }
+    : null;
+  return { id, symbols, covered: symbols.filter(hasBars), scanned: wanted.filter(hasBars), membership };
 }
 
 export async function backtestInfo(universe: string): Promise<BacktestInfoResponse> {
@@ -89,21 +118,22 @@ export function parseBacktestRequest(body: unknown): BacktestRequest {
   };
 }
 
-async function scanFor(universe: string): Promise<{ scan: SignalScan; key: string; cached: boolean; ms: number }> {
-  const { id, covered } = await coveredSymbols(universe);
+async function scanFor(universe: string): Promise<{ scan: SignalScan; key: string; cached: boolean; ms: number; membership: Membership | null }> {
+  const { id, covered, scanned, membership } = await coveredSymbols(universe);
   if (!covered.length) throw new BacktestError("No daily history is stored for this universe yet. Open the screener once a broker is connected to sync it.");
-  const lastSession = Math.max(...covered.map((symbol) => screenerStore.getBars(symbol).at(-1)?.t ?? 0));
-  const key = `${id}:${lastSession}:${covered.length}:${BACKTEST_VERSION}`;
+  const lastSession = Math.max(...scanned.map((symbol) => screenerStore.getBars(symbol).at(-1)?.t ?? 0));
+  const key = `${id}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
   let pending = scans.get(key);
   const cached = Boolean(pending);
   const started = Date.now();
   if (!pending) {
     // Concurrent requests share one scan; older scans of this universe are dropped.
     pending = scanSignals({
-      symbols: covered,
+      symbols: scanned,
       getBars: (symbol) => screenerStore.getBars(symbol),
       benchmark: screenerStore.getBars(BENCHMARK),
       pause: yieldToEventLoop,
+      isMember: membership?.isMember,
     });
     for (const stale of [...scans.keys()].filter((entry) => entry.startsWith(`${id}:`))) scans.delete(stale);
     scans.set(key, pending);
@@ -112,7 +142,7 @@ async function scanFor(universe: string): Promise<{ scan: SignalScan; key: strin
   const scan = await pending;
   const ms = Date.now() - started;
   if (!cached) console.info(`Backtest scan for ${id}: ${scan.symbols} stocks × ${scan.dates.length} sessions, ${scan.signals} signals in ${ms} ms`);
-  return { scan, key, cached, ms };
+  return { scan, key, cached, ms, membership };
 }
 
 class BacktestError extends Error {}
@@ -120,7 +150,7 @@ class BacktestError extends Error {}
 export async function runBacktest(request: BacktestRequest): Promise<BacktestResponse> {
   if (!request.screenIds.length) return { status: "error", error: "Pick at least one strategy." };
   try {
-    const { scan, key: scanKey, cached: scanCached, ms: scanMs } = await scanFor(request.universe);
+    const { scan, key: scanKey, cached: scanCached, ms: scanMs, membership } = await scanFor(request.universe);
     const preset = COST_PRESETS[request.costPreset].model;
     const costs: CostModel = request.slippage ? { ...preset, slippage: request.slippage } : preset;
 
@@ -152,6 +182,11 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestRes
       oosFraction: request.oosFraction,
     });
     if (lotNote) result.warnings.unshift(lotNote);
+    if (request.universe === "fno") {
+      const { from, to } = result.period;
+      const sessions = scan.dates.filter((day) => day >= from && day <= to);
+      result.warnings.push(universeNote({ sessions, byDay: membership?.byDay ?? new Map(), noHistory: membership?.noHistory ?? [] }));
+    }
     const simMs = Date.now() - started;
     results.set(key, result);
     while (results.size > MAX_RESULTS) results.delete(results.keys().next().value!);

@@ -7,6 +7,7 @@ import { buildFeatureSets, marketOverview, runScreens } from "@/core/screener/ru
 import { emptyFresh, freshKey, updateFresh, type FreshState } from "@/core/screener/fresh";
 import { marketRegime } from "@/core/screener/regime";
 import { getFnoBan } from "@/server/providers/fnoBan";
+import { ensureFoRecent, latestOiFacts } from "@/server/services/foBhavSync";
 import { updateBtstRecord } from "@/server/services/btstRecord";
 import type { ScreenerRow } from "@/core/screener/screens";
 import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
@@ -80,8 +81,19 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
   const sectorPct = new Map(sectorsByReturn.map((sector, index) => [sector.sector, sectorsByReturn.length > 1 ? index / (sectorsByReturn.length - 1) : 0.5]));
   const ban = await getFnoBan();
   const banned = new Set(ban.available ? ban.symbols : []);
+  // Futures OI from the NSE F&O bhavcopy (free; the evening update is started here like the cash bhavcopy sync).
+  // Shown next to the setup, never scored: OI buildup showed no edge on its own in testing.
+  let oi: ReturnType<typeof latestOiFacts> = null;
+  try {
+    ensureFoRecent();
+    oi = latestOiFacts();
+  } catch (error) {
+    console.warn("F&O bhavcopy facts unavailable:", (error as Error).message);
+  }
   for (const rows of Object.values(results)) {
     for (const row of rows) {
+      const fact = oi?.bySymbol.get(row.symbol);
+      if (fact) row.oi = fact;
       if (row.facts) {
         row.facts.sectorPct = sectorPct.get(row.industry || "Other") ?? null;
         row.facts.inBan = banned.has(row.symbol);

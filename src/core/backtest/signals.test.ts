@@ -56,4 +56,16 @@ describe("signal scan", () => {
       expect(signal.entry).toBeGreaterThan(signal.stop);
     }
   });
+
+  it("gives no signal to a stock on sessions it wasn't in the universe", async () => {
+    const all = await scanSignals({ symbols, getBars: (s) => data.get(s)!, benchmark });
+    const cutoff = T0 + 110 * DAY;
+    // S0–S5 join the universe only after the cutoff (point-in-time membership).
+    const isMember = (symbol: string, date: number) => Number(symbol.slice(1)) >= 6 || date > cutoff;
+    const pit = await scanSignals({ symbols, getBars: (s) => data.get(s)!, benchmark, isMember });
+    const signals = [...pit.byDate.values()].flat();
+    expect(signals.some((s) => Number(s.symbol.slice(1)) < 6 && s.date <= cutoff)).toBe(false);
+    expect(signals.some((s) => Number(s.symbol.slice(1)) < 6 && s.date > cutoff)).toBe(true);
+    expect(pit.signals).toBeLessThan(all.signals);
+  });
 });

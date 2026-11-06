@@ -150,6 +150,21 @@ How the app keeps its calls down:
   - the screener's daily store extends itself from the database with `history({ offline: true })`, which reads the database only and never calls the API, so backtests get the full 5 years.
 - **Live socket:** charts get the 100 symbols first, then alerts, then watchlist rows in list order. Symbols that don't fit fall back to the quote refresh.
 
+## NSE F&O bhavcopy (stock-futures OI, point-in-time F&O list)
+
+NSE's daily F&O bhavcopy (UDiFF `BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip`) is imported into the market database from NSE's free public archive. It costs **no broker API calls**.
+
+| Piece | Job |
+|---|---|
+| `src/core/parsers/foBhavcopy.ts` | Parse a day's CSV (stock futures, `STF`, only) and aggregate per underlying: near and next month close / settlement / volume (contracts) / OI / change in OI, and OI **combined** across listed months with its change = sum of each month's change (so an expiry roll-off isn't read as unwinding). Renamed tickers are filed under the new name (`LTIM→LTM`, `ICICIPRULI→ICICILIFE`, `TATAMOTORS→TMPV`). Also which days to ask for. |
+| `src/core/market/openInterest.ts` | Buildup class (sign of the near-month future's change × sign of the combined OI change), OI change %, the screener's tag and tooltip. |
+| `src/core/backtest/universe.ts` | Point-in-time F&O membership for backtests and the note saying which list was used. |
+| `src/server/providers/foBhavcopy.ts`, `unzip.ts` | Download (≤ 1 request per 1.1 s, back-off on 403/429/5xx/timeouts), unzip with Node's zlib, and reject a file whose trade date isn't the date asked for (NSE has served another day's file for holidays). |
+| `src/server/providers/foBhavStore.ts` | Tables `fo_bhav_days` (each day checked: ok / holiday / mismatch — makes the backfill resumable) and `fo_futures` (one row per day + underlying). Membership on a day = underlyings with a row. |
+| `src/server/services/foBhavSync.ts` | The backfill (last year, newest first, ~5 minutes; stops after three days in a row fail) started from **Market data → F&O bhavcopy (NSE, free)**, and the evening update `ensureFoRecent()`, which every screener run calls (at most every 30 minutes; today's file is asked for after 18:00 IST). |
+
+The screener shows each F&O stock's buildup and combined OI change (e.g. "Long buildup · OI +6%") next to the setup. It is **information only and never scored**: over Oct 2025 – Nov 2026 neither the buildup classes nor the futures basis showed a tradeable edge after costs.
+
 ## Backtesting (`src/core/backtest`)
 
 The **Backtest** tab in the bottom dock replays the screens over the stored daily history and trades their signals as one account. It answers "what would this set of screens have done with my sizing, my position limit and real costs", with enough detail to judge whether the result can be trusted.
@@ -223,7 +238,7 @@ Further warnings flag one trade making most of the profit, most signals being sk
 
 ### Known limitations
 
-- **Survivorship bias.** The universe is today's list (today's F&O stocks, today's Nifty 200). Stocks that were dropped, delisted or merged during the period are missing, and stocks added after strong runs are included. That flatters results.
+- **Survivorship bias.** The Nifty universes are today's lists. Stocks that were dropped, delisted or merged during the period are missing, and stocks added after strong runs are included. That flatters results. The **F&O universe is point-in-time** where the NSE F&O bhavcopy has been imported (see below): on those sessions only stocks that had stock futures that day can signal; other sessions use today's list, and every result says how many sessions used which. Former members without stored daily bars still can't be replayed (the note names them). In testing this moved a BTST backtest by only ~0.015 pp a day, so it is a correctness fix, not an edge.
 - **Cash prices stand in for futures.** The futures basis (usually a small premium that decays to expiry) is ignored, as are rollover costs and slippage at monthly expiry. Positions held over an expiry would really be rolled: two more orders and a calendar spread.
 - **Daily bars only.** Inside a session the order of high and low is unknown; that's why a bar touching both stop and target counts as the stop. Intraday entries and trailing stops can't be modelled.
 - **About one year of history.** Roughly 250 sessions are stored. Most screens need 60–250 sessions of warm-up, so a backtest often covers only the last few months: one market phase. The panel shows the sessions, signals and trades behind every result.

@@ -8,6 +8,7 @@ import type { DataSource } from "@/server/data/types";
 import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
 import { asPriority, budgetFor, fyersPlan } from "@/server/providers/fyers/budget";
 import { getUniverse } from "@/server/providers/universe";
+import { foBhavStatus } from "@/server/services/foBhavSync";
 
 // "Download F&O history": fills the local market-data database with 5 years of
 // daily and 1 year of 15-minute candles for every F&O stock plus the main
@@ -78,6 +79,7 @@ export async function historyDbStatus(): Promise<HistoryDbStatus> {
     db: dbStats(),
     backgroundCallsLeft: source ? budgetFor("background").remainingToday : null,
     brokerConnected: !unavailable,
+    fo: foBhavStatus(now),
   };
 }
 

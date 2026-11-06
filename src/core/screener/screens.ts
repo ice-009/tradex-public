@@ -1,6 +1,7 @@
 import { roundToTick } from "@/core/market/ticks";
 import { FAR_ATR } from "@/core/screener/planStatus";
 import type { Features } from "@/core/screener/features";
+import type { OiFact } from "@/core/market/openInterest";
 import type { StockFacts } from "@/core/screener/score";
 
 // Screen definitions for BTST, swing (3–10 sessions) and positional
@@ -50,6 +51,11 @@ export interface ScreenerRow {
   facts?: StockFacts;
   /** When this setup first matched today (epoch ms), from the screener's live re-runs. */
   firstSeenAt?: number;
+  /**
+   * Stock-futures OI on the newest stored NSE F&O bhavcopy day (F&O stocks only).
+   * Information only: it showed no tested edge on its own and is not a score input.
+   */
+  oi?: OiFact;
 }
 
 /** One stock in the market overview (movers / sectors), whether or not it matched a screen. */
