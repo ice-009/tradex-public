@@ -22,7 +22,7 @@ import { BENCHMARK, parseUniverse } from "./screener";
 //  - finished results per request (the portfolio pass itself takes milliseconds).
 
 /** Bump when the scan or simulation rules change, so a running server drops cached results. */
-const BACKTEST_VERSION = 2;
+const BACKTEST_VERSION = 3;
 const MAX_RESULTS = 24;
 
 const globalForBacktest = globalThis as unknown as {

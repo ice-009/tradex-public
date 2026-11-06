@@ -106,6 +106,13 @@ export interface ScreenDef {
   sources: Source[];
   /** Mean-reversion setup that buys weakness on purpose (a red day is the signal, not a warning). */
   buysWeakness?: boolean;
+  /**
+   * "next-open": an overnight trade — bought at the signal close (the screen is run at
+   * 3:15–3:25 PM) and sold at the next session's open, whatever the backtest's entry
+   * setting. Holding on through that session gave the overnight move back: across the
+   * F&O list, close → open averaged +0.08% a night and open → close −0.07% a session.
+   */
+  exit?: "next-open";
 }
 
 export const SCREEN_GROUPS: Array<{ id: ScreenGroup; label: string; horizon: string; note: string }> = [
@@ -211,6 +218,8 @@ export function chartPlan(f: Features): TradePlan {
   return rPlan(f.close, stop, atResistance ? (f.resistance - f.close) / risk : 2, atResistance ? "Stop under support / the 10-day low; target at the next resistance." : "Stop under support / the 10-day low (max 3 ATR, 8%); target 2R.");
 }
 
+const BTST_EXIT = "Buy near the close (3:15–3:25 PM); sell at the next session's open. Stop = day's low (max 1 ATR) sizes the position; a gap below it is the loss.";
+
 export const SCREENS: ScreenDef[] = [
   // ------------------------------------------------------------------ BTST
   {
@@ -230,8 +239,8 @@ export const SCREENS: ScreenDef[] = [
       liquid(10),
     ],
     score: (f) => f.clv * 40 + capped(f.volRatio20, 5) * 10 + capped(f.changePct, 8) * 3,
-    plan: (f) =>
-      rPlan(f.close, Math.max(f.low, f.close - f.atr14), 1.5, "Next session: book at target, else exit by the close. Stop = day's low (max 1 ATR)."),
+    plan: (f) => rPlan(f.close, Math.max(f.low, f.close - f.atr14), null, BTST_EXIT),
+    exit: "next-open",
     tags: (f) => [`CLV ${f.clv.toFixed(2)}`, `Vol ${f.volRatio20.toFixed(1)}×`],
     sources: [S.zerodhaBtst, S.lps, S.nseClose, S.varsityFinale],
   },
@@ -252,7 +261,8 @@ export const SCREENS: ScreenDef[] = [
       liquid(10),
     ],
     score: (f) => f.clv * 30 + capped(f.volRatio20, 5) * 10 + capped((f.close / f.high20Prev - 1) * 100, 5) * 4,
-    plan: (f) => rPlan(f.close, Math.max(f.low, f.close - f.atr14), 1.5, "Next session: book at target, else exit by the close. Stop = day's low (max 1 ATR)."),
+    plan: (f) => rPlan(f.close, Math.max(f.low, f.close - f.atr14), null, BTST_EXIT),
+    exit: "next-open",
     tags: (f) => [`+${((f.close / f.high20Prev - 1) * 100).toFixed(1)}% over 20D high`, `Vol ${f.volRatio20.toFixed(1)}×`],
     sources: [S.turtle, S.georgeHwang, S.zerodhaBtst, S.nseClose],
   },

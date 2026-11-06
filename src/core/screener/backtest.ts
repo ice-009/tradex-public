@@ -66,11 +66,28 @@ export function simulatePlan(
   signalIndex: number,
   plan: { entry: number; stop: number; target: number | null },
   holdBars: number,
+  exit?: ScreenDef["exit"],
 ): { kind: "target" | "stop" | "open"; r: number } | null {
   const risk = plan.entry - plan.stop;
   if (!(risk > 0)) return null;
   const { stop, target } = plan;
   let entry = plan.entry;
+
+  // Overnight trade: bought at the signal close, sold at the open `holdBars` sessions later.
+  // Stop and target only count if a session's open has already gone through them.
+  if (exit === "next-open") {
+    const R = (price: number) => (price - entry) / risk;
+    const last = Math.min(bars.length - 1, signalIndex + holdBars);
+    for (let i = signalIndex + 1; i < last; i += 1) {
+      const bar = bars[i];
+      if (bar.l <= stop) return { kind: "stop", r: R(Math.min(stop, bar.o)) };
+      if (target !== null && bar.h >= target) return { kind: "target", r: R(Math.max(target, bar.o)) };
+    }
+    const open = bars[last].o;
+    if (open <= stop) return { kind: "stop", r: R(open) };
+    if (target !== null && open >= target) return { kind: "target", r: R(open) };
+    return { kind: "open", r: R(open) };
+  }
   let fillBar = -1; // bar on which a buy-stop entry filled (no gap logic on that bar)
 
   // An entry above the signal close is a buy-stop for the next session.
@@ -171,7 +188,7 @@ export async function runTrackRecord(
         if (screen.basis === "eod" && bars[i].dp === undefined) continue;
         if (!screen.rules.every((rule) => rule.test(f, ctx))) continue;
         const plan = screen.plan(f);
-        const result = simulatePlan(bars, i, plan, hold);
+        const result = simulatePlan(bars, i, plan, hold, screen.exit);
         if (!result) continue;
         if (planR[screen.id] === undefined) planR[screen.id] = planMultiple(screen, f);
         add(screens[screen.id], result.kind, result.r);
