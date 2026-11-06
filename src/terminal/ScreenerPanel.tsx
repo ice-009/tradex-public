@@ -15,7 +15,9 @@ import { Icons } from "./icons";
 import { PriceCells, useVisibleLiveTick } from "./LivePrice";
 import { isBuyStop, planStatus } from "@/core/screener/planStatus";
 import { isNewSetup } from "@/core/screener/fresh";
-import type { ScreenerResponse } from "@/contracts/api";
+import { BTST_WINDOW, mutedReason } from "@/core/screener/btstAlerts";
+import { requestAlertPermission } from "./Alerts";
+import type { ScreenerResponse, TrackResult } from "@/contracts/api";
 
 const UNIVERSES = [
   { id: "nifty50", label: "Nifty 50" },
@@ -337,6 +339,18 @@ export function ScreenerPanel() {
           </button>
           <button
             type="button"
+            className={`tx-scr-chip ${prefs.btstAlerts ? "is-active" : ""}`}
+            title={btstAlertsTitle(track)}
+            onClick={() => {
+              if (!prefs.btstAlerts) requestAlertPermission();
+              updateScreener({ btstAlerts: !prefs.btstAlerts });
+            }}
+          >
+            <Icons.bell size={13} />
+            BTST alerts
+          </button>
+          <button
+            type="button"
             className={`tx-scr-chip ${prefs.watchlistOnly ? "is-active" : ""}`}
             onClick={() => updateScreener({ watchlistOnly: !prefs.watchlistOnly })}
             title="Only stocks you've shortlisted (your watchlist)"
@@ -468,6 +482,21 @@ function shortStatus(status: Exclude<ReturnType<typeof planStatus>, { kind: "ok"
     case "moved":
       return `${status.pct >= 0 ? "+" : ""}${status.pct.toFixed(1)}%`;
   }
+}
+
+const clock = (minutes: number) => `${Math.floor(minutes / 60) - 12}:${String(minutes % 60).padStart(2, "0")}`;
+
+/** What the BTST alerts toggle will do, screen by screen. */
+function btstAlertsTitle(track: TrackResult | null) {
+  const records = track && "screens" in track ? track.screens : undefined;
+  return [
+    `Flash live BTST setups from ${clock(BTST_WINDOW.from)} to ${clock(BTST_WINDOW.to)} PM (toast, tone, notification), once per setup per day.`,
+    "Bought near the close, sold at the next open. Banned stocks never flash.",
+    ...SCREENS.filter((screen) => screen.exit === "next-open").map((screen) => {
+      const muted = mutedReason(records?.[screen.id]);
+      return `• ${screen.name}: ${muted ? `muted — ${muted}` : "flashes"}`;
+    }),
+  ].join("\n");
 }
 
 /** NEW badge for a setup that appeared in the last 30 minutes (not one that was there at the open); the time is in the tooltip. */

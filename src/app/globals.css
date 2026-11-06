@@ -1437,6 +1437,7 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 }
 .tx-alert-toast.is-above { box-shadow: var(--shadow-2), inset 3px 0 0 var(--pos); }
 .tx-alert-toast.is-below { box-shadow: var(--shadow-2), inset 3px 0 0 var(--neg); }
+.tx-alert-toast.is-setup { box-shadow: var(--shadow-2), inset 3px 0 0 var(--accent); }
 .tx-alert-toast > svg { flex-shrink: 0; margin-top: 2px; color: var(--warn); }
 .tx-alert-toast-body { display: flex; flex: 1; flex-direction: column; gap: 2px; padding: 0; border: 0; background: none; color: var(--text); font: var(--fw-medium) var(--fs-md) var(--font-ui); text-align: left; cursor: pointer; }
 .tx-alert-toast-body span { color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-regular); }

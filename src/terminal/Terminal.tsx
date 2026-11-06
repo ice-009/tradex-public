@@ -13,6 +13,7 @@ import { TopBar } from "./TopBar";
 import { ScreenerPanel } from "./ScreenerPanel";
 import { ComparePanel } from "./ComparePanel";
 import { AlertWatcher } from "./Alerts";
+import { BtstAlertWatcher } from "./ScreenerAlerts";
 import { HighLowPanel } from "./HighLowPanel";
 import { BacktestPanel } from "./BacktestPanel";
 import { useHighLowPolling } from "@/client/highLowFeed";
@@ -182,6 +183,7 @@ function Workspace() {
       {layoutDialog && <LayoutNameDialog dialog={layoutDialog} onClose={() => setLayoutDialog(null)} />}
       <LayoutToast />
       <AlertWatcher />
+      <BtstAlertWatcher />
     </TerminalUIContext.Provider>
   );
 }

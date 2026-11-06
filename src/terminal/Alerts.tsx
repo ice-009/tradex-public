@@ -66,11 +66,14 @@ export function requestAlertPermission() {
   }
 }
 
-// Toast queue (module-level so the watcher can push without React plumbing).
+// Toast queue (module-level so the watchers can push without React plumbing).
 interface Toast {
   id: string;
-  alert: PriceAlert;
-  price: number;
+  symbol: string;
+  title: string;
+  detail: string;
+  /** Accent: a price crossing up or down, or a screener setup. */
+  tone: "above" | "below" | "setup";
 }
 let toasts: Toast[] = [];
 const toastListeners = new Set<() => void>();
@@ -83,20 +86,31 @@ const dismissToast = (id: string) => {
   toastListeners.forEach((listener) => listener());
 };
 
-function fire(alert: PriceAlert, price: number) {
-  triggerAlert(alert.id, price);
-  pushToast({ id: `${alert.id}-${Date.now()}`, alert, price });
+/** Toast + tone + (where allowed) a system notification. `tag` collapses repeats of one notification. */
+export function notifyUser(message: Omit<Toast, "id"> & { notification: string; tag: string }) {
+  const { notification, tag, ...toast } = message;
+  pushToast({ id: `${tag}-${Date.now()}`, ...toast });
   chime();
   try {
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      new Notification(`${alert.symbol} ${alert.direction === "above" ? "↑" : "↓"} ${formatPrice(alert.price)}`, {
-        body: `${alert.label} — now ${formatPrice(price)}`,
-        tag: alert.id,
-      });
+      new Notification(notification, { body: toast.detail, tag });
     }
   } catch {
     // notifications unavailable
   }
+}
+
+function fire(alert: PriceAlert, price: number) {
+  triggerAlert(alert.id, price);
+  const up = alert.direction === "above";
+  notifyUser({
+    symbol: alert.symbol,
+    title: `${alert.symbol} ${up ? "crossed above" : "fell below"} ${formatPrice(alert.price)}`,
+    detail: `${alert.label} · now ${formatPrice(price)}`,
+    tone: alert.direction,
+    notification: `${alert.symbol} ${up ? "↑" : "↓"} ${formatPrice(alert.price)}`,
+    tag: alert.id,
+  });
 }
 
 /** Check one quote against every armed alert for its symbol. */
@@ -153,22 +167,18 @@ function AlertToasts() {
   return (
     <div className="tx-alert-toasts" role="status" aria-live="assertive">
       {list.map((toast) => (
-        <div key={toast.id} className={`tx-alert-toast is-${toast.alert.direction}`}>
+        <div key={toast.id} className={`tx-alert-toast is-${toast.tone}`}>
           <Icons.bell size={16} />
           <button
             type="button"
             className="tx-alert-toast-body"
             onClick={() => {
-              updateActiveCell({ symbol: toast.alert.symbol });
+              updateActiveCell({ symbol: toast.symbol });
               dismissToast(toast.id);
             }}
           >
-            <strong>
-              {toast.alert.symbol} {toast.alert.direction === "above" ? "crossed above" : "fell below"} {formatPrice(toast.alert.price)}
-            </strong>
-            <span>
-              {toast.alert.label} · now {formatPrice(toast.price)}
-            </span>
+            <strong>{toast.title}</strong>
+            <span>{toast.detail}</span>
           </button>
           <button type="button" className="tx-icon-btn" aria-label="Dismiss" onClick={() => dismissToast(toast.id)}>
             <Icons.x size={14} />
