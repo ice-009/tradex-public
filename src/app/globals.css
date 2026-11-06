@@ -309,6 +309,7 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
   white-space: nowrap;
 }
 .tx-tag-index { background: var(--accent-soft); color: var(--accent-text); }
+.tx-tag-oi { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted, var(--text-subtle)); cursor: help; }
 .tx-eod-tag { margin-right: 2px; background: transparent; color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn-border); }
 
 /* Count pill used in tabs, menus and the dock */
@@ -2187,6 +2188,8 @@ button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 .tx-mdata-facts dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
 .tx-mdata-progress { display: flex; align-items: center; gap: var(--sp-2, 8px); font-variant-numeric: tabular-nums; color: var(--text-muted, var(--text-subtle)); }
 .tx-mdata-actions { display: flex; align-items: center; gap: var(--sp-3, 12px); flex-wrap: wrap; }
+.tx-mdata-fo { display: flex; flex-direction: column; gap: var(--sp-2, 8px); padding-top: var(--sp-3, 12px); border-top: 1px solid var(--border, var(--surface-3)); }
+.tx-mdata-row.is-static { cursor: default; }
 @media (max-width: 640px) { .tx-mdata-facts { grid-template-columns: 1fr; } .tx-mdata-row { grid-template-columns: auto 1fr auto; } .tx-mdata-row .tx-mdata-bar { display: none; } }
 
 /* ---------- Screener: fresh setups (src/core/screener/fresh.ts) ---------- */

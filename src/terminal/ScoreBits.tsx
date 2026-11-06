@@ -1,6 +1,23 @@
 "use client";
 
+import { MONTHS } from "@/core/format";
+import { oiTag, oiTooltip, type OiFact } from "@/core/market/openInterest";
 import { grade, type SetupScore } from "@/core/screener/score";
+
+/**
+ * Futures OI buildup from the NSE F&O bhavcopy, e.g. "Long buildup · OI +6%".
+ * Deliberately neutral (no green/red): it's information, not a signal — it
+ * showed no tested edge on its own and isn't part of the score.
+ */
+export function OiChip({ fact }: { fact: OiFact }) {
+  const date = new Date(fact.day);
+  const label = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`;
+  return (
+    <span className="tx-tag tx-tag-oi" title={oiTooltip(fact, label)}>
+      {oiTag(fact)}
+    </span>
+  );
+}
 
 /** "A 78" chip; the tooltip lists the points. */
 export function ScoreChip({ score, size = "sm" }: { score: SetupScore | null; size?: "sm" | "lg" }) {

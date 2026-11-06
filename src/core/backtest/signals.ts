@@ -60,13 +60,18 @@ export interface ScanInput {
   screens?: ScreenDef[];
   /** Called between sessions — the service passes a setImmediate so a long scan doesn't block the server. */
   pause?: () => Promise<void>;
+  /**
+   * Whether a stock was in the universe on a session (point-in-time F&O membership, src/core/backtest/universe.ts).
+   * Non-members get no signal and aren't ranked for relative strength that day. Default: always.
+   */
+  isMember?: (symbol: string, date: number) => boolean;
 }
 
 export function seriesOf(bars: DailyBar[]): Series {
   return { bars, index: new Map(bars.map((bar, i) => [bar.t, i])) };
 }
 
-export async function scanSignals({ symbols, getBars, benchmark, screens = SCREENS, pause }: ScanInput): Promise<SignalScan> {
+export async function scanSignals({ symbols, getBars, benchmark, screens = SCREENS, pause, isMember }: ScanInput): Promise<SignalScan> {
   const series = new Map<string, Series>();
   for (const symbol of symbols) {
     const bars = getBars(symbol);
@@ -87,6 +92,7 @@ export async function scanSignals({ symbols, getBars, benchmark, screens = SCREE
     for (const [symbol, entry] of series) {
       const i = entry.index.get(date);
       if (i === undefined || i < WARMUP_SESSIONS - 1) continue;
+      if (isMember && !isMember(symbol, date)) continue;
       // Only bars up to and including this session: the screen can't see the future.
       day.push(computeFeatures(symbol, entry.bars.slice(Math.max(0, i - FEATURE_WINDOW + 1), i + 1), false));
       where.set(symbol, { bars: entry.bars, i });

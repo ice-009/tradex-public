@@ -357,6 +357,36 @@ export interface HistoryDbStatus {
   /** Broker calls background work may still make today (Fyers budget). */
   backgroundCallsLeft: number | null;
   brokerConnected: boolean;
+  /** The NSE F&O bhavcopy import (free: NSE's public archive, no broker calls). */
+  fo: FoBhavStatus;
 }
 
-export type HistoryDbAction = { action: "start"; kinds: HistoryKind[] } | { action: "stop" };
+/** Stock-futures OI and point-in-time F&O membership from NSE's daily F&O bhavcopy. */
+export interface FoBhavStatus {
+  job: {
+    state: "idle" | "running" | "paused" | "done" | "error";
+    /** Days checked / to check in this run. */
+    done: number;
+    total: number;
+    /** Days that failed in this run (NSE refused or timed out). */
+    failed: number;
+    current: string | null;
+    message: string;
+    startedAt: number | null;
+    finishedAt: number | null;
+  };
+  coverage: {
+    /** How far back the backfill goes. */
+    lookbackDays: number;
+    /** Weekdays in that window NSE could have published so far, and how many were checked (trading days + holidays). */
+    expected: number;
+    checked: number;
+    /** Trade days stored, their range, and the underlying-day rows. */
+    days: number;
+    first: number | null;
+    last: number | null;
+    rows: number;
+  };
+}
+
+export type HistoryDbAction = { action: "start"; kinds: HistoryKind[] } | { action: "stop" } | { action: "start-fo" } | { action: "stop-fo" };

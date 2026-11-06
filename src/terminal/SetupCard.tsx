@@ -9,7 +9,7 @@ import { HOLD_BARS, verdictFor } from "@/core/screener/backtest";
 import { GROUP_LABEL, focusSetup, focusedHit, resultsNote, scoreHit, useIdea, useScreenerFeed, type SetupHit } from "@/client/screenerFeed";
 import { lotsForRisk } from "@/core/market/futures";
 import { useLotSize } from "@/client/lotsFeed";
-import { ScoreBreakdown, ScoreChip } from "./ScoreBits";
+import { OiChip, ScoreBreakdown, ScoreChip } from "./ScoreBits";
 import { OrderTicket } from "./OrderTicket";
 import { addPlanAlerts } from "./Alerts";
 import { getState, toggleShortlist, useTerminal } from "./store";
@@ -167,6 +167,11 @@ export function SetupCard({ symbol }: { symbol: string }) {
       {score?.resistanceInWay && (
         <p className="tx-setup-note is-warn">
           Resistance at {formatPrice(score.resistanceInWay)} sits before the target — consider booking part there (R:R to it {score.effectiveRR?.toFixed(1)}R).
+        </p>
+      )}
+      {hit.row.oi && (
+        <p className="tx-setup-note">
+          Futures <OiChip fact={hit.row.oi} /> <span className="tx-dim">— information only, not scored (no tested edge on its own).</span>
         </p>
       )}
       {facts?.pattern && (
