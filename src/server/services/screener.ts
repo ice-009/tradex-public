@@ -7,6 +7,7 @@ import { buildFeatureSets, marketOverview, runScreens } from "@/core/screener/ru
 import { emptyFresh, freshKey, updateFresh, type FreshState } from "@/core/screener/fresh";
 import { marketRegime } from "@/core/screener/regime";
 import { getFnoBan } from "@/server/providers/fnoBan";
+import { updateBtstRecord } from "@/server/services/btstRecord";
 import type { ScreenerRow } from "@/core/screener/screens";
 import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
 import type { DailyBar } from "@/core/types";
@@ -89,6 +90,8 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
     }
   }
   const now = Date.now();
+  // BTST live record: matches seen 3:10–3:25 PM, settled at the next open (no extra API calls).
+  if (useLive) updateBtstRecord({ results, live, banned, now });
   const { minutes, weekday } = istParts(now);
   const marketHours = weekday !== 0 && weekday !== 6 && minutes >= SESSION_OPEN_MIN + 2 && minutes <= SESSION_CLOSE_MIN;
 

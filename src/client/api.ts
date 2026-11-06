@@ -15,6 +15,7 @@ import type {
   BacktestResponse,
   ChartResponse,
   HighLowResponse,
+  LiveRecordResponse,
   LotsResponse,
   PresetList,
   PresetsResponse,
@@ -86,6 +87,9 @@ export const api = {
   screener: (universe: string) => getStatusJson<ScreenerResponse>("/api/screener", { universe }),
 
   track: (universe: string) => getStatusJson<TrackResult>("/api/screener/track", { universe }),
+
+  /** What the BTST setups did live (recorded at 3:10–3:25 PM, settled at the next open). */
+  liveRecord: () => getJson<LiveRecordResponse>("/api/screener/live-record"),
 
   /** Stored history a backtest can use for a universe. */
   backtestInfo: (universe: string, signal?: AbortSignal) => getJson<BacktestInfoResponse>("/api/backtest", { universe }, signal),

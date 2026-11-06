@@ -12,6 +12,7 @@ import type { BudgetSnapshot } from "@/core/ratelimit/budget";
 import type { ResultsEvent } from "@/core/parsers/resultsCalendar";
 import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
+import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
 import type { MarketRegime } from "@/core/screener/regime";
@@ -166,6 +167,20 @@ export type TrackResponse = { status: "ready"; error?: undefined; universe: stri
 export type TrackErrorResponse = { status: "error"; error: string; universe?: string };
 /** Either a replay or an error; the replay fields are optional so callers can read them uniformly. */
 export type TrackResult = TrackResponse | (TrackErrorResponse & Partial<TrackReplay>);
+
+// ------------------------------------------------------------------ GET /api/screener/live-record
+
+/** What the BTST setups did live, recorded at 3:10–3:25 PM and settled at the next open — no hindsight. */
+export interface LiveRecordResponse {
+  /** Per overnight (BTST) screen. */
+  screens: Record<string, LiveScreenRecord>;
+  /** Latest settled trades, newest first (up to 30). */
+  recent: LiveTrade[];
+  /** Trade days the recorder has watched the window. */
+  days: number;
+  /** The cost model behind the net returns. */
+  costs: { preset: CostPresetId; label: string };
+}
 
 // ------------------------------------------------------------------ GET /api/backtest?universe
 

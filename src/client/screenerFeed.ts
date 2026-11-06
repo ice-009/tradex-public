@@ -7,7 +7,7 @@ import {
   type ScreenGroup,
   type ScreenerRow,
 } from "@/core/screener/screens";
-import type { ResultsEvent, ScreenerResponse, TrackResult as TrackResponse } from "@/contracts/api";
+import type { LiveRecordResponse, ResultsEvent, ScreenerResponse, TrackResult as TrackResponse } from "@/contracts/api";
 import { api } from "@/client/api";
 import { HOLD_BARS } from "@/core/screener/backtest";
 import { scoreSetup, type SetupScore, type StockFacts } from "@/core/screener/score";
@@ -114,6 +114,8 @@ export interface ScreenerFeed {
   focus: Record<string, string>;
   /** Historical replay of every screen (null until loaded). */
   track: TrackResponse | null;
+  /** BTST live record, separate from the replay (null until loaded). */
+  liveRecord: LiveRecordResponse | null;
   /** NSE results calendar (best-effort; `available` false when NSE couldn't be reached). */
   results: ResultsFeed | null;
 }
@@ -127,10 +129,25 @@ export interface ResultsFeed {
   bySymbol: Map<string, ResultsEvent>;
 }
 
-let feed: ScreenerFeed = { universe: "", data: null, loading: false, ideas: new Map(), order: [], focus: {}, track: null, results: null };
+let feed: ScreenerFeed = { universe: "", data: null, loading: false, ideas: new Map(), order: [], focus: {}, track: null, liveRecord: null, results: null };
 
 const RESULTS_REFRESH_MS = 60 * 60 * 1000;
 let resultsLoadedAt = 0;
+
+/** The live record only changes in the 3:10–3:25 PM window and when a next open settles it. */
+const LIVE_RECORD_REFRESH_MS = 5 * 60 * 1000;
+let liveRecordLoadedAt = 0;
+
+/** Fetch the BTST live record (at most every 5 minutes; it is the same for every universe). */
+async function loadLiveRecord() {
+  if (Date.now() - liveRecordLoadedAt < LIVE_RECORD_REFRESH_MS) return;
+  liveRecordLoadedAt = Date.now();
+  try {
+    setFeed({ liveRecord: await api.liveRecord() });
+  } catch {
+    // keep the last one; the panel says it isn't loaded when there's none
+  }
+}
 
 /** Fetch the results calendar (at most hourly; the server caches NSE for 6 h). */
 export async function loadResultsCalendar(force = false) {
@@ -265,6 +282,7 @@ export function useScreenerPolling(universe: string) {
         const keep = json.status === "syncing" && feed.data?.status === "ready";
         setFeed(keep ? { data: { ...feed.data!, syncing: true, progress: json.progress } } : { data: json, ideas: buildIdeas(json) });
         if (json.status === "ready" && json.asOf && !json.syncing) void loadTrack(json.asOf.eodDate);
+        if (json.status === "ready") void loadLiveRecord();
         const next =
           json.status === "syncing" || json.syncing
             ? SYNC_POLL_MS

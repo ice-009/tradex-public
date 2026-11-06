@@ -16,8 +16,9 @@ import { PriceCells, useVisibleLiveTick } from "./LivePrice";
 import { isBuyStop, planStatus } from "@/core/screener/planStatus";
 import { isNewSetup } from "@/core/screener/fresh";
 import { BTST_WINDOW, mutedReason } from "@/core/screener/btstAlerts";
+import { liveRecordLine, signedPct, type LiveScreenRecord } from "@/core/screener/liveRecord";
 import { requestAlertPermission } from "./Alerts";
-import type { ScreenerResponse, TrackResult } from "@/contracts/api";
+import type { LiveRecordResponse, ScreenerResponse, TrackResult } from "@/contracts/api";
 
 const UNIVERSES = [
   { id: "nifty50", label: "Nifty 50" },
@@ -62,6 +63,7 @@ export function ScreenerPanel() {
   const ideas = useScreenerFeed((feed) => feed.ideas);
   const focus = useScreenerFeed((feed) => feed.focus);
   const track = useScreenerFeed((feed) => feed.track);
+  const liveRecord = useScreenerFeed((feed) => feed.liveRecord);
   const results = useScreenerFeed((feed) => feed.results);
   // One setup score per (stock, setup) shown — cached until the feed changes.
   const scores = useMemo(() => {
@@ -340,7 +342,7 @@ export function ScreenerPanel() {
           <button
             type="button"
             className={`tx-scr-chip ${prefs.btstAlerts ? "is-active" : ""}`}
-            title={btstAlertsTitle(track)}
+            title={btstAlertsTitle(track, liveRecord)}
             onClick={() => {
               if (!prefs.btstAlerts) requestAlertPermission();
               updateScreener({ btstAlerts: !prefs.btstAlerts });
@@ -461,7 +463,11 @@ export function ScreenerPanel() {
             <button type="button" className="tx-icon-btn tx-scr-info-close" title="Close" onClick={() => updateScreener({ showInfo: false })}>
               <Icons.x size={15} />
             </button>
-            {allView ? <AllInfo records={records} sessions={track?.sessions} /> : <ScreenInfo screenId={screen.id} record={records?.[screen.id]} sessions={track?.sessions} />}
+            {allView ? (
+              <AllInfo records={records} sessions={track?.sessions} live={liveRecord} />
+            ) : (
+              <ScreenInfo screenId={screen.id} record={records?.[screen.id]} sessions={track?.sessions} live={liveRecord} />
+            )}
           </aside>
         )}
       </div>
@@ -486,16 +492,17 @@ function shortStatus(status: Exclude<ReturnType<typeof planStatus>, { kind: "ok"
 
 const clock = (minutes: number) => `${Math.floor(minutes / 60) - 12}:${String(minutes % 60).padStart(2, "0")}`;
 
-/** What the BTST alerts toggle will do, screen by screen. */
-function btstAlertsTitle(track: TrackResult | null) {
+/** What the BTST alerts toggle will do, screen by screen, with each screen's live record. */
+function btstAlertsTitle(track: TrackResult | null, live: LiveRecordResponse | null) {
   const records = track && "screens" in track ? track.screens : undefined;
   return [
     `Flash live BTST setups from ${clock(BTST_WINDOW.from)} to ${clock(BTST_WINDOW.to)} PM (toast, tone, notification), once per setup per day.`,
     "Bought near the close, sold at the next open. Banned stocks never flash.",
     ...SCREENS.filter((screen) => screen.exit === "next-open").map((screen) => {
       const muted = mutedReason(records?.[screen.id]);
-      return `• ${screen.name}: ${muted ? `muted — ${muted}` : "flashes"}`;
+      return `• ${screen.name}: ${muted ? `muted — ${muted}` : "flashes"}\n   ${live ? liveRecordLine(live.screens[screen.id]) : "Live record: not loaded"}`;
     }),
+    "Live record: every match seen in the window, bought at the last price seen by 3:25, sold at the next open, net of costs — no hindsight, unlike the backtested track record.",
   ].join("\n");
 }
 
@@ -613,7 +620,7 @@ function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, recor
   );
 }
 
-function AllInfo({ records, sessions }: { records?: Record<string, TrackRecord>; sessions?: number }) {
+function AllInfo({ records, sessions, live }: { records?: Record<string, TrackRecord>; sessions?: number; live: LiveRecordResponse | null }) {
   return (
     <>
       <div className="tx-scr-info-name">Finding a trade</div>
@@ -662,11 +669,96 @@ function AllInfo({ records, sessions }: { records?: Record<string, TrackRecord>;
         still open after the holding period are marked to the close. Method adapted from the Day Trader skill&apos;s Time Machine. Today&apos;s index members, so
         survivorship bias applies. Not a prediction, not advice.
       </p>
+      <LiveRecordTable live={live} />
     </>
   );
 }
 
-function ScreenInfo({ screenId, record, sessions }: { screenId: string; record?: TrackRecord; sessions?: number }) {
+const liveTone = (record?: LiveScreenRecord) => (record?.avgNetPct === null || record?.avgNetPct === undefined ? "none" : record.avgNetPct > 0 ? "good" : "bad");
+
+/** The BTST live record next to (and apart from) the backtested track record. */
+function LiveRecordTable({ live }: { live: LiveRecordResponse | null }) {
+  const screens = SCREENS.filter((screen) => screen.exit === "next-open");
+  const since = Math.min(...screens.map((screen) => live?.screens[screen.id]?.since ?? Infinity));
+  return (
+    <>
+      <div className="tx-section-label">Live record · BTST{Number.isFinite(since) ? ` · since ${formatDay(since)}` : ""}</div>
+      <table className="tx-scr-track">
+        <thead>
+          <tr>
+            <th className="is-left">Screen</th>
+            <th>Trades</th>
+            <th title="Share of settled trades with a positive net return">Win</th>
+            <th title="Average return after costs, % of the entry">Avg net</th>
+          </tr>
+        </thead>
+        <tbody>
+          {screens.map((screen) => {
+            const record = live?.screens[screen.id];
+            const tone = liveTone(record);
+            return (
+              <tr key={screen.id} title={live ? liveRecordLine(record) : "Live record not loaded"}>
+                <td className="is-left">
+                  <span className={`tx-hz-dot tx-hz-${screen.group}`} /> {screen.name}
+                </td>
+                <td>{record ? record.trades : "…"}</td>
+                <td className={`tx-tone-${tone}`}>{record?.winShare !== null && record?.winShare !== undefined ? `${Math.round(record.winShare * 100)}%` : "—"}</td>
+                <td className={`tx-tone-${tone}`}>{record?.avgNetPct !== null && record?.avgNetPct !== undefined ? signedPct(record.avgNetPct) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="tx-scr-note">
+        Recorded by the server from the screener&apos;s live runs: every BTST match seen 3:10–3:25 PM, bought at the last price seen by 3:25 and sold at the next
+        session&apos;s open, net of costs{live ? ` (${live.costs.label})` : ""}. Nothing is replayed afterwards, so there&apos;s no hindsight — but it only covers the days the
+        server was running the screener in that window.
+      </p>
+    </>
+  );
+}
+
+/** One BTST screen's live record and its latest settled trades. */
+function ScreenLiveRecord({ screenId, live }: { screenId: string; live: LiveRecordResponse | null }) {
+  const record = live?.screens[screenId];
+  const recent = (live?.recent ?? []).filter((trade) => trade.screenId === screenId).slice(0, 8);
+  return (
+    <>
+      <div className="tx-section-label">Live record · no hindsight</div>
+      <div className={`tx-scr-verdict tx-tone-${liveTone(record)}`}>
+        {live ? liveRecordLine(record) : "Live record: not loaded"}.
+        {record?.avgGrossPct !== null && record?.avgGrossPct !== undefined && ` Avg gross ${signedPct(record.avgGrossPct)}.`}
+        {record?.gapStops ? ` ${record.gapStops} opened through the stop.` : ""}
+      </div>
+      {recent.length > 0 && (
+        <table className="tx-scr-track">
+          <thead>
+            <tr>
+              <th className="is-left">Day</th>
+              <th className="is-left">Stock</th>
+              <th title="Last price seen by 3:25 PM">Entry</th>
+              <th title="Next session's open">Open</th>
+              <th title="After costs">Net</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recent.map((trade) => (
+              <tr key={`${trade.day}:${trade.symbol}`} title={trade.settled?.gapStop ? "Opened at or below the stop" : undefined}>
+                <td className="is-left">{formatDay(trade.day)}</td>
+                <td className="is-left">{trade.symbol}</td>
+                <td>{formatPrice(trade.entryPrice)}</td>
+                <td>{trade.settled ? formatPrice(trade.settled.exitPrice) : "—"}</td>
+                <td className={trade.settled ? `tx-tone-${trade.settled.netPct > 0 ? "good" : "bad"}` : ""}>{trade.settled ? signedPct(trade.settled.netPct) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function ScreenInfo({ screenId, record, sessions, live }: { screenId: string; record?: TrackRecord; sessions?: number; live: LiveRecordResponse | null }) {
   const screen = SCREEN_MAP[screenId];
   const group = SCREEN_GROUPS.find((entry) => entry.id === screen.group) ?? SCREEN_GROUPS[0];
   return (
@@ -676,6 +768,7 @@ function ScreenInfo({ screenId, record, sessions }: { screenId: string; record?:
         {screen.horizon} · {screen.basis === "eod" ? "last completed session" : "includes today's live candle in market hours"}
       </div>
       <p>{screen.summary}</p>
+      {record && screen.exit === "next-open" && <div className="tx-section-label">Track record · backtest, last {sessions} sessions</div>}
       {record && (
         <div className={`tx-scr-verdict tx-tone-${record.tone}`}>
           <strong>{record.verdict}</strong> {record.signals} signals in the last {sessions} sessions: {record.target} target, {record.stop} stop, {record.open} open.
@@ -684,6 +777,7 @@ function ScreenInfo({ screenId, record, sessions }: { screenId: string; record?:
             ` Target first ${Math.round(record.winShare * 100)}% vs ${Math.round(record.breakEven * 100)}% needed at ${record.planR}R.`}
         </div>
       )}
+      {screen.exit === "next-open" && <ScreenLiveRecord screenId={screenId} live={live} />}
       <div className="tx-section-label">Rules (all must pass)</div>
       <ul className="tx-scr-rules">
         {screen.rules.map((rule) => (
