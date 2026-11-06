@@ -28,8 +28,15 @@
 - Drawing tools, and multi-chart layouts with linked symbols and crosshairs.
 - Designed for iPad and 13–14" laptops; installable as a home-screen app.
 
-**Shortlisting**
+**Daily trade plan** (the bottom panel's first tab)
+- **Which trades to take today, how many lots, and how to get in and out.** Only setups that held up in a 5-year replay of the F&O list *in the current market* are used: NIFTY above or below its 200-day average decides which. A setup qualifies when it made money, net of costs, in both the first 60% and the last 40% of its signals with a t-stat over 2.
+- Ideas are ranked by that tested expected R, one per stock, sized at your risk % of capital in whole futures lots under a leverage cap, and capped at your free slots (default 5 open trades). Lots that would risk more than your budget are shown as "too big for your risk", not hidden.
+- Each idea says what to do ("buy 3:15–3:25 PM near ₹X", "buy-stop at ₹X next session", "sell at tomorrow's open") and shows its evidence: "5y +0.22R/trade · last 12m +0.13R · live 4/6".
+- **Open trades and a journal:** press "I took it" with your fill; each open trade shows its session of the hold, R at the live price, and today's action (sell at the open, stop or target hit, time exit due, trailing level). Closed trades show realised R and your slippage against the plan.
+
+**Exploring the screens**
 - 17 screens in four horizons: **BTST** (overnight), **Swing** (3–10 sessions), **15–30 days** and **Results** (post-earnings drift and gaps). Each cites its sources.
+- Screens with no edge in the 5-year test are hidden by default ("Show all screens" brings them back); each is labelled *works in any market*, *uptrends only* or *no edge in 5-year test*.
 - Every match comes with a **trade plan** (entry, stop, target, exit rule) and a **100-point setup score** across eight factors: trend, relative strength, accumulation, pattern, reward:risk, stop distance, extension and track record. Penalties apply for results inside the holding period, gaps and falling days.
 - **Live during the session:** setups are re-checked against fresh quotes every ~30–60 s (paced from the remaining API budget, with socket ticks laid over the top). Setups that appear after the opening scan get a **NEW** badge, and the **N new** button sorts them to the top.
 - **Market context:** a regime badge (NIFTY vs its 50/200-day averages plus breadth), sector strength and the NSE **F&O ban list** all feed the score. Relative strength is volatility-adjusted (6 and 12 months) with credit for trading near the 52-week high.
@@ -64,6 +71,8 @@ npm run db:setup            # creates the local SQLite database
 npm run dev
 ```
 
+> **Updating an existing install?** Run `npm install` and then `npm run db:setup` again after pulling. The daily plan's trade journal adds a `Trade` table to `dev.db`; `db:setup` (`prisma db push`) adds it without touching your account. Restart `npm run dev` afterwards.
+
 Open http://localhost:3000, create a local account (stored only in your `dev.db`) and sign in.
 
 ### Connecting a broker (Fyers)
@@ -90,7 +99,7 @@ The download runs in the background, never slows charts, and can be stopped and 
 
 Afterwards:
 - Charts open from disk.
-- The screener and backtests use the full 5 years.
+- The screener, backtests and the daily plan's evidence use the full 5 years.
 - Only the newest candles are fetched.
 
 ### Without a broker
@@ -172,7 +181,7 @@ src/
   terminal/       React UI
 data/             index and F&O universe lists (NSE)
 docs/             screenshots and research notes
-prisma/           database schema (users, sessions)
+prisma/           database schema (users, sessions, trade journal)
 ```
 
 ## Scripts

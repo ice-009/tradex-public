@@ -165,6 +165,36 @@ NSE's daily F&O bhavcopy (UDiFF `BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip`)
 
 The screener shows each F&O stock's buildup and combined OI change (e.g. "Long buildup · OI +6%") next to the setup. It is **information only and never scored**: over Oct 2025 – Nov 2026 neither the buildup classes nor the futures basis showed a tradeable edge after costs.
 
+## Daily trade plan (`src/core/plan`)
+
+The **Plan** tab (the bottom panel's default) turns the screener into a short list: which trades to take today, how many lots, how to get in and out, plus your open trades and a journal.
+
+```
+ market.db (5y daily) + screener store (1y, delivery %)      disk only, no broker calls
+        │  providers/deepHistory.ts
+        ▼
+ scanSignals → evidence.ts replaySignals → summarizeEvidence   services/evidence.ts: background,
+        per screen × NIFTY above / below its 200-day             cached in .cache/plan-evidence.json
+        │                                                         by last stored session
+        ▼  GET /api/plan/evidence
+ builder.ts buildPlan(screener matches, evidence, market state, open trades, ban list, lots, settings)
+        │                                                         in the browser (terminal/usePlan.ts)
+        ▼
+ PlanPanel.tsx ── "I took it" → POST /api/trades (Prisma `Trade`) ── tracker.ts / journal.ts
+```
+
+| Piece | Job |
+|---|---|
+| `evidence.ts` | Replays every screen over the stored history (`scanSignals`, no look-ahead) and walks each signal with `simulatePlan`: bought at the signal close or on the buy-stop, out at the stop, target, next open (BTST) or the close after `HOLD_BARS`. R is on the planned risk, net of the `futures-2026` cost preset (slippage both legs + charges, one lot). Per screen and market state (NIFTY close vs its 200-day average on the signal day): n, mean, t-stat over days (each day's trades averaged first), first 60% / last 40% of that bucket's signals in date order, last 12 months, and top vs bottom third by score. **PASS = mean > 0 in both parts and t > 2** (and ≥ 30 trades). |
+| `builder.ts` | Candidates = today's matches of screens that pass in the current state; one per stock (highest expected R); ranked by expected R, with the score as a tie-break only where it ranks trades; F&O-ban and held stocks left out; sized at risk % ÷ (entry − stop) in whole lots under a leverage cap; fills the free slots. Ideas whose one lot risks more than the budget are listed separately as "too big". |
+| `instructions.ts` | Entry and exit wording, and the stored exit rule (`next-open`, `stop-target`, `time`, `trail-low:10`). |
+| `tracker.ts` | Today's action for an open trade from the stored daily bars (server) with the live price laid over it (browser). |
+| `journal.ts` | Realised R, net R after charges, and slippage of your fills against the plan. |
+
+The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers only what is stored: run **Download F&O history** for the 5 years, otherwise it uses the screener's year. Point-in-time F&O membership is used on the sessions the F&O bhavcopy import covers.
+
+The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later). Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`.
+
 ## Backtesting (`src/core/backtest`)
 
 The **Backtest** tab in the bottom dock replays the screens over the stored daily history and trades their signals as one account. It answers "what would this set of screens have done with my sizing, my position limit and real costs", with enough detail to judge whether the result can be trusted.
@@ -189,7 +219,7 @@ The **Backtest** tab in the bottom dock replays the screens over the stored dail
 ### How a session is simulated
 
 1. **Signals.** Each screen's rules run on features computed from that stock's bars **up to and including** the session (`computeFeatures` on `bars.slice(…, i + 1)`), with relative strength ranked across stocks on the same session. `signals.test.ts` checks that rewriting every bar after a date leaves the signals before it unchanged. A stock needs 60 sessions of warm-up; screens that use the 200-day average or the 52-week high fire only once that much history exists.
-2. **Entries.** A signal is decided on the session's close. By default it is bought at the **next session's open** (skipped if that open is already beyond the stop or the target). "Signal close" buys at the signal session's close instead, as the screens are meant to be run at 3:15–3:25 PM; that is slightly optimistic because the real close isn't known yet. A plan whose entry is above the close is a **buy-stop**: it must trade through on the next session, filling at the higher of the open and the trigger, or it is dropped.
+2. **Entries.** A signal is decided on the session's close. By default it is bought at the **signal session's close**, as the screens are meant to be run at 3:15–3:25 PM; that is slightly optimistic because the real close isn't known yet. "Next open" buys at the next session's open instead (skipped if that open is already beyond the stop or the target). A plan whose entry is above the close is a **buy-stop**: it must trade through on the next session, filling at the higher of the open and the trigger, or it is dropped.
 3. **Exits**, the same rules as the track record's `simulatePlan`:
    - a bar that touches both the stop and the target counts as the stop;
    - a gap through a level fills at the open (worse than the level), except on a buy-stop's fill bar;
