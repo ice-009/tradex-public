@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hubManagesBroker } from "@/server/http";
+import { hubMode } from "@/server/providers/hub";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/server/auth";
 import { exchangeFyersAuthCode } from "@/server/providers/fyers/client";
@@ -8,6 +10,7 @@ type AppSession = { user?: { email?: string | null } } | null;
 
 export async function GET(request: NextRequest) {
   try {
+    if (hubMode()) return hubManagesBroker();
     const { searchParams } = new URL(request.url);
     const code = searchParams.get("auth_code") ?? searchParams.get("code");
 

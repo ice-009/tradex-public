@@ -6,6 +6,7 @@ import { CHART_TYPES } from "@/chart/types";
 import { FAVORITE_INTERVALS, INTERVALS, INTERVAL_META } from "@/core/market/intervals";
 import { liveHub, type LiveStatus } from "@/client/marketData";
 import { useApiUsage } from "@/client/usageFeed";
+import type { ApiUsageResponse } from "@/contracts/api";
 import { MarketDataDialog } from "./MarketDataDialog";
 import { LAYOUTS, setLayout, updateActiveCell, useTerminal } from "./store";
 import { Icons, LayoutIcon } from "./icons";
@@ -26,6 +27,8 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
   const ui = useTerminalUI();
   const { data: session } = useSession();
   const [status, setStatus] = useState<LiveStatus>(liveHub.status);
+  const usage = useApiUsage();
+  const viaHub = usage?.via === "hub";
 
   useEffect(() => liveHub.onStatus(setStatus), []);
 
@@ -157,11 +160,16 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
 
       <span className="tx-tb-spacer" />
 
-      <ApiUsageMeter />
+      <ApiUsageMeter usage={usage} />
 
       <span
         className={`tx-status tx-status-${status}`}
-        title={status === "delayed" ? "No live socket: prices are polled every ~15 s through the data engine" : "Market data feed"}
+        title={[
+          status === "delayed" ? "No live socket: prices are polled every ~15 s through the data engine" : "Market data feed",
+          viaHub ? hubSummary(usage.hub) : "",
+        ]
+          .filter(Boolean)
+          .join("\n")}
       >
         <span className="tx-status-dot" />
         {STATUS_LABEL[status]}
@@ -188,27 +196,41 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
 
 const compact = (value: number) => (value >= 10_000 ? `${Math.round(value / 1000)}k` : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value));
 
+/** "Connected via Market Data Hub" and the hub's health, for tooltips. */
+function hubSummary(hub: ApiUsageResponse["hub"]): string {
+  if (!hub) return "Connected via Market Data Hub";
+  if (!hub.reachable) return `Market Data Hub at ${hub.url} unreachable${hub.error ? `: ${hub.error}` : ""}`;
+  const broker = hub.brokerConnected === null ? "" : hub.brokerConnected ? " · its broker is connected" : " · its broker is NOT connected";
+  const feed = hub.feed ? ` · live feed ${hub.feed}` : "";
+  return `Connected via Market Data Hub (${hub.url}${hub.version ? `, v${hub.version}` : ""})${broker}${feed}${hub.streamOpen ? " · price stream open" : ""}`;
+}
+
 /** Today's broker API calls against the daily cap; turns amber past 70 %, red past 90 % or after a 429. */
-function ApiUsageMeter() {
-  const usage = useApiUsage();
+function ApiUsageMeter({ usage }: { usage: ApiUsageResponse | null }) {
   const [open, setOpen] = useState(false);
   if (!usage) return null;
+  const viaHub = usage.via === "hub";
   const share = usage.dayCap ? usage.usedToday / usage.dayCap : 0;
-  const tone = usage.strikes > 0 || share >= 0.9 ? "is-bad" : share >= 0.7 ? "is-warn" : "";
+  const hubDown = viaHub && (!usage.hub?.reachable || usage.hub.brokerConnected === false);
+  const tone = usage.strikes > 0 || share >= 0.9 || hubDown ? "is-bad" : share >= 0.7 ? "is-warn" : "";
   const title = [
-    `Fyers ${usage.plan === "prime" ? "Prime" : "Standard"} plan · data API calls today: ${usage.usedToday.toLocaleString("en-IN")} of ${usage.dayCap.toLocaleString("en-IN")} (limit ${usage.limits.perDay.toLocaleString("en-IN")})`,
+    viaHub ? hubSummary(usage.hub) : "",
+    `${viaHub ? "The hub's " : ""}Fyers ${usage.plan === "prime" ? "Prime" : "Standard"} plan · data API calls today: ${usage.usedToday.toLocaleString("en-IN")} of ${usage.dayCap.toLocaleString("en-IN")} (limit ${usage.limits.perDay.toLocaleString("en-IN")})`,
     `Last minute: ${usage.usedThisMinute} of ${usage.minuteCap} (limit ${usage.limits.perMinute})`,
     `Charts & searches ${usage.byPriority.user} · watchlist & alerts ${usage.byPriority.refresh} · scans ${usage.byPriority.background}`,
     usage.strikes ? `Rate-limited ${usage.strikes}× today${usage.coolingDown ? " — paused for a minute" : ""} (Fyers blocks the day after more than 3)` : "No rate-limit hits today",
+    viaHub ? "Tradex makes no broker calls itself: the hub does, for every app connected to it" : "",
     "Click for market data and the history database",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   return (
     <>
       <button type="button" className={`tx-api-meter ${tone}`} title={title} onClick={() => setOpen(true)}>
         <span className="tx-api-meter-bar" aria-hidden>
           <i style={{ width: `${Math.min(100, share * 100)}%` }} />
         </span>
-        API {compact(usage.usedToday)}/{compact(usage.dayCap)}
+        {viaHub ? "Hub" : "API"} {compact(usage.usedToday)}/{compact(usage.dayCap)}
       </button>
       {open && <MarketDataDialog onClose={() => setOpen(false)} />}
     </>

@@ -124,7 +124,7 @@ export function MarketDataDialog({ onClose }: { onClose: () => void }) {
               </div>
             )}
             {status.job.message && !running && <p className="tx-mdata-message">{status.job.message}</p>}
-            {!status.brokerConnected && <p className="tx-mdata-message">Connect Fyers to download history (see .env.example).</p>}
+            {!status.brokerConnected && <p className="tx-mdata-message">Connect Fyers or a Market Data Hub to download history (see .env.example).</p>}
             {budget !== null && budget !== undefined && calls > budget && !running && (
               <p className="tx-mdata-message">
                 That&apos;s more than today&apos;s background budget: it downloads what fits and pauses; start it again tomorrow to finish.

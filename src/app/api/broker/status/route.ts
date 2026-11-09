@@ -4,6 +4,8 @@ import { authOptions } from "@/server/auth";
 import { prisma } from "@/server/db/prisma";
 import { refreshFyersAccessToken, validateFyersAccessToken } from "@/server/providers/fyers/client";
 import { getFyersAccessToken } from "@/server/providers/fyers/auth";
+import { hubMode } from "@/server/providers/hub";
+import { hubBrokerStatus } from "@/server/services/marketConnection";
 
 type AppSession = { user?: { email?: string | null } } | null;
 
@@ -12,6 +14,11 @@ export async function GET() {
     const session = (await getServerSession(authOptions as never)) as AppSession;
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Connected to a Market Data Hub: the hub owns the broker login; never touch Fyers here.
+    if (hubMode()) {
+      return NextResponse.json(await hubBrokerStatus());
     }
 
     // If unattended TOTP auto-login is configured, the app is connected via the
