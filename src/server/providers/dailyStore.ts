@@ -5,8 +5,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SESSION_CLOSE_MIN } from "@/core/market/session";
 import { sweepIntervalMs } from "@/core/ratelimit/budget";
-import { asPriority, budgetFor, fyersPlan } from "@/server/providers/fyers/budget";
+import { asPriority, budgetFor, planLimits } from "@/server/providers/marketBudget";
 import { dataEngine, marketStream } from "@/server/data";
+import { hubClient, type HubClient } from "@/server/providers/hub";
+import { mergeDailyBars } from "@/core/market/history";
 import { parseBhav, type BhavRow } from "@/core/parsers/bhavcopy";
 import type { DailyBar } from "@/core/types";
 
@@ -24,6 +26,11 @@ export type { DailyBar };
 //      so a mismatch with our stored close means split/bonus → re-backfill.
 //   4. During/after market hours, overlay today's bar from Fyers batch quotes
 //      (50 symbols per request) until that day's bhavcopy is published (~6 PM).
+//
+// With a Market Data Hub (HUB_URL), steps 1–3 are the hub's job: it keeps every
+// symbol's daily bars, extended from the bhavcopy each evening with delivery %
+// and re-downloaded after a split. The store then only asks the hub for each
+// symbol's newest bars (`syncFromHub`) — no NSE downloads, no broker calls.
 
 export interface SyncProgress {
   phase: "idle" | "nse" | "history" | "done" | "error";
@@ -48,6 +55,10 @@ const STALE_AFTER_MS = 15 * 60 * 1000;
 const FYERS_CONCURRENCY = 2;
 const BACKFILL_ATTEMPTS = 4;
 const SPLIT_TOLERANCE = 0.015;
+/** Parallel requests to the hub (it allows a key ~10 a second). */
+const HUB_CONCURRENCY = 3;
+/** Each hub update re-reads this many days before the last stored bar, so corrected bars and delivery % replace provisional ones. */
+const HUB_OVERLAP_DAYS = 7;
 /** Fastest the screener's live quotes refresh, however much budget is left. */
 const MIN_LIVE_PACE_MS = 15 * 1000;
 
@@ -59,7 +70,7 @@ const MIN_LIVE_PACE_MS = 15 * 1000;
 function livePaceMs(count: number, minutes: number): number {
   const refresh = budgetFor("refresh");
   const interval = sweepIntervalMs({
-    requestsPerSweep: Math.ceil(count / fyersPlan().limits.quoteBatch),
+    requestsPerSweep: Math.ceil(count / planLimits().limits.quoteBatch),
     remainingToday: refresh.remainingToday,
     minutesLeft: Math.max(1, SESSION_CLOSE_MIN - minutes),
     backgroundPerMinute: refresh.perMinute,
@@ -142,6 +153,8 @@ class ScreenerStore {
   // ---------------------------------------------------------------- sync
 
   private async sync(symbols: string[]) {
+    const hub = hubClient();
+    if (hub) return this.syncFromHub(hub, symbols);
     // Screener history must be real broker data (never sample, and EOD is what we're building).
     const engine = dataEngine();
     const brokers = engine.sources.filter((source) => source.kind === "broker" && source.history);
@@ -204,6 +217,84 @@ class ScreenerStore {
       message: latestBhavDay ? `EOD data through ${new Date(latestBhavDay).toISOString().slice(0, 10)}` : "Up to date",
       finishedAt: Date.now(),
     };
+  }
+
+  /** Bring every symbol up to date from the Market Data Hub (see the file comment). */
+  private async syncFromHub(hub: HubClient, symbols: string[]) {
+    await mkdir(DAILY_DIR, { recursive: true });
+    await Promise.all(symbols.map((symbol) => this.loadFromDisk(symbol)));
+    const dirty = new Set<string>(await this.extendFromDatabase(symbols));
+    const { dayKey: today, minutes } = istNow();
+    // Today's daily candle is still forming until well after the 15:30 close.
+    const storeToday = minutes >= 16 * 60;
+    const failed: string[] = [];
+    let partial = 0;
+    let done = 0;
+    this.progress = { phase: "history", done, total: symbols.length, message: "Updating daily bars from the Market Data Hub", finishedAt: null };
+
+    const queue = [...symbols];
+    const worker = async () => {
+      for (let symbol = queue.shift(); symbol; symbol = queue.shift()) {
+        try {
+          const result = await this.updateFromHub(hub, symbol, today, storeToday);
+          if (result.changed) dirty.add(symbol);
+          if (result.partial) partial += 1;
+        } catch (error) {
+          failed.push(symbol);
+          console.warn(`Screener: daily bars for ${symbol} from the Market Data Hub failed:`, (error as Error).message);
+        }
+        done += 1;
+        this.progress = { ...this.progress, done };
+      }
+    };
+    await Promise.all(Array.from({ length: HUB_CONCURRENCY }, worker));
+
+    this.progress = { phase: "history", done: 0, total: dirty.size, message: "Saving", finishedAt: null };
+    await Promise.all([...dirty].map((symbol) => this.saveToDisk(symbol)));
+    symbols.filter((symbol) => this.bars.get(symbol)?.length).forEach((symbol) => this.syncedSymbols.add(symbol));
+    this.lastSyncAt = Date.now();
+    const last = Math.max(0, ...symbols.map((symbol) => this.bars.get(symbol)?.at(-1)?.t ?? 0));
+    const notes = [failed.length ? `${failed.length} failed` : "", partial ? `${partial} incomplete (hub's broker unavailable)` : ""].filter(Boolean).join(", ");
+    this.progress = {
+      phase: "done",
+      done: symbols.length,
+      total: symbols.length,
+      message: `${last ? `Daily bars through ${new Date(last).toISOString().slice(0, 10)}` : "Up to date"} (Market Data Hub)${notes ? ` · ${notes}` : ""}`,
+      finishedAt: Date.now(),
+    };
+  }
+
+  /**
+   * One symbol's newest daily bars from the hub, merged by session. When a bar we
+   * already hold comes back with a different close (a split or bonus: the hub
+   * re-downloads adjusted history), the whole series is replaced.
+   */
+  private async updateFromHub(hub: HubClient, symbol: string, today: number, storeToday: boolean): Promise<{ changed: boolean; partial: boolean }> {
+    const read = async (from: number) => {
+      const answer = await hub.candles(symbol, "1d", from);
+      const bars: DailyBar[] = answer.candles
+        .map((candle) => ({ t: toDayKey(candle.t), o: candle.o, h: candle.h, l: candle.l, c: candle.c, v: candle.v, dp: candle.dp ?? undefined }))
+        .filter((bar) => (storeToday || bar.t < today) && bar.o > 0 && bar.c > 0);
+      return { bars, partial: Boolean(answer.partial) };
+    };
+    const series = this.bars.get(symbol) ?? [];
+    if (!series.length) {
+      const { bars, partial } = await read(today - BACKFILL_DAYS * DAY_MS);
+      if (bars.length) this.bars.set(symbol, bars);
+      return { changed: bars.length > 0, partial };
+    }
+
+    const { bars: tail, partial } = await read(series[series.length - 1].t - HUB_OVERLAP_DAYS * DAY_MS);
+    const merged = mergeDailyBars(series, tail, SPLIT_TOLERANCE);
+    if (merged) {
+      if (merged.changed) this.bars.set(symbol, merged.bars);
+      return { changed: merged.changed, partial };
+    }
+    // A stored close moved: the hub has re-downloaded adjusted history (split, bonus).
+    const fresh = await read(series[0].t);
+    if (!fresh.bars.length) return { changed: false, partial: fresh.partial };
+    this.bars.set(symbol, fresh.bars);
+    return { changed: true, partial: fresh.partial };
   }
 
   /**

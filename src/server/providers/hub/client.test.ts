@@ -101,10 +101,10 @@ describe("HubClient requests", () => {
 describe("HubClient never reveals the key", () => {
   it("scrubs it from error messages, even when the hub echoes it", async () => {
     const { client } = fakeHub([{ status: 401, body: { error: `bad key ${KEY}`, code: "unauthorized" } }, new TypeError(`connect failed for ${KEY}`), new TypeError("x"), new TypeError("y")]);
-    const first = await client.status().catch((error: Error) => error);
+    const first = (await client.status().catch((error: Error) => error)) as Error;
     expect(first.message).toContain("401 unauthorized");
     expect(first.message).not.toContain(KEY);
-    const second = await client.lots().catch((error: Error) => error);
+    const second = (await client.lots().catch((error: Error) => error)) as Error;
     expect(second.message).toContain("network error");
     expect(second.message).not.toContain(KEY);
   });

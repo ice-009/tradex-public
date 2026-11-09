@@ -1,6 +1,8 @@
 import "server-only";
 
+import { DAY_MS, istDayKey } from "@/core/market/session";
 import { dedupeEvents, parseCalendar, type ResultsEvent } from "@/core/parsers/resultsCalendar";
+import { hubClient, type HubClient } from "@/server/providers/hub";
 
 export { dedupeEvents, parseCalendar, type ResultsEvent };
 
@@ -10,6 +12,9 @@ export { dedupeEvents, parseCalendar, type ResultsEvent };
 // to a browser-like session, so we load the home page first for cookies.
 // Everything here is best-effort: any failure means "no calendar", never an
 // error, and the rest of the terminal works without it.
+//
+// With a Market Data Hub (HUB_URL) the calendar comes from its
+// /v1/results-calendar (its own copy of the same NSE feed) instead.
 
 const HOME = "https://www.nseindia.com/";
 const CALENDAR = "https://www.nseindia.com/api/event-calendar";
@@ -21,7 +26,23 @@ const HEADERS = {
   "Accept-Language": "en-IN,en;q=0.9",
   Referer: "https://www.nseindia.com/companies-listing/corporate-filings-event-calendar",
 };
+const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
+
+/** The hub's events from a week ago to 60 days ahead (what NSE's calendar covers). */
+async function fromHub(hub: HubClient): Promise<ResultsEvent[]> {
+  const today = istDayKey();
+  const answer = await hub.resultsCalendar(isoDay(today - 7 * DAY_MS), isoDay(today + 60 * DAY_MS));
+  return dedupeEvents(
+    answer.events.flatMap((event) => {
+      const date = Number.isFinite(event.day) ? event.day : Date.parse(`${event.date}T00:00:00Z`);
+      return Number.isFinite(date) ? [{ symbol: event.symbol, company: event.company, date, purpose: event.purpose }] : [];
+    }),
+  );
+}
+
 async function download(): Promise<ResultsEvent[]> {
+  const hub = hubClient();
+  if (hub) return fromHub(hub);
   const home = await fetch(HOME, { headers: { ...HEADERS, Accept: "text/html" }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
   const cookies = (home.headers.getSetCookie?.() ?? [])
     .map((cookie) => cookie.split(";")[0])

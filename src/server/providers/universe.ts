@@ -2,10 +2,14 @@ import "server-only";
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { hubClient, type HubClient } from "@/server/providers/hub";
 
 // Scan universes, snapshotted into data/universe/ from niftyindices.com
 // (ind_nifty{50,200,500}list.csv) and NSE's F&O lot-size file (fo_mktlots.csv).
 // Refresh by re-downloading those files; index rebalances happen twice a year.
+// With a Market Data Hub (HUB_URL) the F&O list is the hub's (from the newest
+// NSE F&O bhavcopy, so it follows NSE's additions and removals), re-read every
+// 12 hours; the snapshot is the fallback when the hub can't answer.
 
 export type UniverseId = "nifty50" | "nifty200" | "nifty500" | "fno";
 
@@ -45,11 +49,39 @@ async function getIndustryMap() {
   return industryBySymbol;
 }
 
+const HUB_FNO_TTL_MS = 12 * 60 * 60 * 1000;
+const HUB_FNO_RETRY_MS = 10 * 60 * 1000;
+const hubFno: { at: number; members: UniverseMember[] | null } = { at: 0, members: null };
+
+/** The hub's F&O list (cached), or null when it can't answer. */
+async function fnoFromHub(hub: HubClient): Promise<UniverseMember[] | null> {
+  const ttl = hubFno.members ? HUB_FNO_TTL_MS : HUB_FNO_RETRY_MS;
+  if (Date.now() - hubFno.at < ttl) return hubFno.members;
+  hubFno.at = Date.now();
+  try {
+    const [answer, industries] = await Promise.all([hub.universe("fno"), getIndustryMap()]);
+    const members = (answer.members ?? []).map((member) => {
+      const symbol = member.symbol.trim().toUpperCase();
+      return { symbol, name: member.name || industries.get(symbol)?.name || symbol, industry: member.industry || industries.get(symbol)?.industry || "" };
+    });
+    if (members.length >= 50) hubFno.members = members;
+    else console.warn(`F&O list from the Market Data Hub has only ${members.length} stocks; using the snapshot.`);
+  } catch (error) {
+    console.warn("F&O list from the Market Data Hub unavailable; using the snapshot:", (error as Error).message);
+  }
+  return hubFno.members;
+}
+
 export function isUniverseId(value: string): value is UniverseId {
   return UNIVERSES.some((universe) => universe.id === value);
 }
 
 export async function getUniverse(id: UniverseId): Promise<UniverseMember[]> {
+  const hub = id === "fno" ? hubClient() : null;
+  if (hub) {
+    const members = await fnoFromHub(hub);
+    if (members) return members;
+  }
   const cached = cache.get(id);
   if (cached) return cached;
 

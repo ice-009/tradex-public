@@ -200,7 +200,7 @@ export function OrderTicket({
         <p className="tx-ticket-note">
           Place the entry as <strong>NRML</strong>; once filled, add the exit as a <strong>GTT → OCO</strong> on the same contract (Kite supports NRML F&amp;O GTTs;
           F&amp;O triggers run until 3:40 PM). One user has reported a futures GTT stop that triggered without fully exiting — check your position after a stop.
-          Lots from {lotSource === "nse" ? "NSE's lot file" : lotSource === "fyers" ? "Fyers' symbol master" : lotSource === "disk" ? "the last saved lot file" : "your entry"}.
+          Lots from {lotSource === "nse" ? "NSE's lot file" : lotSource === "hub" ? "the Market Data Hub (NSE's lot file)" : lotSource === "fyers" ? "Fyers' symbol master" : lotSource === "disk" ? "the last saved lot file" : "your entry"}.
           Prices rounded to ₹{formatPrice(safeTickSize(entry))}. Nothing is sent to a broker from here.
         </p>
       </div>
