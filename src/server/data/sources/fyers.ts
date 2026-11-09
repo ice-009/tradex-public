@@ -4,7 +4,7 @@ import { prisma } from "@/server/db/prisma";
 import { getFyersAccessToken } from "@/server/providers/fyers/auth";
 import { BudgetExhaustedError, fyersPlan } from "@/server/providers/fyers/budget";
 import { downloadFyersHistory, fetchFyersQuotes, fyersHistoryCacheKey, fyersHistoryWindowDays, getFyersTokenFailureReason } from "@/server/providers/fyers/client";
-import { fyersStream } from "@/server/providers/fyers/stream";
+import { fyersStream, type LiveTick } from "@/server/providers/fyers/stream";
 import { SourceSkip, type DataSource } from "@/server/data/types";
 
 // Fyers (broker): intraday + daily history, batch quotes and a live socket.
@@ -66,13 +66,13 @@ export const fyersSource: DataSource = {
     get maxSymbols() {
       return fyersPlan().limits.socketSymbols;
     },
-    start: () => fyersStream.ensureStarted(),
-    isConnected: () => fyersStream.isConnected(),
-    subscribe: (symbols) => fyersStream.subscribe(symbols),
-    restart: (reason) => fyersStream.restart(reason),
-    unsubscribe: (symbols) => fyersStream.unsubscribe(symbols),
+    start: () => fyersStream().ensureStarted(),
+    isConnected: () => fyersStream().isConnected(),
+    subscribe: (symbols) => fyersStream().subscribe(symbols),
+    restart: (reason) => fyersStream().restart(reason),
+    unsubscribe: (symbols) => fyersStream().unsubscribe(symbols),
     onTick(listener) {
-      const forward = (tick: Parameters<Parameters<typeof fyersStream.addListener>[0]>[0]) =>
+      const forward = (tick: LiveTick) =>
         listener({
           symbol: tick.symbol,
           ltp: tick.ltp,
@@ -86,8 +86,8 @@ export const fyersSource: DataSource = {
           ltt: tick.ltt,
           ts: tick.ts,
         });
-      fyersStream.addListener(forward);
-      return () => fyersStream.removeListener(forward);
+      fyersStream().addListener(forward);
+      return () => fyersStream().removeListener(forward);
     },
   },
 };

@@ -3,7 +3,7 @@ import "server-only";
 import { istDayKey, istParts } from "@/core/market/session";
 import type { DailyBar } from "@/core/types";
 import { readCandles, readSeriesMany } from "@/server/data/candleDb";
-import { fyersHistoryCacheKey } from "@/server/providers/fyers/client";
+import { historySeriesKey } from "@/server/data/seriesKey";
 
 // Several years of daily bars for the strategy evidence, read from what is
 // already on disk — never downloaded.
@@ -16,7 +16,7 @@ import { fyersHistoryCacheKey } from "@/server/providers/fyers/client";
 // the database fills in everything older.
 
 /** The market database's key for a stock's or index's daily series (the broker's naming). */
-export const dailySeriesKey = (symbol: string) => fyersHistoryCacheKey(symbol, "1d");
+export const dailySeriesKey = (symbol: string) => historySeriesKey(symbol, "1d");
 
 /** Day key of the newest session whose daily bar is final: today only after 16:00 IST (like the screener's backfill). */
 export function lastFinalDay(now = Date.now()): number {

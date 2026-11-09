@@ -6,6 +6,7 @@ import {
   formatDateForApi,
 } from "@/core/market/intervals";
 import type { PricePoint } from "@/contracts/api";
+import { brokerInstrument, historySeriesKey, resolutionCode } from "@/server/data/seriesKey";
 import { BudgetExhaustedError, acquireFyersSlot, fyersPlan, reportRateLimited } from "@/server/providers/fyers/budget";
 
 // NOTE: Fyers API v3 field names/paths below are based on public docs/SDK
@@ -60,16 +61,8 @@ const historicalSeriesInFlight = new Map<string, Promise<PricePoint[]>>();
 const invalidTokenCache = new Map<string, CacheEntry<string>>();
 
 // Fyers uses composed, human-readable symbols (EXCHANGE:SYMBOL-SEGMENT), so
-// resolution is string construction rather than a network search call.
-const KNOWN_INDEX_SYMBOLS: Record<string, string> = {
-  NIFTY: "NSE:NIFTY50-INDEX",
-  BANKNIFTY: "NSE:NIFTYBANK-INDEX",
-  FINNIFTY: "NSE:FINNIFTY-INDEX",
-  MIDCPNIFTY: "NSE:MIDCPNIFTY-INDEX",
-  NIFTYIT: "NSE:NIFTYIT-INDEX",
-  INDIAVIX: "NSE:INDIAVIX-INDEX",
-  SENSEX: "BSE:SENSEX-INDEX",
-};
+// resolution is string construction rather than a network search call
+// (../../data/seriesKey.ts, shared with the stored series' keys).
 
 // Token-bucket state (per-second) + rolling per-minute request log.
 
@@ -109,14 +102,6 @@ function getAuthHeaders(accessToken: string) {
     Authorization: `${getFyersClientId()}:${token}`,
     Accept: "application/json",
   };
-}
-
-function toFyersResolution(unit: ChartIntervalUnit, interval: number): string {
-  if (unit === "minutes") return `${interval}`;
-  if (unit === "hours") return `${interval * 60}`;
-  // Weekly/monthly charts are aggregated from daily candles in
-  // fetchFyersChartSeries rather than relying on Fyers' coarser resolutions.
-  return "D";
 }
 
 function parseFyersCandleTimestamp(epochSeconds: number) {
@@ -255,14 +240,7 @@ const HISTORY_WINDOW_DAYS: Record<ChartIntervalUnit, number> = {
 // relayed to browsers over SSE (/api/broker/stream). The old per-client v2
 // socket URL was dead and has been removed.
 
-export function toFyersSymbol(symbol: string): string {
-  const normalized = symbol.trim().toUpperCase();
-  // Already a full Fyers symbol (e.g. NSE:SBIN26NOVFUT): pass it through.
-  if (normalized.includes(":")) return normalized;
-  const known = KNOWN_INDEX_SYMBOLS[normalized];
-  if (known) return known;
-  return `NSE:${normalized}-EQ`;
-}
+export const toFyersSymbol = brokerInstrument;
 
 export function computeAppIdHash(clientId: string, secretKey: string): string {
   return crypto.createHash("sha256").update(`${clientId}:${secretKey}`).digest("hex");
@@ -637,8 +615,7 @@ export function fyersHistoryWindowDays(interval: ChartInterval): number {
 
 /** Disk-cache key for a symbol's history (kept from before the data engine, so stored files stay valid). */
 export function fyersHistoryCacheKey(symbol: string, interval: ChartInterval): string {
-  const config = CHART_INTERVAL_CONFIG[interval];
-  return `${toFyersSymbol(symbol)}:${toFyersResolution(config.unit, config.interval)}`;
+  return historySeriesKey(symbol, interval);
 }
 
 /**
@@ -659,7 +636,7 @@ export async function downloadFyersHistory(
   const config = CHART_INTERVAL_CONFIG[interval];
   if (config.unit === "weeks" || config.unit === "months") throw new Error(`Fyers adapter is asked for daily candles, not ${interval}`);
   const fyersSymbol = toFyersSymbol(symbol);
-  const resolution = toFyersResolution(config.unit, config.interval);
+  const resolution = resolutionCode(interval);
   const cacheTtlMs = getSeriesCacheTtl(config.unit);
   const maxChunkDays = MAX_CHUNK_DAYS_BY_UNIT[config.unit];
   const toDate = new Date();
