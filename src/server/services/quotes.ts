@@ -2,7 +2,7 @@ import "server-only";
 
 import type { QuotesResponse } from "@/contracts/api";
 import { dataEngine } from "@/server/data";
-import { asPriority, fyersPlan } from "@/server/providers/fyers/budget";
+import { asPriority, planLimits } from "@/server/providers/marketBudget";
 
 // Snapshot quotes for the watchlist (initial paint + safety-net refresh), from
 // the data engine: live quotes from the broker where it has them, the last
@@ -20,7 +20,7 @@ export const MAX_QUOTE_SYMBOLS = 300;
  */
 function maxAgeMs(fresh: boolean) {
   if (fresh) return 5_000;
-  return fyersPlan().name === "prime" ? 15_000 : 5 * 60_000;
+  return planLimits().name === "prime" ? 15_000 : 5 * 60_000;
 }
 
 export async function getQuotes(symbols: string[], fresh = false): Promise<QuotesResponse> {

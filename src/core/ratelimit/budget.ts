@@ -261,3 +261,15 @@ export function sweepIntervalMs(params: {
   const byDay = (Math.max(1, minutesLeft) * 60_000) / sweepsLeft;
   return Math.round(Math.max(minMs, byMinute, byDay));
 }
+
+/**
+ * A priority's remaining calls today and per-minute allowance, from another
+ * process's budget counters (a Market Data Hub's /v1/status), with the same
+ * priority shares as `RateBudget`.
+ */
+export function shareOfCaps(caps: { dayCap: number; usedToday: number; minuteCap: number }, priority: Priority): { remainingToday: number; perMinute: number } {
+  return {
+    remainingToday: Math.max(0, Math.floor(caps.dayCap * PRIORITY_SHARE[priority].day) - caps.usedToday),
+    perMinute: Math.max(1, Math.floor(caps.minuteCap * PRIORITY_SHARE[priority].minute)),
+  };
+}
