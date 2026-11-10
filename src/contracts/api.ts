@@ -402,14 +402,54 @@ export interface HighLowResponse {
 
 export interface LotsResponse {
   lots: Record<string, number>;
-  source: "nse" | "fyers" | "disk" | "none";
+  source: "nse" | "fyers" | "hub" | "disk" | "none";
   fetchedAt: number;
 }
 
 // ------------------------------------------------------------------ GET /api/broker/usage
 
-/** Fyers Data API calls spent today and in the last minute, against our self-imposed caps. */
-export type ApiUsageResponse = BudgetSnapshot & { plan: "standard" | "prime"; /** Paused after a 429. */ coolingDown: boolean };
+/**
+ * Broker Data API calls spent today and in the last minute, against the caps: Tradex's own
+ * Fyers budget, or — connected to a Market Data Hub — the hub's (it makes the broker calls).
+ */
+export type ApiUsageResponse = BudgetSnapshot & {
+  plan: "standard" | "prime";
+  /** Paused after a 429. */
+  coolingDown: boolean;
+  /** Who talks to the broker: Tradex itself, or a Market Data Hub. */
+  via?: "fyers" | "hub";
+  /** The hub's health, when `via` is "hub". */
+  hub?: HubHealth;
+};
+
+/** A Market Data Hub's health as Tradex last saw it (GET /v1/status). */
+export interface HubHealth {
+  /** The hub's address (origin only). */
+  url: string;
+  reachable: boolean;
+  /** Why the last status request failed. */
+  error: string | null;
+  version: string | null;
+  /** The hub's own broker login (null when unknown). */
+  brokerConnected: boolean | null;
+  /** The hub's live feed: socket, polling, mixed, idle or down (null when unknown). */
+  feed: string | null;
+  /** Tradex's price stream from the hub is open. */
+  streamOpen: boolean;
+  checkedAt: number;
+}
+
+// ------------------------------------------------------------------ GET /api/broker/status
+
+export interface BrokerStatusResponse {
+  connected: boolean;
+  /** auto = the server's Fyers TOTP login; hub = through a Market Data Hub (absent: your own Fyers token). */
+  mode?: "auto" | "hub";
+  /** e.g. "Connected via Market Data Hub". */
+  label?: string;
+  hub?: HubHealth;
+  error?: string;
+}
 
 // ------------------------------------------------------------------ GET /api/data/sources
 

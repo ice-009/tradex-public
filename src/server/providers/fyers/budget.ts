@@ -45,9 +45,16 @@ function load(): RateBudget {
 }
 
 const globalForBudget = globalThis as unknown as { fyersBudget?: RateBudget; fyersBudgetSave?: ReturnType<typeof setTimeout> | null };
-// A hot reload that changes the RateBudget class must not keep an old-shaped instance.
-if (!(globalForBudget.fyersBudget instanceof RateBudget) || typeof globalForBudget.fyersBudget.finish !== "function") globalForBudget.fyersBudget = load();
-const budget = globalForBudget.fyersBudget;
+
+/**
+ * The budget, built on first use (not on import): with a Market Data Hub
+ * configured, Tradex never calls Fyers, so this is never constructed.
+ */
+function getBudget(): RateBudget {
+  // A hot reload that changes the RateBudget class must not keep an old-shaped instance.
+  if (!(globalForBudget.fyersBudget instanceof RateBudget) || typeof globalForBudget.fyersBudget.finish !== "function") globalForBudget.fyersBudget = load();
+  return globalForBudget.fyersBudget;
+}
 
 function scheduleSave() {
   if (globalForBudget.fyersBudgetSave) return;
@@ -58,6 +65,7 @@ function scheduleSave() {
     } catch {
       // exists
     }
+    const budget = getBudget();
     writeFile(STATE_FILE, JSON.stringify({ ...budget.state, recentDone: budget.recentDone(Date.now()) }), () => {});
   }, SAVE_DEBOUNCE_MS);
 }
@@ -83,6 +91,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 export async function acquireFyersSlot(): Promise<() => void> {
   const priority = currentPriority();
+  const budget = getBudget();
   waiting[priority] += 1;
   try {
     for (;;) {
@@ -113,6 +122,7 @@ const higherWaiting = (priority: Priority) => (Object.keys(waiting) as Priority[
 
 /** Fyers answered 429: pause all calls until the minute clears (a 4th strike in a day blocks the account). */
 export function reportRateLimited() {
+  const budget = getBudget();
   budget.rateLimited(Date.now());
   scheduleSave();
   console.warn(
@@ -122,11 +132,12 @@ export function reportRateLimited() {
 
 export function budgetSnapshot(): BudgetSnapshot & { plan: "standard" | "prime"; coolingDown: boolean } {
   const now = Date.now();
-  const snapshot = budget.snapshot(now);
+  const snapshot = getBudget().snapshot(now);
   return { ...snapshot, plan: fyersPlan().name, coolingDown: snapshot.cooldownUntil > now };
 }
 
 /** Calls `priority` may still make today, and its per-minute allowance. */
 export function budgetFor(priority: Priority) {
+  const budget = getBudget();
   return { remainingToday: budget.remainingToday(priority, Date.now()), perMinute: budget.minuteShare(priority) };
 }

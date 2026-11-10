@@ -5,7 +5,7 @@ import { api } from "@/client/api";
 
 interface LotFeed {
   lots: Record<string, number>;
-  source: "nse" | "fyers" | "disk" | "none" | "loading";
+  source: "nse" | "fyers" | "hub" | "disk" | "none" | "loading";
 }
 let lotFeed: LotFeed = { lots: {}, source: "loading" };
 let lotsRequested = false;

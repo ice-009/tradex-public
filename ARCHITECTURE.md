@@ -29,7 +29,7 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
 | Engine | `src/core` | Indicators, patterns, screens, scoring, backtest, tick and futures maths, IST session rules, file parsers. Pure functions: no I/O, no React, no Next. | `@/core` |
 | Contracts | `src/contracts/api.ts` | The JSON body each `/api` route returns. Types only. | `@/core` (types) |
 | Data engine | `src/server/data` | One pipeline for market data whatever the source: source adapters, routing with fallback, caches, and the live price stream. See below. | `@/core`, `@/contracts`, `@/server` |
-| Providers | `src/server/providers` | Raw clients for each external system: Fyers client/auth/socket/budget, NSE bhavcopy store (`dailyStore`), lot files, results calendar, universes, symbols, sample data. | same |
+| Providers | `src/server/providers` | Raw clients for each external system: Fyers client/auth/socket/budget, the Market Data Hub client (`hub/`), NSE bhavcopy store (`dailyStore`), lot files, results calendar, universes, symbols, sample data. | same |
 | Services | `src/server/services` | One use case per file: load data from providers, run the engine, return a contract type. | same |
 | Routes | `src/app/api/**/route.ts` | `export const GET = authed(...)`: read params, call one service, `NextResponse.json`. No logic. | `@/server`, `@/contracts` |
 | Client data | `src/client` | `api.ts` (typed fetchers, the only place that knows URLs) plus feeds: `marketData` (history, quotes, live ticks), `screenerFeed`, `highLowFeed`, `lotsFeed`. | `@/core`, `@/contracts`, `@/client` |
@@ -66,12 +66,12 @@ npm test        # unit tests only
 Market data reaches the app through one pipeline that doesn't depend on where it comes from:
 
 ```
- sources/fyers.ts ─┐                                   ┌─ /api/chart, /api/quotes (services)
+ sources/fyers.ts ─┐ (or sources/hub.ts)               ┌─ /api/chart, /api/quotes (services)
  sources/eod.ts  ──┼─▶ DataEngine (engine.ts) ─────────┼─ screener backfill + live bar (dailyStore)
  sources/sample.ts ┘     history · quotes             ├─ Day High/Low sweep
         │                                               │
         └── live socket ─▶ MarketStream (stream.ts) ──┴─ /api/broker/stream (SSE) ─▶ browser liveHub
-                             socket, or polled quotes
+            (or hub SSE)     socket, or polled quotes
 ```
 
 | Piece | Job |
@@ -79,8 +79,9 @@ Market data reaches the app through one pipeline that doesn't depend on where it
 | `types.ts` | The `DataSource` interface. A source declares what it can do: `history` (which intervals, how far back, whether downloads are worth caching), `quotes` (live or delayed) and `stream` (live socket and its symbol limit). |
 | `engine.ts` | `DataEngine.history()` and `.quotes()`: try sources in order, skip ones that can't serve, and fall back on failure. Sources are rested for 30 s after network, auth, 5xx or rate-limit errors; an error about one symbol doesn't rest the whole source. History is kept on disk incrementally; quotes are cached with per-caller freshness. Every answer is tagged with its source. |
 | `stream.ts` | `MarketStream`: one live pipeline. It uses a source's socket when one connects, highest-priority symbols first, up to the symbol limit. Everything else, or everything when there's no socket, is polled through the engine and sent as identical `Tick` events marked `polled`. When the socket returns, polled symbols move onto it. |
-| `sources/` | `fyers` (broker: history, quotes, socket; every call charged to the Fyers budget), `eod` (the screener's daily store: real daily candles and the last close as a delayed quote, at no API cost), `sample` (generated candles, last resort, clearly labelled). |
-| `index.ts` | Wiring. `DATA_SOURCES` in `.env` sets the order (default `fyers,eod,sample`). `/api/data/sources` shows each source's state. |
+| `sources/` | `fyers` (broker: history, quotes, socket; every call charged to the Fyers budget), `hub` (the same broker data from a Market Data Hub; see below), `eod` (the screener's daily store: real daily candles and the last close as a delayed quote, at no API cost), `sample` (generated candles, last resort, clearly labelled). |
+| `selectSources.ts`, `index.ts` | Wiring. `DATA_SOURCES` in `.env` sets the order (default `fyers,eod,sample`, or `hub,eod,sample` when `HUB_URL` and `HUB_KEY` are set). Sources are built from factories, so one that isn't chosen is never constructed. `/api/data/sources` shows each source's state. |
+| `seriesKey.ts` | Keys of stored candle series (`NSE:SBIN-EQ:D`): the instrument and resolution in the broker's naming, shared by the `fyers` and `hub` sources. |
 
 **What the app sees:**
 - Charts get `source` (`broker`, `eod` or `sample`), `sourceId`, and a `sourceReason` when a fallback answered.
@@ -90,13 +91,35 @@ Market data reaches the app through one pipeline that doesn't depend on where it
 
 The screener asks for broker data only (`kinds: ["broker"]`), so sample data can never get into it.
 
+### Market Data Hub mode
+
+A [Market Data Hub](https://github.com/ice-009/market-data-hub) is a separate service that owns the broker login, request budget, live socket and NSE downloads, and serves them to several apps over HTTP with an API key. Setting `HUB_URL` and `HUB_KEY` switches Tradex to it; leaving them empty keeps Tradex standalone, exactly as before.
+
+```
+ Market Data Hub ── /v1/candles, /v1/quotes ──▶ providers/hub/client.ts ─▶ sources/hub.ts ─▶ DataEngine
+                 └─ /v1/stream (one SSE) ─────▶ providers/hub/stream.ts ─▶ HubLiveFeed ──▶ MarketStream
+                 └─ /v1/lots, /fo/ban, /results-calendar, /universe/fno ─▶ lotSizes, fnoBan, resultsCalendar, universe
+                 └─ /v1/candles?tf=1d (with delivery %) ─▶ dailyStore (screener)
+                 └─ /v1/status ─▶ marketBudget (pacing), /api/broker/status and /usage (top bar)
+```
+
+| Piece | Job |
+|---|---|
+| `providers/hub/config.ts` | Reads `HUB_URL`, `HUB_KEY`, `HUB_TIMEOUT_MS`. `hubMode()` is the one switch. |
+| `providers/hub/client.ts` | Typed `GET`s with a timeout. 429, 502–504 and network errors are retried with doubling back-off, waiting the hub's `Retry-After` but never more than 10 s (longer means fail now and let the engine fall back). A 503 that still carries stored candles is returned as a partial answer. The key is a private field and is scrubbed from every error message. |
+| `providers/hub/sse.ts`, `stream.ts` | An SSE parser and one stream connection for every live symbol (at most 100). It reopens with the new list when the symbol set changes (changes within 250 ms are coalesced), reconnects with back-off and `Last-Event-ID` after a drop, and treats 45 s of silence (the hub sends a heartbeat every 15 s) as a dead connection. |
+| `sources/hub.ts` | The `hub` source (kind `broker`). Symbols: `SBIN`/`NIFTY` are the hub's tickers; `NSE:SBIN-EQ` and `NSE:NIFTY50-INDEX` are mapped to them; futures and BSE symbols are passed to the next source. Intervals: 5m, 15m, 1h and 1d as served, 10m/30m/2h/4h resampled from 09:15 IST (`resampleIntraday` in `core/market/aggregate.ts`); 1m and 3m aren't served. Candles are cached in `market.db` under the same keys as Fyers, so history downloaded before switching is reused. Stale quotes (the hub's stored last price when its broker can't answer) are left out, so the end-of-day close answers instead, marked delayed. |
+| `providers/marketBudget.ts` | The broker budget as services see it: Tradex's Fyers budget standalone, the hub's counters (from `/v1/status`) in hub mode, for pacing the screener's quotes and the high/low sweep. |
+
+In hub mode nothing of Fyers is constructed or called: the `fyers` source isn't built, the Fyers budget, stream manager and SDK are only created on first use (never), and the Fyers login routes answer 409. `src/server/data/hubMode.test.ts` checks this with every Fyers module replaced by spies. The NSE F&O bhavcopy import (open interest, point-in-time membership) still runs in Tradex; it never touched Fyers.
+
 ### Adding a data source
 
 1. Write `src/server/data/sources/<name>.ts` exporting a `DataSource`:
    - Map the app's symbols (`RELIANCE`, `NIFTY`, `NSE:SBIN26NOVFUT`) to the source's own naming.
    - Return `unavailable()` reasons when it isn't configured.
    - Throw `SourceSkip` for "not now", for example when its quota is spent.
-2. Add it to `AVAILABLE` in `src/server/data/index.ts` and list it in `DATA_SOURCES`.
+2. Add it to `FACTORIES` in `src/server/data/index.ts` and list it in `DATA_SOURCES`.
 3. Test it the way `engine.test.ts` does, with fake responses.
 
 Charts, quotes, the screener, the scanner and the live stream pick it up with no other changes.
@@ -112,7 +135,7 @@ Fyers limits Data API calls (quotes, history, option chain) per plan. From 16 Oc
 
 More than 3 per-minute breaches in a day block the account for the rest of that day. Set `FYERS_PLAN=prime` in the environment if you're on Prime; the default is `standard`.
 
-Every data call goes through `src/server/providers/fyers/budget.ts`, which applies the policy in `src/core/ratelimit/budget.ts`:
+Every data call goes through `src/server/providers/fyers/budget.ts`, which applies the policy in `src/core/ratelimit/budget.ts` (connected to a Market Data Hub, Tradex makes no Fyers calls; the hub keeps its own budget and the top bar shows that one):
 
 - **Headroom:** at most 3 calls a second (60% of Standard's 5), 80% of the per-minute limit and 95% of the daily one.
 - **Windows are counted as Fyers sees them:** a call holds its slot from when it's sent until one window-length after its response arrives. Counting by send time isn't enough: on a cold start the first calls are slowed by connection setup and reach Fyers together with the next second's calls. That produced real 429s at 4 sends a second.

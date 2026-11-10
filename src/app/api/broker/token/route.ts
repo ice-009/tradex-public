@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hubManagesBroker } from "@/server/http";
+import { hubMode } from "@/server/providers/hub";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/server/auth";
 import { prisma } from "@/server/db/prisma";
@@ -12,6 +14,7 @@ function normalizeToken(value: string) {
 
 export async function POST(request: NextRequest) {
   try {
+    if (hubMode()) return hubManagesBroker();
     const session = (await getServerSession(authOptions as never)) as AppSession;
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -53,6 +56,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE() {
   try {
+    if (hubMode()) return hubManagesBroker();
     const session = (await getServerSession(authOptions as never)) as AppSession;
     if (!session?.user?.email) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

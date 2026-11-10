@@ -51,3 +51,7 @@ export function symbolList(value: string | null, max: number): string[] {
     ),
   ].slice(0, max);
 }
+
+/** With a Market Data Hub the broker login lives in the hub, not in Tradex. */
+export const hubManagesBroker = () =>
+  NextResponse.json<ApiError>({ error: "Tradex gets market data from a Market Data Hub (HUB_URL); the broker login is managed by the hub." }, { status: 409 });

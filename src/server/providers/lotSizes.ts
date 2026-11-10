@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { LotsResponse } from "@/contracts/api";
 import { parseFyersLots, parseNseLots } from "@/core/parsers/lotSizes";
+import { hubClient } from "@/server/providers/hub";
 
 // Stock-futures lot sizes, for sizing in lots.
 //
@@ -15,6 +16,9 @@ import { parseFyersLots, parseNseLots } from "@/core/parsers/lotSizes";
 // size" field. Cached in memory for 12 h and on disk, so a failed download
 // falls back to the last good copy. When neither source answers, the order
 // ticket asks for the lot size instead of guessing.
+//
+// With a Market Data Hub (HUB_URL), lots come from the hub's /v1/lots (its own
+// copy of the same NSE file) and nothing is downloaded from NSE or Fyers.
 
 const NSE_URL = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv";
 const FYERS_URL = "https://public.fyers.in/sym_details/NSE_FO.csv";
@@ -39,17 +43,31 @@ async function download(url: string, parse: (csv: string) => Record<string, numb
 const globalForLots = globalThis as unknown as { lotSizes?: { value: LotSizes; checkedAt: number; pending: Promise<LotSizes> | null } };
 const state = (globalForLots.lotSizes ??= { value: { lots: {}, source: "none", fetchedAt: 0 }, checkedAt: 0, pending: null });
 
+async function save(value: LotSizes) {
+  await mkdir(path.dirname(CACHE_FILE), { recursive: true });
+  await writeFile(CACHE_FILE, JSON.stringify(value));
+  return value;
+}
+
 async function refresh(): Promise<LotSizes> {
-  for (const [source, url, parse] of [
-    ["nse", NSE_URL, parseNseLots],
-    ["fyers", FYERS_URL, parseFyersLots],
-  ] as const) {
+  const hub = hubClient();
+  if (hub) {
     try {
-      const lots = await download(url, parse);
-      const value: LotSizes = { lots, source, fetchedAt: Date.now() };
-      await mkdir(path.dirname(CACHE_FILE), { recursive: true });
-      await writeFile(CACHE_FILE, JSON.stringify(value));
-      return value;
+      const answer = await hub.lots();
+      if (Object.keys(answer.lots ?? {}).length) return await save({ lots: answer.lots, source: "hub", fetchedAt: answer.fetchedAt || Date.now() });
+      console.warn("Lot sizes: the Market Data Hub has none yet");
+    } catch (error) {
+      console.warn("Lot sizes from the Market Data Hub:", (error as Error).message);
+    }
+  }
+  for (const [source, url, parse] of hub
+    ? []
+    : ([
+        ["nse", NSE_URL, parseNseLots],
+        ["fyers", FYERS_URL, parseFyersLots],
+      ] as const)) {
+    try {
+      return await save({ lots: await download(url, parse), source, fetchedAt: Date.now() });
     } catch (error) {
       console.warn("Lot sizes:", (error as Error).message);
     }

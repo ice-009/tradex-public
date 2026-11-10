@@ -21,7 +21,7 @@ const time = (at: number) => new Date(at).toLocaleTimeString("en-IN", { hour: "2
 const STATUS_TEXT: Record<Feed["status"], string> = {
   live: "Live",
   closed: "Market closed",
-  "no-broker": "Connect Fyers to scan",
+  "no-broker": "Connect a broker to scan",
   starting: "Starting…",
   error: "Scan unavailable",
 };
@@ -172,7 +172,7 @@ export function HighLowPanel() {
           <div className="tx-scr-state">
             {data.status === "no-broker" ? (
               <>
-                <strong>Connect Fyers to scan</strong>
+                <strong>Connect Fyers or a Market Data Hub to scan</strong>
                 <span>The scan reads live day highs and lows for every F&amp;O stock and its near-month future.</span>
               </>
             ) : data.status === "closed" ? (

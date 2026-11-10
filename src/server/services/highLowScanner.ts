@@ -5,7 +5,7 @@ import type { HighLowResponse, ScanStatus } from "@/contracts/api";
 import { sweepIntervalMs } from "@/core/ratelimit/budget";
 import type { Tick } from "@/contracts/api";
 import { dataEngine, marketStream } from "@/server/data";
-import { asPriority, budgetFor, fyersPlan } from "@/server/providers/fyers/budget";
+import { asPriority, budgetFor, planLimits } from "@/server/providers/marketBudget";
 import { getUniverse } from "@/server/providers/universe";
 import { applyQuotes, emptyState, type HLEvent, type HLQuote, type HLState } from "@/core/scanner/highLow";
 import { nearMonthFuture } from "@/core/market/futures";
@@ -133,7 +133,7 @@ async function poll() {
   // Pace the next sweep from what's left of today's background budget.
   const background = budgetFor("background");
   service.sweepMs = sweepIntervalMs({
-    requestsPerSweep: Math.ceil(instruments.length / fyersPlan().limits.quoteBatch),
+    requestsPerSweep: Math.ceil(instruments.length / planLimits().limits.quoteBatch),
     remainingToday: background.remainingToday,
     minutesLeft: SESSION_CLOSE_MIN - minutes,
     backgroundPerMinute: background.perMinute,

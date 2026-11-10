@@ -1,6 +1,6 @@
 import os from "os";
 import path from "path";
-import { fyersDataSocket, type FyersDataSocketInstance } from "fyers-api-v3";
+import type { FyersDataSocketInstance } from "fyers-api-v3";
 import { getFyersAccessToken } from "@/server/providers/fyers/auth";
 import { toFyersSymbol } from "@/server/providers/fyers/client";
 import { fyersPlan } from "@/server/providers/fyers/budget";
@@ -11,6 +11,10 @@ import { fyersPlan } from "@/server/providers/fyers/budget";
 // single-account model). Browsers consume normalized ticks over SSE
 // (see /api/broker/stream) instead of talking to Fyers directly — the old
 // per-client v2 websocket URL was dead.
+//
+// Nothing happens on import: the manager is built on first use and the SDK is
+// loaded when the socket first starts, so a Tradex connected to a Market Data
+// Hub never loads or runs any of it.
 
 export interface LiveTick {
   symbol: string; // app symbol, e.g. "RELIANCE" / "NIFTY"
@@ -103,6 +107,16 @@ class FyersStreamManager {
     if (this.starting) return this.starting; // another caller started while we fetched the token
 
     this.starting = (async () => {
+      // A CommonJS package: its exports may arrive as named exports or under `default`.
+      let sdk: typeof import("fyers-api-v3") & { default?: typeof import("fyers-api-v3") };
+      try {
+        sdk = await import("fyers-api-v3");
+      } catch (error) {
+        console.warn("Fyers stream: couldn't load the Fyers SDK:", (error as Error).message);
+        this.starting = null;
+        return false;
+      }
+      const fyersDataSocket = sdk.fyersDataSocket ?? sdk.default!.fyersDataSocket;
       const clientId = process.env.FYERS_CLIENT_ID || "";
       const logPath = path.join(os.tmpdir(), "tradex-fyers-sdk");
 
@@ -283,8 +297,11 @@ class FyersStreamManager {
   }
 }
 
-// HMR-safe singleton (mirrors src/lib/prisma.ts's globalThis caching).
+// HMR-safe singleton (mirrors src/lib/prisma.ts's globalThis caching), built on first use.
 const globalForStream = globalThis as unknown as { fyersStream?: FyersStreamManager };
-// A hot reload that changed this class replaces an instance missing newer methods.
-if (typeof (globalForStream.fyersStream as Partial<FyersStreamManager> | undefined)?.restart !== "function") globalForStream.fyersStream = new FyersStreamManager();
-export const fyersStream: FyersStreamManager = globalForStream.fyersStream!;
+
+export function fyersStream(): FyersStreamManager {
+  // A hot reload that changed this class replaces an instance missing newer methods.
+  if (typeof (globalForStream.fyersStream as Partial<FyersStreamManager> | undefined)?.restart !== "function") globalForStream.fyersStream = new FyersStreamManager();
+  return globalForStream.fyersStream!;
+}

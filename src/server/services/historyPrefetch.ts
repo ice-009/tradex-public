@@ -6,7 +6,7 @@ import { dataEngine } from "@/server/data";
 import { dbStats, readSeriesMany } from "@/server/data/candleDb";
 import type { DataSource } from "@/server/data/types";
 import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
-import { asPriority, budgetFor, fyersPlan } from "@/server/providers/fyers/budget";
+import { asPriority, budgetFor, marketDataVia, planLimits } from "@/server/providers/marketBudget";
 import { getUniverse } from "@/server/providers/universe";
 import { foBhavStatus } from "@/server/services/foBhavSync";
 
@@ -16,6 +16,10 @@ import { foBhavStatus } from "@/server/services/foBhavSync";
 // broker. Runs at background priority (charts are always served first), skips
 // what's already stored — so it can be stopped and resumed — and pauses when
 // today's API budget for background work is used up.
+//
+// With a Market Data Hub this copies the hub's stored candles into the local
+// database instead: no broker calls from Tradex and no budget to watch (the hub
+// fetches anything it lacks itself, at its own background priority).
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONCURRENCY = 2;
@@ -77,7 +81,7 @@ export async function historyDbStatus(): Promise<HistoryDbStatus> {
     job: state,
     coverage,
     db: dbStats(),
-    backgroundCallsLeft: source ? budgetFor("background").remainingToday : null,
+    backgroundCallsLeft: source && marketDataVia() === "fyers" ? budgetFor("background").remainingToday : null,
     brokerConnected: !unavailable,
     fo: foBhavStatus(now),
   };
@@ -93,7 +97,7 @@ export async function startHistoryPrefetch(kinds: HistoryKind[]): Promise<void> 
   }
   const symbols = await universe();
   const jobs = planPrefetch(symbols, kinds, coverageCheck(source, symbols, Date.now()));
-  Object.assign(job, { state: "running", kinds, done: 0, total: jobs.length, failed: [], current: null, stop: false, startedAt: Date.now(), finishedAt: null, message: jobs.length ? `Downloading ${jobs.length} series (~${estimateCalls(jobs)} API calls)…` : "Everything is already stored." });
+  Object.assign(job, { state: "running", kinds, done: 0, total: jobs.length, failed: [], current: null, stop: false, startedAt: Date.now(), finishedAt: null, message: jobs.length ? (marketDataVia() === "hub" ? `Copying ${jobs.length} series from the Market Data Hub…` : `Downloading ${jobs.length} series (~${estimateCalls(jobs)} API calls)…`) : "Everything is already stored." });
   if (!jobs.length) {
     Object.assign(job, { state: "done", finishedAt: Date.now() });
     return;
@@ -112,7 +116,7 @@ export function stopHistoryPrefetch() {
 function liveReserve(symbols: number): number {
   const { minutes, weekday } = istParts();
   if (weekday === 0 || weekday === 6 || minutes < SESSION_OPEN_MIN || minutes >= SESSION_CLOSE_MIN) return 0;
-  return Math.ceil(symbols / fyersPlan().limits.quoteBatch) * (SESSION_CLOSE_MIN - minutes);
+  return Math.ceil(symbols / planLimits().limits.quoteBatch) * (SESSION_CLOSE_MIN - minutes);
 }
 
 async function run(jobs: PrefetchJob[]) {
@@ -123,7 +127,7 @@ async function run(jobs: PrefetchJob[]) {
   const worker = async () => {
     for (let next = queue.shift(); next; next = queue.shift()) {
       if (job.stop || pausedForBudget || pausedForMarket) return;
-      if (budgetFor("background").remainingToday < liveReserve(reserveFor) + next.spec.callsPerSymbol) {
+      if (marketDataVia() === "fyers" && budgetFor("background").remainingToday < liveReserve(reserveFor) + next.spec.callsPerSymbol) {
         pausedForMarket = true;
         return;
       }
