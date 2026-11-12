@@ -8,9 +8,10 @@
 import type {
   AnalyzeResponse,
   ApiUsageResponse,
-  HistoryDbAction,
-  HistoryDbStatus,
   BacktestInfoResponse,
+  BrokerStatusResponse,
+  FuturesResponse,
+  MarketDataStatus,
   BacktestRequest,
   BacktestResponse,
   ChartResponse,
@@ -125,11 +126,17 @@ export const api = {
 
   lots: () => getJson<LotsResponse>("/api/lots"),
 
+  /** A stock's listed futures contracts (near and next month, as hub tickers) and lot size. */
+  futures: (symbol: string) => getJson<FuturesResponse>("/api/futures", { symbol }),
+
+  /** The Market Data Hub's broker budget and health, for the top bar. */
   usage: () => getJson<ApiUsageResponse>("/api/broker/usage"),
 
-  /** The local market-data database and its "Download F&O history" job. */
-  historyDb: () => getJson<HistoryDbStatus>("/api/data/history-db"),
-  historyDbAction: (action: HistoryDbAction) => postJson<HistoryDbStatus>("/api/data/history-db", action),
+  /** Whether a Market Data Hub is configured and reachable. */
+  hubStatus: () => getJson<BrokerStatusResponse>("/api/broker/status"),
+
+  /** "Market data: provided by your hub": its health and the freshness of each dataset (read-only). */
+  marketData: () => getJson<MarketDataStatus>("/api/data/hub"),
 
   /** Ready-made lists; fetched once per page load and shared. */
   presets: (() => {

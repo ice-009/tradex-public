@@ -28,7 +28,6 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
   const { data: session } = useSession();
   const [status, setStatus] = useState<LiveStatus>(liveHub.status);
   const usage = useApiUsage();
-  const viaHub = usage?.via === "hub";
 
   useEffect(() => liveHub.onStatus(setStatus), []);
 
@@ -165,8 +164,8 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
       <span
         className={`tx-status tx-status-${status}`}
         title={[
-          status === "delayed" ? "No live socket: prices are polled every ~15 s through the data engine" : "Market data feed",
-          viaHub ? hubSummary(usage.hub) : "",
+          status === "delayed" ? "No live stream from the hub: prices are polled every ~15 s" : "Market data feed",
+          usage ? hubSummary(usage.hub) : "",
         ]
           .filter(Boolean)
           .join("\n")}
@@ -198,29 +197,33 @@ const compact = (value: number) => (value >= 10_000 ? `${Math.round(value / 1000
 
 /** "Connected via Market Data Hub" and the hub's health, for tooltips. */
 function hubSummary(hub: ApiUsageResponse["hub"]): string {
-  if (!hub) return "Connected via Market Data Hub";
+  if (!hub.configured) return "No Market Data Hub configured (HUB_URL, HUB_KEY): sample data only";
   if (!hub.reachable) return `Market Data Hub at ${hub.url} unreachable${hub.error ? `: ${hub.error}` : ""}`;
   const broker = hub.brokerConnected === null ? "" : hub.brokerConnected ? " · its broker is connected" : " · its broker is NOT connected";
   const feed = hub.feed ? ` · live feed ${hub.feed}` : "";
-  return `Connected via Market Data Hub (${hub.url}${hub.version ? `, v${hub.version}` : ""})${broker}${feed}${hub.streamOpen ? " · price stream open" : ""}`;
+  const health = hub.healthy === false ? ` · ${hub.problems.length} problem${hub.problems.length === 1 ? "" : "s"}` : "";
+  return `Connected via Market Data Hub (${hub.url}${hub.version ? `, v${hub.version}` : ""})${broker}${feed}${health}${hub.streamOpen ? " · price stream open" : ""}`;
 }
 
-/** Today's broker API calls against the daily cap; turns amber past 70 %, red past 90 % or after a 429. */
+/** The hub's broker calls today against its daily cap; amber past 70 %, red past 90 %, after a 429, or when the hub is down. */
 function ApiUsageMeter({ usage }: { usage: ApiUsageResponse | null }) {
   const [open, setOpen] = useState(false);
   if (!usage) return null;
-  const viaHub = usage.via === "hub";
   const share = usage.dayCap ? usage.usedToday / usage.dayCap : 0;
-  const hubDown = viaHub && (!usage.hub?.reachable || usage.hub.brokerConnected === false);
+  const hubDown = !usage.hub.reachable || usage.hub.brokerConnected === false || usage.hub.healthy === false;
   const tone = usage.strikes > 0 || share >= 0.9 || hubDown ? "is-bad" : share >= 0.7 ? "is-warn" : "";
   const title = [
-    viaHub ? hubSummary(usage.hub) : "",
-    `${viaHub ? "The hub's " : ""}Fyers ${usage.plan === "prime" ? "Prime" : "Standard"} plan · data API calls today: ${usage.usedToday.toLocaleString("en-IN")} of ${usage.dayCap.toLocaleString("en-IN")} (limit ${usage.limits.perDay.toLocaleString("en-IN")})`,
-    `Last minute: ${usage.usedThisMinute} of ${usage.minuteCap} (limit ${usage.limits.perMinute})`,
-    `Charts & searches ${usage.byPriority.user} · watchlist & alerts ${usage.byPriority.refresh} · scans ${usage.byPriority.background}`,
-    usage.strikes ? `Rate-limited ${usage.strikes}× today${usage.coolingDown ? " — paused for a minute" : ""} (Fyers blocks the day after more than 3)` : "No rate-limit hits today",
-    viaHub ? "Tradex makes no broker calls itself: the hub does, for every app connected to it" : "",
-    "Click for market data and the history database",
+    hubSummary(usage.hub),
+    usage.hub.reachable
+      ? [
+          `The hub's broker (${usage.plan === "prime" ? "Prime" : "Standard"} plan) · data API calls today: ${usage.usedToday.toLocaleString("en-IN")} of ${usage.dayCap.toLocaleString("en-IN")} (limit ${usage.limits.perDay.toLocaleString("en-IN")})`,
+          `Last minute: ${usage.usedThisMinute} of ${usage.minuteCap} (limit ${usage.limits.perMinute})`,
+          `Charts & searches ${usage.byPriority.user} · watchlist & alerts ${usage.byPriority.refresh} · scans ${usage.byPriority.background}`,
+          usage.strikes ? `Rate-limited ${usage.strikes}× today${usage.coolingDown ? " — paused for a minute" : ""}` : "No rate-limit hits today",
+        ].join("\n")
+      : "",
+    "Tradex makes no broker or NSE requests itself: the hub does, for every app connected to it",
+    "Click for the hub's health and data freshness",
   ]
     .filter(Boolean)
     .join("\n");
@@ -230,7 +233,7 @@ function ApiUsageMeter({ usage }: { usage: ApiUsageResponse | null }) {
         <span className="tx-api-meter-bar" aria-hidden>
           <i style={{ width: `${Math.min(100, share * 100)}%` }} />
         </span>
-        {viaHub ? "Hub" : "API"} {compact(usage.usedToday)}/{compact(usage.dayCap)}
+        {usage.hub.configured ? `Hub ${compact(usage.usedToday)}/${compact(usage.dayCap)}` : "No hub"}
       </button>
       {open && <MarketDataDialog onClose={() => setOpen(false)} />}
     </>
