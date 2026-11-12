@@ -26,7 +26,7 @@ export interface HubCandle {
   dp?: number | null;
 }
 
-export type HubTimeframe = "1d" | "1w" | "1h" | "15m" | "5m";
+export type HubTimeframe = "1d" | "1w" | "1h" | "15m" | "5m" | "1m";
 
 export interface HubCandles {
   symbol: string;
@@ -90,13 +90,117 @@ export interface HubBudget {
   stoppedForToday?: boolean;
 }
 
+/** One dataset's freshness in /v1/status `data` (cash and F&O bhavcopy, lots, ban list, results calendar). */
+export interface HubDataset {
+  lastSession?: string | null;
+  tradeDate?: string | null;
+  lastSuccessAt?: number | null;
+  lastAttemptAt?: number | null;
+  lastError?: string | null;
+  count?: number;
+  events?: number;
+  source?: string;
+}
+
 export interface HubStatus {
+  /** Health first: `problems` are worth an alert, `warnings` worth knowing. */
+  healthy?: boolean;
+  problems?: string[];
+  warnings?: string[];
   service: string;
   version: string;
   uptimeSec?: number;
   key?: { name: string; scopes: string[] };
   broker: { configured: boolean; connected: boolean; ownsConnection?: boolean; lastLoginError?: string | null; budget?: HubBudget };
+  data?: {
+    dbBytes?: number;
+    cashBhav?: HubDataset;
+    foBhav?: HubDataset;
+    lots?: HubDataset;
+    foBan?: HubDataset;
+    resultsCalendar?: HubDataset;
+    candles?: Array<{ tf: string; series: number; candles: number; lastSession?: string | null }>;
+  };
   live?: { enabled: boolean; running: boolean; feed?: HubFeedStatus & { pollingStopped?: string | null } };
+}
+
+/** One symbol's series in a batch answer. */
+export interface HubBatchSeries {
+  /** Every final bar of the (clamped) range is stored. */
+  complete: boolean;
+  coverage: { from: number; to: number } | null;
+  candles: HubCandle[];
+}
+
+/** GET /v1/candles/batch: many symbols' daily or weekly bars in one request. */
+export interface HubCandlesBatch {
+  tf: "1d" | "1w";
+  from: number;
+  to: number;
+  series: Record<string, HubBatchSeries>;
+  /** Incomplete symbols the hub is now fetching in the background: ask again later. */
+  queued: string[];
+  /** Malformed symbols, and ones the broker doesn't know: no `series` entry. */
+  unknown: string[];
+  /** Set (still 200) when the hub's broker can't be used: nothing was queued. */
+  warning?: string;
+  reason?: string;
+}
+
+/** One leg (month) of a stock's futures on a trade day. Expiry is YYYY-MM-DD. */
+export interface HubOiLeg {
+  expiry: string;
+  close: number;
+  settle: number;
+  prevClose: number;
+  /** Contracts. */
+  volume: number;
+  /** Shares. */
+  oi: number;
+  chgOi: number;
+}
+
+/** A stock's futures on one trade day (the /v1/fo/oi item shape, plus its symbol). */
+export interface HubOiRow {
+  symbol: string;
+  date: string;
+  /** UTC midnight of the trade date, ms. */
+  day: number;
+  nseSymbol?: string;
+  expiries?: number;
+  lot?: number | null;
+  underlying?: number | null;
+  near: HubOiLeg;
+  next?: HubOiLeg | null;
+  /** Open interest combined across listed months, and its change (sum of each month's change). */
+  oi: number;
+  chgOi: number;
+  oiChangePct?: number | null;
+  pricePct?: number | null;
+  buildup?: string | null;
+  basisPct?: number | null;
+}
+
+/** GET /v1/fo/oi/day: every stock's futures on one trade day (the newest stored by default). */
+export interface HubOiDay {
+  date: string;
+  day: number;
+  rows: HubOiRow[];
+}
+
+/** GET /v1/fo/members?from&to: the F&O list on every stored trade day in the range. */
+export interface HubMembers {
+  from: string;
+  to: string;
+  days: Array<{ date: string; day: number; symbols: string[] }>;
+}
+
+/** GET /v1/fo/contracts?symbol: a stock's listed futures, as hub tickers (e.g. SBIN26NOVFUT). */
+export interface HubContracts {
+  symbol: string;
+  asOf: string | null;
+  lot: number | null;
+  contracts: Array<{ ticker: string; expiry: string; kind: "near" | "next" | string }>;
 }
 
 export interface HubUniverse {
@@ -168,6 +272,12 @@ export interface RequestOptions {
 
 /** Most symbols the hub takes in one quotes or stream request. */
 export const HUB_MAX_SYMBOLS = 100;
+/** Most symbols in one /v1/candles/batch request. */
+export const HUB_BATCH_SYMBOLS = 300;
+/** Most days in one /v1/fo/members range request. */
+export const HUB_MEMBER_DAYS = 400;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const RETRYABLE = new Set([429, 502, 503, 504]);
 const MAX_BACKOFF_MS = 8_000;
 
@@ -340,6 +450,53 @@ export class HubClient {
       if (part.reason) answer.reason = part.reason;
     }
     return answer;
+  }
+
+  /**
+   * Daily or weekly bars for many symbols (plain hub tickers), asked for in
+   * batches of 300. Never waits for the broker: symbols the hub doesn't hold in
+   * full come back in `queued` (it fetches them in the background: ask again
+   * later) with whatever it has stored so far. Series are keyed by hub ticker.
+   */
+  async candlesBatch(symbols: string[], tf: "1d" | "1w", from: number, to?: number): Promise<HubCandlesBatch> {
+    const unique = [...new Set(symbols)];
+    const answer: HubCandlesBatch = { tf, from: Math.floor(from), to: to ?? Date.now(), series: {}, queued: [], unknown: [] };
+    for (let start = 0; start < unique.length; start += HUB_BATCH_SYMBOLS) {
+      const part = await this.get<HubCandlesBatch>("/v1/candles/batch", {
+        symbols: unique.slice(start, start + HUB_BATCH_SYMBOLS).join(","),
+        tf,
+        from: Math.floor(from),
+        to: to === undefined ? undefined : Math.floor(to),
+      });
+      Object.assign(answer.series, part.series ?? {});
+      answer.queued.push(...(part.queued ?? []));
+      answer.unknown.push(...(part.unknown ?? []));
+      if (part.to) answer.to = part.to;
+      if (part.warning) answer.warning = this.scrub(part.warning);
+      if (part.reason) answer.reason = part.reason;
+    }
+    return answer;
+  }
+
+  /** Every stock's futures on one trade day (YYYY-MM-DD); the newest stored day when omitted. */
+  foOiDay(date?: string): Promise<HubOiDay> {
+    return this.get<HubOiDay>("/v1/fo/oi/day", { date });
+  }
+
+  /** The F&O list on every stored trade day between two dates (epoch ms), asked for in ranges of ≤ 400 days. */
+  async foMembers(from: number, to: number): Promise<HubMembers> {
+    const answer: HubMembers = { from: isoDay(from), to: isoDay(to), days: [] };
+    for (let start = from; start <= to; start += HUB_MEMBER_DAYS * DAY_MS) {
+      const end = Math.min(to, start + (HUB_MEMBER_DAYS - 1) * DAY_MS);
+      const part = await this.get<HubMembers>("/v1/fo/members", { from: isoDay(start), to: isoDay(end) });
+      answer.days.push(...(part.days ?? []));
+    }
+    return answer;
+  }
+
+  /** A stock's listed futures contracts (near and next month) as hub tickers, with the lot size. */
+  foContracts(symbol: string): Promise<HubContracts> {
+    return this.get<HubContracts>("/v1/fo/contracts", { symbol });
   }
 
   status(): Promise<HubStatus> {

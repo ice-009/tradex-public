@@ -1,5 +1,6 @@
 // Market Data Hub settings (see .env.example). With HUB_URL and HUB_KEY set,
-// Tradex gets all its market data from the hub and never calls Fyers itself.
+// Tradex gets all its market data from the hub; without them it has only
+// labelled sample data.
 // Pure: reads only the env object it's given.
 
 export interface HubConfig {
@@ -18,7 +19,7 @@ const warnOnce = (message: string) => {
   console.warn(message);
 };
 
-/** The hub settings, or null when the hub isn't configured (Tradex then runs standalone). */
+/** The hub settings, or null when the hub isn't configured (Tradex then shows sample data and "Connect a Market Data Hub"). */
 export function hubConfig(env: Record<string, string | undefined> = process.env): HubConfig | null {
   const raw = env.HUB_URL?.trim();
   const key = env.HUB_KEY?.trim();
