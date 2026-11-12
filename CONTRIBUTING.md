@@ -31,8 +31,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) first. The short version: each folder is
 | You're adding… | Put it in… |
 |---|---|
 | An indicator, pattern, screen, scoring rule, backtest logic | `src/core` (pure functions, unit-tested, no I/O) |
-| A market-data source (another broker, a vendor API) | `src/server/data/sources/` (implement `DataSource`) |
-| A reference-data file (lot sizes, calendars) | a provider in `src/server/providers` + its parser in `src/core/parsers` |
+| New market data (another dataset, another broker) | the [Market Data Hub](https://github.com/ice-009/market-data-hub) first, then a typed method in `src/server/providers/hub/client.ts` and a provider that caches it |
 | An API endpoint | type in `src/contracts/api.ts` → service in `src/server/services` → thin route in `src/app/api` → fetcher in `src/client/api.ts` |
 | A panel or control | `src/terminal`, reading data through `src/client` |
 
@@ -41,9 +40,9 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) first. The short version: each folder is
 - **Tests:**
   - Keep `src/core` pure and add a `*.test.ts` next to what you change.
   - Engine code is tested with fake sources and a fake clock, never the network.
-- **Broker API budget:**
-  - Never call the broker directly from a new place: go through the data engine, so the request budget (`src/server/providers/fyers/budget.ts`) still covers every call.
-  - Fyers blocks an account for the day after repeated rate-limit breaches.
+- **Market data comes from the hub only:**
+  - Never call a broker or NSE from Tradex: add the data to the hub and read it through `src/server/providers/hub/client.ts`. `src/hubOnly.test.ts` fails otherwise.
+  - The hub keeps the broker's request budget for every app on it; pace background work with `budgetFor` (`src/server/providers/hub/budget.ts`).
 - **Styling:**
   - Use the design tokens in `src/app/globals.css` (`--surface-*`, `--text-*`, `--accent`, `--pos`, `--neg`, spacing `--sp-*`, type `--fs-*`).
   - Don't hard-code colours.
