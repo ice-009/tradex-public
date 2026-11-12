@@ -2,11 +2,11 @@
 //
 // Today's F&O list applied to the past has survivorship bias: stocks NSE
 // dropped from F&O during the period are missing and stocks added after a
-// strong run are included. When the NSE F&O bhavcopy has been imported
-// (src/server/providers/foBhavStore.ts), membership on a session is "had stock
-// futures that day", so a signal only counts for a stock that could actually
-// have been traded in futures then. Sessions the import doesn't cover fall
-// back to today's list, and the result says how many sessions used which.
+// strong run are included. Where the Market Data Hub has NSE's F&O bhavcopy
+// for a session (GET /v1/fo/members), membership on it is "had stock futures
+// that day", so a signal only counts for a stock that could actually have been
+// traded in futures then. Sessions it has no file for fall back to today's
+// list, and the result says how many sessions used which.
 //
 // In the research run behind this (BTST closing-strength, Oct 2025 – Nov 2026)
 // switching to point-in-time membership moved the result by only ~0.015 pp a
@@ -50,7 +50,7 @@ export function universeNote(params: { sessions: number[]; byDay: ReadonlyMap<nu
   const { sessions, byDay, noHistory } = params;
   const covered = sessions.filter((day) => byDay.has(day));
   if (!covered.length) {
-    return "Universe: today's F&O list for every session, so stocks dropped from F&O during the period are missing and later additions are included (survivorship bias). Import the NSE F&O bhavcopy under Market data to use the list as it was on each day.";
+    return "Universe: today's F&O list for every session, so stocks dropped from F&O during the period are missing and later additions are included (survivorship bias). The Market Data Hub has no F&O bhavcopy for these sessions, which is where the list of each day comes from.";
   }
   const range = `${dayLabel(covered[0])} – ${dayLabel(covered.at(-1)!)}`;
   const rest = sessions.length - covered.length;

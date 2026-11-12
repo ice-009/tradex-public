@@ -1,11 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { api } from "@/client/api";
 
-// Stock-futures lot sizes, loaded once per page from /api/lots.
+// Stock-futures lot sizes (from the Market Data Hub), loaded once per page from /api/lots.
 
 interface LotFeed {
   lots: Record<string, number>;
-  source: "nse" | "fyers" | "hub" | "disk" | "none" | "loading";
+  source: "hub" | "disk" | "none" | "loading";
 }
 let lotFeed: LotFeed = { lots: {}, source: "loading" };
 let lotsRequested = false;

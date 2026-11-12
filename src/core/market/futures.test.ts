@@ -1,23 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { expiryOf, lastTuesday, lotsForRisk, nearMonthFuture, underlyingOf } from "./futures";
+import { expiryDayKey, lotsForRisk, pickContract, type FuturesContract } from "./futures";
+
+const NOV = Date.UTC(2026, 10, 24);
+const DEC = Date.UTC(2026, 11, 29);
+const contracts: FuturesContract[] = [
+  { ticker: "SBIN26DECFUT", expiry: DEC, kind: "next" },
+  { ticker: "SBIN26NOVFUT", expiry: NOV, kind: "near" },
+];
 
 describe("stock futures contracts", () => {
-  it("expires on the last Tuesday", () => {
-    expect(new Date(lastTuesday(2026, 10)).getUTCDate()).toBe(24);
+  it("reads the hub's expiry dates", () => {
+    expect(expiryDayKey("2026-11-24")).toBe(NOV);
+    expect(expiryDayKey("24-Nov-2026")).toBeNull();
   });
 
-  it("picks the near month, rolling the day after expiry", () => {
-    expect(nearMonthFuture("SBIN", Date.UTC(2026, 10, 4))).toBe("NSE:SBIN26NOVFUT");
-    expect(nearMonthFuture("SBIN", Date.UTC(2026, 10, 24))).toBe("NSE:SBIN26NOVFUT");
-    expect(nearMonthFuture("SBIN", Date.UTC(2026, 10, 25))).toBe("NSE:SBIN26DECFUT");
-    expect(nearMonthFuture("SBIN", Date.UTC(2026, 11, 30))).toBe("NSE:SBIN27JANFUT");
-    expect(nearMonthFuture("SBIN", Date.UTC(2026, 10, 4), 1)).toBe("NSE:SBIN26DECFUT");
+  it("trades the near month unless it expires inside the holding period", () => {
+    expect(pickContract(contracts, Date.UTC(2026, 10, 4), 1)).toMatchObject({ near: { ticker: "SBIN26NOVFUT" }, next: { ticker: "SBIN26DECFUT" }, rollToNext: false });
+    expect(pickContract(contracts, Date.UTC(2026, 10, 4), 25).rollToNext).toBe(true);
+    expect(pickContract(contracts, Date.UTC(2026, 10, 22), 1).rollToNext).toBe(true);
   });
 
-  it("reads expiry and underlying back from a contract", () => {
-    expect(expiryOf("NSE:SBIN26NOVFUT")).toBe(Date.UTC(2026, 10, 24));
-    expect(expiryOf("NSE:SBIN-EQ")).toBeNull();
-    expect(underlyingOf("NSE:M&MFIN26DECFUT")).toBe("M&MFIN");
+  it("ignores an expired contract and copes with no next month", () => {
+    const picked = pickContract(contracts, Date.UTC(2026, 10, 25), 1);
+    expect(picked.near?.ticker).toBe("SBIN26DECFUT");
+    expect(picked.next).toBeNull();
+    expect(picked.rollToNext).toBe(false);
+    expect(pickContract([], Date.UTC(2026, 10, 4), 1)).toEqual({ near: null, next: null, rollToNext: false });
   });
 
   it("sizes lots to a max loss", () => {

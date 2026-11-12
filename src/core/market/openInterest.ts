@@ -1,5 +1,5 @@
-// Open-interest reading of a stock's futures for one session, from the NSE F&O
-// bhavcopy (src/core/parsers/foBhavcopy.ts). Pure.
+// Open-interest reading of a stock's futures for one session, from NSE's F&O
+// bhavcopy as the Market Data Hub serves it (GET /v1/fo/oi/day). Pure.
 //
 // The usual "buildup" labels cross the sign of the price change with the sign
 // of the change in open interest:
@@ -18,7 +18,39 @@
 // either overnight or close to close. That is why it is shown as a fact next to
 // a setup and never feeds the setup score.
 
-import type { FoDayRecord } from "@/core/parsers/foBhavcopy";
+/** One month's stock futures on a trade day. */
+export interface FoLeg {
+  /** Expiry as a day key (UTC midnight of the date). */
+  expiry: number;
+  close: number;
+  settle: number;
+  prevClose: number;
+  /** Contracts traded. */
+  volume: number;
+  /** Open interest in shares. */
+  oi: number;
+  chgOi: number;
+}
+
+/** One underlying's stock futures on one trade day. */
+export interface FoDayRecord {
+  /** Trade day key (UTC midnight of the IST date). */
+  day: number;
+  /** App ticker (after NSE's renames). */
+  symbol: string;
+  /** Ticker as NSE wrote it that day. */
+  nseSymbol: string;
+  /** Listed months (usually 3). */
+  expiries: number;
+  lot: number | null;
+  underlying: number | null;
+  near: FoLeg;
+  next: FoLeg | null;
+  /** Open interest summed over every listed month (shares). */
+  oi: number;
+  /** Sum of each month's change in OI (shares). */
+  chgOi: number;
+}
 
 export type OiBuildup = "long-buildup" | "short-buildup" | "short-covering" | "long-unwinding";
 
@@ -90,7 +122,7 @@ export function sharesShort(value: number): string {
 /** Longer explanation for a tooltip. `dateLabel` is the session, already formatted. */
 export function oiTooltip(fact: OiFact, dateLabel: string): string {
   const lines = [
-    `Stock futures on ${dateLabel} (NSE F&O bhavcopy):`,
+    `Stock futures on ${dateLabel} (NSE F&O bhavcopy, via the Market Data Hub):`,
     `Near-month future ${signed(fact.pricePct, 2)}%, open interest across all months ${fact.oiPct === null ? "new" : `${signed(fact.oiPct, 1)}%`} (${fact.chgOi >= 0 ? "+" : "−"}${sharesShort(Math.abs(fact.chgOi))} to ${sharesShort(fact.oi)} shares).`,
   ];
   if (fact.basisPct !== null) lines.push(`Near-month ${fact.basisPct >= 0 ? "premium" : "discount"} to the stock: ${Math.abs(fact.basisPct).toFixed(2)}%.`);

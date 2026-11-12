@@ -2169,28 +2169,31 @@ tr.is-stale:hover > td { opacity: 0.85; }
 .tx-setup-status.is-triggered { border-left-color: var(--pos); }
 .tx-setup-status.is-triggered strong { color: var(--pos); }
 
-/* ---------- Market data dialog (src/terminal/MarketDataDialog.tsx) ---------- */
+/* ---------- Market data panel: provided by your hub (src/terminal/MarketDataDialog.tsx) ---------- */
 button.tx-api-meter { border: 0; background: transparent; font: inherit; cursor: pointer; }
 button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 .tx-mdata { display: flex; flex-direction: column; gap: var(--sp-3, 12px); font-size: var(--fs-sm, 12px); }
 .tx-mdata-intro, .tx-mdata-message { margin: 0; color: var(--text-muted, var(--text-subtle)); line-height: 1.5; }
 .tx-mdata-error { margin: 0; color: var(--neg); }
 .tx-mdata-rows { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
-.tx-mdata-row { display: grid; grid-template-columns: auto 150px 1fr auto; align-items: center; gap: var(--sp-2, 8px); cursor: pointer; }
+.tx-mdata-row { display: grid; align-items: center; gap: var(--sp-2, 8px); }
 .tx-mdata-name { color: var(--text); font-weight: 500; }
 .tx-mdata-count { font-variant-numeric: tabular-nums; color: var(--text-muted, var(--text-subtle)); }
-.tx-mdata-bar { position: relative; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
-.tx-mdata-bar.is-wide { flex: 1; }
-.tx-mdata-bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: inherit; transition: width 0.4s ease; }
 .tx-mdata-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2, 8px); margin: 0; }
 .tx-mdata-facts div { padding: var(--sp-2, 8px); border-radius: var(--r-md, 6px); background: var(--surface-2); }
 .tx-mdata-facts dt { color: var(--text-subtle); font-size: var(--fs-2xs, 10px); margin-bottom: 2px; }
 .tx-mdata-facts dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
-.tx-mdata-progress { display: flex; align-items: center; gap: var(--sp-2, 8px); font-variant-numeric: tabular-nums; color: var(--text-muted, var(--text-subtle)); }
-.tx-mdata-actions { display: flex; align-items: center; gap: var(--sp-3, 12px); flex-wrap: wrap; }
-.tx-mdata-fo { display: flex; flex-direction: column; gap: var(--sp-2, 8px); padding-top: var(--sp-3, 12px); border-top: 1px solid var(--border, var(--surface-3)); }
-.tx-mdata-row.is-static { cursor: default; }
-@media (max-width: 640px) { .tx-mdata-facts { grid-template-columns: 1fr; } .tx-mdata-row { grid-template-columns: auto 1fr auto; } .tx-mdata-row .tx-mdata-bar { display: none; } }
+.tx-mdata-row.is-static { cursor: default; grid-template-columns: auto minmax(150px, 1fr) auto; }
+.tx-mdata-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--text-subtle); }
+.tx-mdata-dot.is-ok { background: var(--pos); }
+.tx-mdata-dot.is-bad { background: var(--neg); }
+.tx-mdata a, .tx-hub-banner a { color: var(--accent-text); }
+
+/* ---------- "Connect a Market Data Hub" banner (src/terminal/HubBanner.tsx) ---------- */
+.tx-hub-banner { display: flex; align-items: center; gap: var(--sp-3, 12px); flex-wrap: wrap; padding: 6px 16px; border-bottom: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-muted, var(--text-subtle)); font-size: var(--fs-sm, 12px); }
+.tx-hub-banner strong { color: var(--warn); }
+.tx-hub-banner button { margin-left: auto; }
+@media (max-width: 640px) { .tx-mdata-facts { grid-template-columns: 1fr; } .tx-mdata-row.is-static { grid-template-columns: auto 1fr; } .tx-mdata-row .tx-mdata-count { grid-column: 2; } }
 
 /* ---------- Screener: fresh setups (src/core/screener/fresh.ts) ---------- */
 .tx-new-badge { display: inline-block; margin-left: 6px; font-variant-numeric: tabular-nums; padding: 0 5px; border-radius: var(--r-sm, 4px); font-size: var(--fs-2xs, 10px); font-weight: 600; line-height: 16px; letter-spacing: 0.02em; color: var(--accent-text); background: var(--accent-soft); }

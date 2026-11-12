@@ -6,13 +6,15 @@ Code: `src/lib/screener/screens.ts` (rules), `features.ts` (metrics), `dailyStor
 
 ## Data
 
+All of it comes from the [Market Data Hub](https://github.com/ice-009/market-data-hub), which keeps the broker's history and NSE's files current; Tradex makes no broker or NSE requests itself.
+
 | Input | Source | Notes |
 |---|---|---|
-| Daily OHLCV, ~245 sessions | Fyers `/data/history` (resolution D), one request per stock, cached in `.cache/screener/daily/` | Fyers allows ~200 requests/min. The first scan of a universe downloads it once. |
-| Daily extension + **delivery %** | NSE `sec_bhavdata_full_DDMMYYYY.csv` (one file per session, whole market), cached in `.cache/screener/bhav/` | Published in the evening. `DELIV_PER` is the % of traded quantity taken into delivery. |
-| Corporate actions | NSE bhavcopy `PREV_CLOSE` is adjusted on ex-dates | If it disagrees with our stored close by more than 1.5%, that stock is re-downloaded from Fyers. |
-| Today's forming candle | Fyers `/data/quotes`, 50 symbols per request | Overlaid during market hours until that day's bhavcopy is out. |
-| Universes | niftyindices.com `ind_nifty{50,200,500}list.csv`; NSE `fo_mktlots.csv` | Snapshots in `data/universe/`. Indices rebalance twice a year, so refresh then. These are today's constituents, so results carry survivorship bias. |
+| Daily OHLCV, up to 5 years | The hub's `GET /v1/candles/batch` (300 symbols a request), cached in `.cache/screener/daily/` | Read in full once per symbol, then only the last week. Symbols the hub doesn't hold yet are downloaded by the hub in the background. |
+| **Delivery %** | NSE's `sec_bhavdata_full` file, as the hub stores it (`dp` on each daily bar) | Published in the evening. `DELIV_PER` is the % of traded quantity taken into delivery. |
+| Corporate actions | The hub drops and re-downloads a stock's history after a split or bonus | When a stored close moves by more than 1.5%, Tradex reads that stock again in full. |
+| Today's forming candle | The hub's `/v1/quotes` and live stream | Overlaid during market hours until the day's bar is stored. |
+| Universes | The hub's F&O list (`/v1/universe/fno`, from the newest F&O bhavcopy); niftyindices.com `ind_nifty{50,200,500}list.csv` | Index lists are snapshots in `data/universe/`, refreshed when indices rebalance. They are today's constituents, so results carry survivorship bias; the F&O universe is point-in-time in backtests (`/v1/fo/members`). |
 
 Cross-check (4 Nov 2026): the screener showed BEL +4.71% with 49.9% delivery and TCS −2.52%, the same figures as NSE's bhavcopy.
 
@@ -140,10 +142,9 @@ Plan: stop under the event day's low (at most 2.5 ATR); target 2R.
 Long-only, so the negative drift after bad news is used as a **caution**. Any setup on a stock that gapped down ≥ 4% on ≥ 3× volume in the last 10 sessions (or today) shows a warning on its setup card.
 
 ### Results calendar (best-effort)
-- Source: `https://www.nseindia.com/api/event-calendar`, an undocumented endpoint used by open-source NSE wrappers. The server loads the NSE home page for cookies first, keeps rows whose purpose mentions results, and caches for 6 h (30 min after a failure).
+- Source: the hub's `GET /v1/results-calendar` (its copy of NSE's event calendar, financial-results rows only), cached for 6 h (10 min after a failure).
 - It's used to show "Results in N days" and to warn when a plan would be held into the announcement.
-- If NSE refuses the request, the calendar says so. The Results screens don't depend on it.
-- It couldn't be tested from the development container, which has no access to nseindia.com. The response parser was checked against the field names the wrappers document: `symbol`, `company` / `sm_name`, `purpose` / `bm_purpose` / `bm_desc`, `date` / `bm_date`.
+- If the hub can't answer, the calendar says so. The Results screens don't depend on it.
 
 ## 15–30 days (positional)
 

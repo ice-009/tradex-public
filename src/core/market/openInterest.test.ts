@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FoDayRecord } from "@/core/parsers/foBhavcopy";
+import type { FoDayRecord } from "./openInterest";
 import { combinedOiChangePct, oiBuildup, oiFact, oiTag, oiTooltip } from "./openInterest";
 
 const record = (close: number, prevClose: number, oi: number, chgOi: number): FoDayRecord => ({

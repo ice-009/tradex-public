@@ -5,28 +5,31 @@ import { COST_PRESETS, type CostModel, type CostPresetId } from "@/core/backtest
 import { BacktestInputError, runPortfolio, type BacktestResult } from "@/core/backtest/portfolio";
 import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/signals";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
+import { DAY_MS, istParts } from "@/core/market/session";
 import { SCREENS } from "@/core/screener/screens";
+import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { foMembership } from "@/server/providers/foBhavStore";
-import { getLotSizes } from "@/server/providers/lotSizes";
+import { foMembership } from "@/server/providers/foData";
+import { getLotSizes } from "@/server/providers/reference";
 import { UNIVERSES, getUniverse } from "@/server/providers/universe";
 import { BENCHMARK, parseUniverse } from "./screener";
 
-// Strategy backtests: replay the screens over the stored daily history of a
-// universe (src/core/backtest/signals.ts), then trade the signals as one
-// account (portfolio.ts). Only bars already on disk are used — this never asks
-// a broker for more history.
+// Strategy backtests: replay the screens over a universe's daily history (up to
+// the 5 years the Market Data Hub serves; src/core/backtest/signals.ts), then
+// trade the signals as one account (portfolio.ts). The bars come from the
+// screener's store (dailyStore), which reads them from the hub's batch candles;
+// opening the backtest asks the hub for any symbol not held yet.
 //
-// Two caches, both keyed by the last stored session so a new EOD file
+// Two caches, both keyed by the last stored session so a new session
 // invalidates them:
 //  - the signal scan per universe (the slow part: features for every stock on
 //    every session, ~5–10 s for ~240 stocks × 250 sessions);
 //  - finished results per request (the portfolio pass itself takes milliseconds).
 //
-// The F&O universe is point-in-time when the NSE F&O bhavcopy has been
-// imported (src/core/backtest/universe.ts): on a session it covers, only stocks
-// that had stock futures that day can signal; other sessions use today's list.
-// Every result says which list was used on how many sessions.
+// The F&O universe is point-in-time (src/core/backtest/universe.ts) on every
+// session the hub has an F&O list for (GET /v1/fo/members): only stocks that had
+// stock futures that day can signal; other sessions use today's list. Every
+// result says which list was used on how many sessions.
 
 /** Bump when the scan or simulation rules change, so a running server drops cached results. */
 const BACKTEST_VERSION = 5;
@@ -50,22 +53,24 @@ interface Membership {
   key: string;
 }
 
-async function coveredSymbols(universe: string) {
+async function coveredSymbols(universe: string, options: { sync?: boolean } = {}) {
   const id = parseUniverse(universe);
   const symbols = (await getUniverse(id)).map((member) => member.symbol);
-  // Point-in-time F&O membership from the imported bhavcopy (read from disk; never downloads).
-  const byDay = id === "fno" ? foMembership() : new Map<number, Set<string>>();
+  // Point-in-time F&O membership over the stored span, from the hub (cached).
+  const today = istParts().day;
+  const byDay = id === "fno" ? await foMembership(today - DEEP_HISTORY_DAYS * DAY_MS, today) : new Map<number, Set<string>>();
   const pit = byDay.size ? pointInTimeUniverse({ byDay, today: symbols }) : null;
   const wanted = pit ? pit.symbols : symbols;
-  // Disk only: hasData reads what's stored and never starts a download.
+  // Ask the hub for anything not held yet (in the background); meanwhile use what's stored.
+  if (options.sync) screenerStore.ensureFresh([...wanted, BENCHMARK]);
   await screenerStore.hasData([...wanted, BENCHMARK]);
   const hasBars = (symbol: string) => screenerStore.getBars(symbol).length > 0;
-  const today = new Set(symbols);
+  const current = new Set(symbols);
   const membership: Membership | null = pit
     ? {
         byDay,
         isMember: pit.isMember,
-        noHistory: pit.symbols.filter((symbol) => !today.has(symbol) && !hasBars(symbol)),
+        noHistory: pit.symbols.filter((symbol) => !current.has(symbol) && !hasBars(symbol)),
         key: `pit${byDay.size}-${Math.max(...byDay.keys())}`,
       }
     : null;
@@ -73,8 +78,10 @@ async function coveredSymbols(universe: string) {
 }
 
 export async function backtestInfo(universe: string): Promise<BacktestInfoResponse> {
-  const { id, symbols, covered } = await coveredSymbols(universe);
+  const { id, symbols, covered } = await coveredSymbols(universe, { sync: true });
   const dates = [...new Set(covered.flatMap((symbol) => screenerStore.getBars(symbol).map((bar) => bar.t)))].sort((a, b) => a - b);
+  const { progress } = screenerStore;
+  const active = screenerStore.isSyncing() || progress.queued > 0;
   return {
     universe: id,
     label: UNIVERSES.find((u) => u.id === id)?.label,
@@ -82,6 +89,7 @@ export async function backtestInfo(universe: string): Promise<BacktestInfoRespon
     covered: covered.length,
     history: dates.length ? { from: dates[0], to: dates.at(-1)!, sessions: dates.length, dates } : null,
     warmupDate: dates[WARMUP_SESSIONS - 1] ?? null,
+    sync: { active, queued: progress.queued, message: progress.message, error: progress.phase === "error" ? progress.message : null },
   };
 }
 
@@ -120,7 +128,7 @@ export function parseBacktestRequest(body: unknown): BacktestRequest {
 
 async function scanFor(universe: string): Promise<{ scan: SignalScan; key: string; cached: boolean; ms: number; membership: Membership | null }> {
   const { id, covered, scanned, membership } = await coveredSymbols(universe);
-  if (!covered.length) throw new BacktestError("No daily history is stored for this universe yet. Open the screener once a broker is connected to sync it.");
+  if (!covered.length) throw new BacktestError(`No daily bars for this universe yet: they are read from the Market Data Hub. ${screenerStore.progress.message || "Try again in a moment."}`);
   const lastSession = Math.max(...scanned.map((symbol) => screenerStore.getBars(symbol).at(-1)?.t ?? 0));
   const key = `${id}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
   let pending = scans.get(key);

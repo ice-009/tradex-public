@@ -45,7 +45,7 @@ function isTypingTarget(target: EventTarget | null) {
 interface LoadStatus {
   loading: boolean;
   error: string | null;
-  source: "broker" | "eod" | "sample" | null;
+  source: "broker" | "sample" | null;
   reason: string | null;
 }
 
@@ -460,9 +460,9 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
           <div className="tx-cell-error">{status.error}</div>
         </div>
       )}
-      {(status.source === "sample" || status.source === "eod") && !status.loading && (
+      {status.source === "sample" && !status.loading && (
         <div className="tx-sample-badge" title={status.reason ?? undefined}>
-          {status.source === "sample" ? "Sample data · no market data source connected" : "End-of-day data · broker not connected"}
+          Sample data · connect a Market Data Hub for real prices
         </div>
       )}
       {legend?.scrolledAway && (

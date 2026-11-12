@@ -291,7 +291,7 @@ export function ScreenerPanel() {
               `Market regime: ${data.regime.label}`,
               ...data.regime.reasons,
               data.regime.state === "healthy" ? "Long setups get no penalty." : `Long setups lose ${data.regime.state === "risk-off" ? 10 : 4} points.`,
-              data.ban ? (data.ban.available ? `F&O ban today: ${data.ban.symbols.length ? data.ban.symbols.join(", ") : "none"}` : "F&O ban list: NSE couldn't be reached") : "",
+              data.ban ? (data.ban.available ? `F&O ban today: ${data.ban.symbols.length ? data.ban.symbols.join(", ") : "none"}` : "F&O ban list: not available from the hub yet") : "",
             ]
               .filter(Boolean)
               .join("\n")}
@@ -300,7 +300,7 @@ export function ScreenerPanel() {
             Market: {data.regime.label}
           </span>
         )}
-        <span className={`tx-scr-status ${data?.status === "error" || data?.asOf?.stale ? "is-error" : ""}`} title={data?.asOf?.stale ? "Market is open but no live prices are arriving (broker disconnected or today's API budget used up): the screens show the last close." : progress?.message}>
+        <span className={`tx-scr-status ${data?.status === "error" || data?.asOf?.stale ? "is-error" : ""}`} title={data?.asOf?.stale ? "Market is open but no live prices are arriving from the Market Data Hub (its broker is disconnected or today's budget is used up): the screens show the last close." : progress?.message}>
           {syncing && <span className="tx-spinner tx-spinner-sm" />}
           {status}
         </span>
@@ -472,7 +472,7 @@ export function ScreenerPanel() {
             <div className="tx-scr-state">
               <span className="tx-spinner" />
               <strong>Building the daily history</strong>
-              <span>First run for this universe: each stock is downloaded once (Fyers allows ~200 requests/min), then it&apos;s cached on disk.</span>
+              <span>{data.progress?.queued ? `The Market Data Hub is downloading ${data.progress.queued} symbol${data.progress.queued === 1 ? "" : "s"} it didn't hold yet; Tradex asks again every 30 s.` : "Reading 5 years of daily bars for this universe from the Market Data Hub (one request), then they're kept on disk."}</span>
             </div>
           )}
           {data?.status === "error" && (

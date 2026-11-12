@@ -203,10 +203,10 @@ export class MarketStream {
     await this.placeOnSocket([...this.refCounts.keys()].filter((symbol) => !this.live.has(symbol)));
     const polled = this.polledSymbols();
     if (!polled.length) return;
-    const fetch = () => this.engine.quotes(polled, { maxAgeMs: Math.max(1_000, this.o.pollMs - 1_000) });
-    const quotes = await (this.o.runPolling ? this.o.runPolling(fetch) : fetch());
+    const readQuotes = () => this.engine.quotes(polled, { maxAgeMs: Math.max(1_000, this.o.pollMs - 1_000) });
+    const quotes = await (this.o.runPolling ? this.o.runPolling(readQuotes) : readQuotes());
     for (const quote of quotes) {
-      if (quote.delayed) continue; // end-of-day closes aren't ticks
+      if (quote.delayed) continue; // a stored last price isn't a tick
       const previous = this.latest.get(quote.symbol);
       if (previous && previous.ltp === quote.ltp && previous.high === quote.high && previous.low === quote.low && previous.volume === quote.volume) continue;
       const now = this.o.now();
