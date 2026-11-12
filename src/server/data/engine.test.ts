@@ -57,7 +57,7 @@ describe("DataEngine history", () => {
 
   it("falls back past a source that's down, fails, or has no data, explaining why", async () => {
     const down = fakeSource("down", "broker", { history: () => [candle(1)], down: "not connected" });
-    const empty = fakeSource("empty", "eod", { history: () => [] });
+    const empty = fakeSource("empty", "sample", { history: () => [] });
     const sample = fakeSource("sample", "sample", { history: () => [candle(1)] });
     const answer = await engine([down.source, empty.source, sample.source]).history({ symbol: "SBIN", interval: "1d", from: 0 });
     expect(answer.source?.id).toBe("sample");
@@ -65,7 +65,7 @@ describe("DataEngine history", () => {
   });
 
   it("skips sources that don't support the interval or kind", async () => {
-    const eod = fakeSource("eod", "eod", { history: () => [candle(1)], intervals: ["1d"] });
+    const eod = fakeSource("eod", "sample", { history: () => [candle(1)], intervals: ["1d"] });
     const sample = fakeSource("sample", "sample", { history: () => [candle(2)] });
     const e = engine([eod.source, sample.source]);
     expect((await e.history({ symbol: "SBIN", interval: "15m", from: 0 })).source?.id).toBe("sample");
@@ -80,7 +80,7 @@ describe("DataEngine history", () => {
 
   it("rests a source after a source-wide failure, but not after a bad-symbol error", async () => {
     const clock = { now: NOW };
-    let error = new Error("Fyers candles fetch failed: 422 Unprocessable Entity");
+    let error = new Error("Market Data Hub 422 bad_request: candles fetch failed");
     const broker = fakeSource("broker", "broker", { history: () => error });
     const sample = fakeSource("sample", "sample", { history: () => [candle(1)] });
     const e = engine([broker.source, sample.source], clock);
@@ -123,7 +123,7 @@ describe("DataEngine history", () => {
 describe("DataEngine quotes", () => {
   it("fills what the broker misses from the next source, marking delayed quotes", async () => {
     const broker = fakeSource("broker", "broker", { quotes: (symbols) => symbols.filter((s) => s !== "NEWLIST").map((s) => quote(s, 10)) });
-    const eod = fakeSource("eod", "eod", { quotes: (symbols) => symbols.map((s) => quote(s, 9)), delayed: true });
+    const eod = fakeSource("eod", "sample", { quotes: (symbols) => symbols.map((s) => quote(s, 9)), delayed: true });
     const quotes = await engine([broker.source, eod.source]).quotes(["sbin", "NEWLIST"], { maxAgeMs: 60_000 });
     expect(quotes).toEqual([
       { ...quote("SBIN", 10), source: "broker" },
@@ -152,7 +152,7 @@ describe("DataEngine quotes", () => {
   });
 
   it("never caches delayed quotes as fresh, and honours a kinds filter", async () => {
-    const eod = fakeSource("eod", "eod", { quotes: (symbols) => symbols.map((s) => quote(s, 9)), delayed: true });
+    const eod = fakeSource("eod", "sample", { quotes: (symbols) => symbols.map((s) => quote(s, 9)), delayed: true });
     const e = engine([eod.source]);
     await e.quotes(["SBIN"], { maxAgeMs: 60_000 });
     await e.quotes(["SBIN"], { maxAgeMs: 60_000 });
@@ -160,9 +160,21 @@ describe("DataEngine quotes", () => {
     expect(await e.quotes(["SBIN"], { maxAgeMs: 60_000, kinds: ["broker"] })).toEqual([]);
   });
 
+  it("answers a live source's stale quote marked delayed, without caching it", async () => {
+    const hub = fakeSource("hub", "broker", { quotes: (symbols) => symbols.map((s) => (s === "INFY" ? { ...quote(s, 9), delayed: true } : quote(s, 10))) });
+    const e = engine([hub.source]);
+    expect(await e.quotes(["SBIN", "INFY"], { maxAgeMs: 60_000 })).toEqual([
+      { ...quote("SBIN", 10), source: "hub" },
+      { ...quote("INFY", 9), source: "hub", delayed: true },
+    ]);
+    expect(e.cachedQuote("INFY")).toBeNull();
+    await e.quotes(["SBIN", "INFY"], { maxAgeMs: 60_000 });
+    expect(hub.calls.quotes).toEqual([["SBIN", "INFY"], ["INFY"]]); // SBIN from the cache, INFY asked again
+  });
+
   it("falls back when the broker is down", async () => {
     const broker = fakeSource("broker", "broker", { quotes: () => [quote("SBIN", 10)], down: "logged out" });
-    const eod = fakeSource("eod", "eod", { quotes: (symbols) => symbols.map((s) => quote(s, 9)), delayed: true });
+    const eod = fakeSource("eod", "sample", { quotes: (symbols) => symbols.map((s) => quote(s, 9)), delayed: true });
     const quotes = await engine([broker.source, eod.source]).quotes(["SBIN"], { maxAgeMs: 60_000 });
     expect(quotes[0]).toMatchObject({ source: "eod", delayed: true });
     expect(broker.calls.quotes).toHaveLength(0);

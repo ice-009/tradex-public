@@ -12,10 +12,10 @@ interface IntervalConfig {
 }
 
 export const CHART_INTERVAL_CONFIG: Record<ChartInterval, IntervalConfig> = {
-  // Fyers' Standard plan serves 1 year of intraday and 5 years of daily history
-  // (verified: older ranges fail with HTTP 422, code -50).
+  // The Market Data Hub serves 5 years of daily, 1 year of intraday (5m and up)
+  // and 30 days of 1-minute history (3m is built from 1m).
   "1m": { unit: "minutes", interval: 1, maxRange: "1mo", defaultRange: "1d", movingAveragePeriod: 20 },
-  "3m": { unit: "minutes", interval: 3, maxRange: "3mo", defaultRange: "5d", movingAveragePeriod: 20 },
+  "3m": { unit: "minutes", interval: 3, maxRange: "1mo", defaultRange: "5d", movingAveragePeriod: 20 },
   "5m": { unit: "minutes", interval: 5, maxRange: "1y", defaultRange: "5d", movingAveragePeriod: 20 },
   "10m": { unit: "minutes", interval: 10, maxRange: "1y", defaultRange: "5d", movingAveragePeriod: 20 },
   "15m": { unit: "minutes", interval: 15, maxRange: "1y", defaultRange: "5d", movingAveragePeriod: 20 },
@@ -85,7 +85,7 @@ export interface IntervalMeta {
   title: string; // long name
   ms: number; // nominal bar duration (drawing extrapolation, live bucketing)
   intraday: boolean;
-  /** History window requested on load: the Fyers Standard plan serves 1y intraday / 5y daily. */
+  /** History window requested on load: the hub serves 5y daily, 1y intraday, 30 days of 1m. */
   range: ChartRange;
 }
 
@@ -94,7 +94,7 @@ const DAY = 24 * 60 * MINUTE;
 
 export const INTERVALS: IntervalMeta[] = [
   { value: "1m", label: "1m", title: "1 minute", ms: MINUTE, intraday: true, range: "1mo" },
-  { value: "3m", label: "3m", title: "3 minutes", ms: 3 * MINUTE, intraday: true, range: "3mo" },
+  { value: "3m", label: "3m", title: "3 minutes", ms: 3 * MINUTE, intraday: true, range: "1mo" },
   { value: "5m", label: "5m", title: "5 minutes", ms: 5 * MINUTE, intraday: true, range: "3mo" },
   { value: "10m", label: "10m", title: "10 minutes", ms: 10 * MINUTE, intraday: true, range: "3mo" },
   { value: "15m", label: "15m", title: "15 minutes", ms: 15 * MINUTE, intraday: true, range: "1y" },
