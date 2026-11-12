@@ -7,21 +7,21 @@ import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { scanSignals } from "@/core/backtest/signals";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { marketStates, replaySignals, roundTripPct, summarizeEvidence, type EvidenceTable } from "@/core/plan/evidence";
+import { DAY_MS, istParts } from "@/core/market/session";
 import type { DailyBar } from "@/core/types";
+import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { deepDailyBars, lastFinalDay, lastStoredDay } from "@/server/providers/deepHistory";
-import { foMembership } from "@/server/providers/foBhavStore";
-import { getLotSizes } from "@/server/providers/lotSizes";
+import { foMembership } from "@/server/providers/foData";
+import { getLotSizes } from "@/server/providers/reference";
 import { getUniverse } from "@/server/providers/universe";
 import { liveRecord } from "@/server/services/btstRecord";
 import { BENCHMARK } from "@/server/services/screener";
 
 // Strategy evidence for the daily plan (rules in src/core/plan/evidence.ts):
-// every screen replayed over the stored daily history of the F&O list — up to
-// five years where "Download F&O history" has filled the market database —
-// split by NIFTY above / below its 200-day average.
+// every screen replayed over the F&O list's daily history — the five years the
+// Market Data Hub serves, held by the screener's store (dailyStore) — split by
+// NIFTY above / below its 200-day average.
 //
-// Only data already on disk is read; this never asks a broker for history.
 // The replay takes ~10 s (features for ~220 stocks × ~1,200 sessions), so it
 // runs in the background, yields to the event loop between sessions, and
 // answers "computing" with its progress until it's done. The result changes
@@ -65,18 +65,40 @@ const state = (globalForEvidence.planEvidence ??= { current: null, pending: null
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-/** What the table would be computed from right now (cheap: series metadata only). */
+/** Day key of the newest session whose daily bar is final: today only after 16:00 IST (like the store). */
+function lastFinalDay(now = Date.now()): number {
+  const { day, minutes } = istParts(now);
+  return minutes >= 16 * 60 ? day : day - DAY_MS;
+}
+
+/** A symbol's stored bars up to `lastDay`. */
+const barsThrough = (symbol: string, lastDay: number) => screenerStore.getBars(symbol).filter((bar) => bar.t <= lastDay);
+
+/** What the table would be computed from right now (cheap: the newest and oldest stored bar per symbol). */
 async function keyInfo(): Promise<KeyInfo> {
   if (state.keyMemo && Date.now() - state.keyMemo.at < KEY_TTL_MS) return state.keyMemo.value;
   const today = (await getUniverse("fno")).map((member) => member.symbol);
-  // Point-in-time F&O membership where the NSE F&O bhavcopy has been imported (disk only).
-  const byDay = foMembership();
+  // Point-in-time F&O membership over the stored span, from the hub (cached).
+  const day = istParts().day;
+  const byDay = await foMembership(day - DEEP_HISTORY_DAYS * DAY_MS, day);
   const symbols = byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : today;
+  screenerStore.ensureFresh([...symbols, BENCHMARK]);
   await screenerStore.hasData([...symbols, BENCHMARK]);
   const lastDay = lastFinalDay();
-  const last = lastStoredDay([...symbols, BENCHMARK], (symbol) => screenerStore.getBars(symbol).at(-1)?.t ?? 0, lastDay);
+  let last = 0;
+  let first = Infinity;
+  let covered = 0;
+  for (const symbol of [...symbols, BENCHMARK]) {
+    const bars = screenerStore.getBars(symbol);
+    if (!bars.length) continue;
+    covered += 1;
+    first = Math.min(first, bars[0].t);
+    const newest = bars.findLast((bar) => bar.t <= lastDay)?.t ?? 0;
+    if (newest > last) last = newest;
+  }
   const membership = byDay.size ? `pit${byDay.size}-${Math.max(...byDay.keys())}` : "today";
-  const value = { key: `${last}:${symbols.length}:${membership}:${COST_PRESET}:${EVIDENCE_VERSION}`, symbols, byDay, today, lastDay };
+  // More symbols or a deeper history (the hub finished a download) changes the key too.
+  const value = { key: `${last}:${covered}/${symbols.length}:${Number.isFinite(first) ? first : 0}:${membership}:${COST_PRESET}:${EVIDENCE_VERSION}`, symbols, byDay, today, lastDay };
   state.keyMemo = { at: Date.now(), value };
   return value;
 }
@@ -94,13 +116,13 @@ async function compute(info: KeyInfo): Promise<Computed> {
   const started = Date.now();
   const bars = new Map<string, DailyBar[]>();
   for (const symbol of [...info.symbols, BENCHMARK]) {
-    bars.set(symbol, deepDailyBars(symbol, screenerStore.getBars(symbol), info.lastDay));
+    bars.set(symbol, barsThrough(symbol, info.lastDay));
     await yieldToEventLoop();
   }
   const pit = info.byDay.size ? pointInTimeUniverse({ byDay: info.byDay, today: info.today }) : null;
   const benchmark = bars.get(BENCHMARK) ?? [];
   const symbols = info.symbols.filter((symbol) => (bars.get(symbol)?.length ?? 0) > 0);
-  if (!symbols.length || benchmark.length < 200) throw new Error("Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars (Market data → Download F&O history).");
+  if (!symbols.length || benchmark.length < 200) throw new Error(`Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim());
 
   const pending = state.pending!;
   pending.total = new Set(symbols.flatMap((symbol) => bars.get(symbol)!.map((bar) => bar.t))).size;

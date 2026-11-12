@@ -4,12 +4,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { hubClient, type HubClient } from "@/server/providers/hub";
 
-// Scan universes, snapshotted into data/universe/ from niftyindices.com
-// (ind_nifty{50,200,500}list.csv) and NSE's F&O lot-size file (fo_mktlots.csv).
-// Refresh by re-downloading those files; index rebalances happen twice a year.
-// With a Market Data Hub (HUB_URL) the F&O list is the hub's (from the newest
-// NSE F&O bhavcopy, so it follows NSE's additions and removals), re-read every
-// 12 hours; the snapshot is the fallback when the hub can't answer.
+// Scan universes. The F&O list is the Market Data Hub's (GET /v1/universe/fno,
+// from the newest NSE F&O bhavcopy, so it follows NSE's additions and
+// removals), re-read every 12 hours. The index lists, and the F&O list when the
+// hub can't answer, are snapshots in data/universe/ (from niftyindices.com's
+// ind_nifty{50,200,500}list.csv; index rebalances happen twice a year).
 
 export type UniverseId = "nifty50" | "nifty200" | "nifty500" | "fno";
 

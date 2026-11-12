@@ -9,13 +9,13 @@ import { SCREENS, type ScreenerRow } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
 import { readDay, readTrades, readUnsettled, watchedDays, writeEntries, writeSettlements } from "@/server/providers/btstRecord";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { getLotSizes } from "@/server/providers/lotSizes";
+import { getLotSizes } from "@/server/providers/reference";
 
 // The BTST live record (src/core/screener/liveRecord.ts): written from the
 // screener's own live runs, so it costs no extra API calls and doesn't depend on
 // the browser's alert toggle — any screener refresh in the window records. It
 // settles from data the app already has: the screener's stored daily bars
-// (NSE bhavcopy, ~6 PM) or, sooner, the next morning's live bar.
+// (from the Market Data Hub) or, sooner, the next morning's live bar.
 
 /** Same charges and slippage the backtester defaults to. */
 const COST_PRESET: CostPresetId = "futures-2026";
@@ -40,7 +40,7 @@ export function updateBtstRecord(params: { results: Record<string, ScreenerRow[]
 
 let settling: Promise<void> | null = null;
 
-/** Settle every earlier trade whose next session has opened. Reads stored data only; never calls the broker. */
+/** Settle every earlier trade whose next session has opened. Reads stored data only. */
 export function settleBtstRecord(now: number, live?: Map<string, DailyBar>): Promise<void> {
   settling ??= settle(now, live).finally(() => {
     settling = null;
@@ -59,7 +59,7 @@ async function settle(now: number, live?: Map<string, DailyBar>) {
     return today && today.t > (stored.at(-1)?.t ?? 0) ? [...stored, today] : stored;
   };
   const { model } = COST_PRESETS[COST_PRESET];
-  // Lot sizes only when something can settle (the first call may download NSE's lot file).
+  // Lot sizes only when something can settle (the first call may ask the hub for them).
   const ready = open.filter((entry) => barsFor(entry.symbol).some((bar) => bar.t > entry.day));
   if (!ready.length) return;
   const { lots } = await getLotSizes();
