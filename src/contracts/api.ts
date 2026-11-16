@@ -9,7 +9,7 @@ import type { CostModel, CostPresetId } from "@/core/backtest/costs";
 import type { BacktestResult, EntryMode } from "@/core/backtest/portfolio";
 import type { ChartInterval, ChartRange } from "@/core/market/intervals";
 import type { BudgetSnapshot } from "@/core/ratelimit/budget";
-import type { ResultsEvent } from "@/core/parsers/resultsCalendar";
+import type { ResultsEvent } from "@/core/market/results";
 import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
@@ -39,19 +39,19 @@ export interface PricePoint {
   volume: number;
 }
 
-/** What kind of source data came from: a live broker feed, end-of-day files, or generated sample data. */
-export type SourceKind = "broker" | "eod" | "sample";
+/** What kind of source data came from: real market data (the Market Data Hub, relaying the broker), or generated sample data. */
+export type SourceKind = "broker" | "sample";
 
 export interface ChartResponse {
   symbol: string;
   interval: ChartInterval;
   range: ChartRange;
   source: SourceKind;
-  /** Id of the data source that answered (e.g. "fyers", "eod", "sample"). */
+  /** Id of the data source that answered ("hub" or "sample"). */
   sourceId: string | null;
   /** Why a fallback source was used (null when the first-choice source answered). */
   sourceReason: string | null;
-  /** Set when no source could answer and sample data wasn't appropriate (the broker is connected but failed): show this instead of a chart. */
+  /** Set when the hub is reachable but couldn't serve this chart: show this instead of a chart (never sample candles that look real). */
   error?: string | null;
   priceSeries: PricePoint[];
 }
@@ -68,9 +68,9 @@ export interface Quote {
   low: number;
   prevClose: number;
   volume: number;
-  /** Id of the data source that answered (e.g. "fyers", "eod"). */
+  /** Id of the data source that answered (e.g. "hub"). */
   source?: string;
-  /** Not a live price (e.g. the last end-of-day close): never fire alerts or compute a basis from it. */
+  /** Not a live price (the hub's last stored price): never fire alerts or compute a basis from it. */
   delayed?: boolean;
 }
 
@@ -135,6 +135,8 @@ export interface SyncProgressDto {
   done: number;
   total: number;
   message: string;
+  /** Symbols the Market Data Hub is still downloading (Tradex asks again shortly). */
+  queued?: number;
 }
 
 export interface ScreenerResponse {
@@ -160,7 +162,7 @@ export interface ScreenerResponse {
   market?: MarketOverview;
   /** Is it a good time for long setups? NIFTY trend + breadth (src/core/screener/regime.ts). */
   regime?: MarketRegime;
-  /** NSE's F&O ban list for today (best-effort; available=false when NSE couldn't be reached). */
+  /** NSE's F&O ban list for today, from the hub (best-effort; available=false when the hub hasn't answered). */
   ban?: { available: boolean; tradeDate: number | null; symbols: string[] };
 }
 
@@ -295,6 +297,8 @@ export interface BacktestInfoResponse {
   history: { from: number; to: number; sessions: number; dates: number[] } | null;
   /** First session with enough warm-up (60 sessions) for any signal; most screens need more. */
   warmupDate: number | null;
+  /** Reading the universe's daily bars from the Market Data Hub: `active` while it runs or the hub is still downloading `queued` symbols. */
+  sync?: { active: boolean; queued: number; message: string; error: string | null };
 }
 
 // ------------------------------------------------------------------ POST /api/backtest
@@ -374,7 +378,7 @@ export interface PresetsResponse {
 // ------------------------------------------------------------------ GET /api/results
 
 export interface ResultsResponse {
-  /** False when NSE couldn't be reached (the calendar is best-effort). */
+  /** False until the Market Data Hub has answered (the calendar is best-effort). */
   available: boolean;
   fetchedAt: number;
   events: ResultsEvent[];
@@ -382,7 +386,7 @@ export interface ResultsResponse {
 
 // ------------------------------------------------------------------ GET /api/highlow?after=seq
 
-export type ScanStatus = "live" | "closed" | "no-broker" | "starting";
+export type ScanStatus = "live" | "closed" | "no-hub" | "starting";
 
 export interface HighLowResponse {
   status: ScanStatus;
@@ -390,8 +394,10 @@ export interface HighLowResponse {
   day: number;
   seq: number;
   instruments: number;
+  /** F&O stocks whose near-month future is in the sweep (contracts come from the hub, loaded in the background). */
+  futures: number;
   lastPollAt: number;
-  /** How often the full sweep runs right now (paced by the API budget); null when not sweeping or the budget is spent. */
+  /** How often the full sweep runs right now (paced by the hub's broker budget); null when not sweeping or the budget is spent. */
   sweepMs: number | null;
   totals: { highs: number; lows: number };
   /** Events with seq > `after`, oldest first. */
@@ -402,34 +408,39 @@ export interface HighLowResponse {
 
 export interface LotsResponse {
   lots: Record<string, number>;
-  source: "nse" | "fyers" | "hub" | "disk" | "none";
+  /** "hub": from the Market Data Hub; "disk": its last copy saved here; "none": not known yet. */
+  source: "hub" | "disk" | "none";
   fetchedAt: number;
 }
 
-// ------------------------------------------------------------------ GET /api/broker/usage
+// ------------------------------------------------------------------ GET /api/futures?symbol
 
-/**
- * Broker Data API calls spent today and in the last minute, against the caps: Tradex's own
- * Fyers budget, or — connected to a Market Data Hub — the hub's (it makes the broker calls).
- */
-export type ApiUsageResponse = BudgetSnapshot & {
-  plan: "standard" | "prime";
-  /** Paused after a 429. */
-  coolingDown: boolean;
-  /** Who talks to the broker: Tradex itself, or a Market Data Hub. */
-  via?: "fyers" | "hub";
-  /** The hub's health, when `via` is "hub". */
-  hub?: HubHealth;
-};
+/** A stock's listed futures contracts, from the hub (GET /v1/fo/contracts). */
+export interface FuturesResponse {
+  symbol: string;
+  /** False when the hub has no futures for it (not an F&O stock) or couldn't answer. */
+  available: boolean;
+  lot: number | null;
+  /** Tickers are app symbols too: chart and quote them like a stock (e.g. "SBIN26NOVFUT"). Expiry is a day key. */
+  contracts: Array<{ ticker: string; expiry: number; kind: "near" | "next" }>;
+}
+
+// ------------------------------------------------------------------ the Market Data Hub's health
 
 /** A Market Data Hub's health as Tradex last saw it (GET /v1/status). */
 export interface HubHealth {
-  /** The hub's address (origin only). */
+  /** HUB_URL and HUB_KEY are set. Without them Tradex has only labelled sample data. */
+  configured: boolean;
+  /** The hub's address (origin only; empty when not configured). */
   url: string;
   reachable: boolean;
   /** Why the last status request failed. */
   error: string | null;
   version: string | null;
+  /** The hub's own health check: `problems` are worth an alert, `warnings` worth knowing (null when unknown). */
+  healthy: boolean | null;
+  problems: string[];
+  warnings: string[];
   /** The hub's own broker login (null when unknown). */
   brokerConnected: boolean | null;
   /** The hub's live feed: socket, polling, mixed, idle or down (null when unknown). */
@@ -439,15 +450,25 @@ export interface HubHealth {
   checkedAt: number;
 }
 
+// ------------------------------------------------------------------ GET /api/broker/usage
+
+/** The hub's broker data-API calls today and in the last minute, against its caps (zeros until it has answered). */
+export type ApiUsageResponse = BudgetSnapshot & {
+  plan: "standard" | "prime";
+  /** The hub paused its broker calls after a 429. */
+  coolingDown: boolean;
+  hub: HubHealth;
+};
+
 // ------------------------------------------------------------------ GET /api/broker/status
 
+/** How Tradex reaches the market: always through a Market Data Hub. */
 export interface BrokerStatusResponse {
   connected: boolean;
-  /** auto = the server's Fyers TOTP login; hub = through a Market Data Hub (absent: your own Fyers token). */
-  mode?: "auto" | "hub";
-  /** e.g. "Connected via Market Data Hub". */
-  label?: string;
-  hub?: HubHealth;
+  mode: "hub";
+  /** e.g. "Connected via Market Data Hub" or "Connect a Market Data Hub". */
+  label: string;
+  hub: HubHealth;
   error?: string;
 }
 
@@ -459,7 +480,7 @@ export interface DataSourceStatus {
   kind: SourceKind;
   /** What it can serve. */
   provides: Array<"history" | "quotes" | "stream">;
-  /** Null when ready; otherwise why it's skipped (not connected, resting after errors). */
+  /** Null when ready; otherwise why it's skipped (resting after errors). */
   unavailable: string | null;
   /** Last error and when it may be tried again. */
   lastError: string | null;
@@ -472,61 +493,29 @@ export interface DataSourcesResponse {
   stream: { mode: StreamStatus["mode"]; source: string | null; live: number; polled: number };
 }
 
-// ------------------------------------------------------------------ GET/POST /api/data/history-db
+// ------------------------------------------------------------------ GET /api/data/hub
 
-export type HistoryKind = "daily" | "m15";
-
-/** The local market-data database and the "Download F&O history" job. */
-export interface HistoryDbStatus {
-  job: {
-    state: "idle" | "running" | "paused" | "done" | "error";
-    kinds: HistoryKind[];
-    /** Series downloaded / to download in this run. */
-    done: number;
-    total: number;
-    /** Symbols that failed in this run (no data, or a broker error). */
-    failed: string[];
-    current: string | null;
-    message: string;
-    startedAt: number | null;
-    finishedAt: number | null;
-  };
-  /** How many of the F&O stocks + indices are stored, per kind. */
-  coverage: Array<{ kind: HistoryKind; label: string; covered: number; total: number; missing: number; estimatedCalls: number }>;
-  db: { series: number; candles: number; bytes: number; path: string };
-  /** Broker calls background work may still make today (Fyers budget). */
-  backgroundCallsLeft: number | null;
-  brokerConnected: boolean;
-  /** The NSE F&O bhavcopy import (free: NSE's public archive, no broker calls). */
-  fo: FoBhavStatus;
+/** One dataset the hub keeps current (NSE files, candles), for the read-only Market data panel. */
+export interface HubDatasetStatus {
+  id: string;
+  label: string;
+  /** Newest session / trade date it holds (YYYY-MM-DD), when it says. */
+  session: string | null;
+  /** When the hub last refreshed it (epoch ms). */
+  updatedAt: number | null;
+  /** e.g. "224 lot sizes", "2 series · 310 candles". */
+  detail: string | null;
+  error: string | null;
 }
 
-/** Stock-futures OI and point-in-time F&O membership from NSE's daily F&O bhavcopy. */
-export interface FoBhavStatus {
-  job: {
-    state: "idle" | "running" | "paused" | "done" | "error";
-    /** Days checked / to check in this run. */
-    done: number;
-    total: number;
-    /** Days that failed in this run (NSE refused or timed out). */
-    failed: number;
-    current: string | null;
-    message: string;
-    startedAt: number | null;
-    finishedAt: number | null;
-  };
-  coverage: {
-    /** How far back the backfill goes. */
-    lookbackDays: number;
-    /** Weekdays in that window NSE could have published so far, and how many were checked (trading days + holidays). */
-    expected: number;
-    checked: number;
-    /** Trade days stored, their range, and the underlying-day rows. */
-    days: number;
-    first: number | null;
-    last: number | null;
-    rows: number;
-  };
+/** "Market data: provided by your hub": its health, freshness and broker budget (Tradex's key can't change anything there). */
+export interface MarketDataStatus {
+  hub: HubHealth;
+  datasets: HubDatasetStatus[];
+  broker: { configured: boolean | null; connected: boolean | null; lastLoginError: string | null };
+  budget: ApiUsageResponse | null;
+  /** The scopes of Tradex's key on the hub. */
+  scopes: string[];
+  /** Tradex's own daily-bar store (screener, backtests): what it holds and what the hub is still downloading. */
+  store: { message: string; queued: number };
 }
-
-export type HistoryDbAction = { action: "start"; kinds: HistoryKind[] } | { action: "stop" } | { action: "start-fo" } | { action: "stop-fo" };

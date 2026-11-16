@@ -1,14 +1,13 @@
 // Names of stored candle series in the market database (./candleDb.ts).
 //
 // A series is keyed by instrument and resolution in the broker's naming, e.g.
-// "NSE:SBIN-EQ:D" or "NSE:NIFTY50-INDEX:15". The key names the instrument, not
-// the source: the Fyers source and the Market Data Hub (which relays the same
-// broker's candles) share it, so history downloaded before switching to a hub
-// stays usable. Pure: no I/O, so it can be imported anywhere without side effects.
+// "NSE:SBIN-EQ:D", "NSE:NIFTY50-INDEX:15" or "NSE:SBIN26NOVFUT:1". The key
+// names the instrument, not the source, so the candles earlier versions stored
+// stay usable. Pure: no I/O, so it can be imported anywhere without side effects.
 
 import { CHART_INTERVAL_CONFIG, type ChartInterval } from "@/core/market/intervals";
 
-/** App symbols for indices → the broker's (Fyers') instrument names. */
+/** App symbols for indices → the broker's instrument names. */
 export const INDEX_INSTRUMENTS: Readonly<Record<string, string>> = {
   NIFTY: "NSE:NIFTY50-INDEX",
   BANKNIFTY: "NSE:NIFTYBANK-INDEX",
@@ -19,10 +18,11 @@ export const INDEX_INSTRUMENTS: Readonly<Record<string, string>> = {
   SENSEX: "BSE:SENSEX-INDEX",
 };
 
-/** "SBIN" → "NSE:SBIN-EQ", "NIFTY" → "NSE:NIFTY50-INDEX"; a full exchange symbol passes through. */
+/** "SBIN" → "NSE:SBIN-EQ", "NIFTY" → "NSE:NIFTY50-INDEX", "SBIN26NOVFUT" → "NSE:SBIN26NOVFUT"; a full exchange symbol passes through. */
 export function brokerInstrument(symbol: string): string {
   const normalized = symbol.trim().toUpperCase();
   if (normalized.includes(":")) return normalized;
+  if (/\d{2}[A-Z]{3}FUT$/.test(normalized)) return `NSE:${normalized}`;
   return INDEX_INSTRUMENTS[normalized] ?? `NSE:${normalized}-EQ`;
 }
 

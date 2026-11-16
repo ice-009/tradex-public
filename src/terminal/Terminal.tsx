@@ -10,6 +10,7 @@ import { IndicatorsDialog } from "./IndicatorsDialog";
 import { LayoutNameDialog, LayoutToast, type LayoutDialogState } from "./LayoutsMenu";
 import { SymbolSearch } from "./SymbolSearch";
 import { TopBar } from "./TopBar";
+import { HubBanner } from "./HubBanner";
 import { ScreenerPanel } from "./ScreenerPanel";
 import { ComparePanel } from "./ComparePanel";
 import { AlertWatcher } from "./Alerts";
@@ -160,6 +161,7 @@ function Workspace() {
     <TerminalUIContext.Provider value={ui}>
       <div className="tx-root">
         <TopBar onLayoutDialog={setLayoutDialog} />
+        <HubBanner />
         <div className="tx-body">
           <DrawingToolbar />
           <div className={`tx-center ${screenerOpen && screenerMax ? "is-max" : ""}`}>

@@ -7,15 +7,15 @@ import type { SymbolInfo } from "@/contracts/api";
 export type { SymbolInfo };
 
 
-// Indices the chart can open. Keep in sync with KNOWN_INDEX_SYMBOLS in fyers.ts.
+// Indices the chart can open: the ones the Market Data Hub serves.
 const INDICES: SymbolInfo[] = [
   { symbol: "NIFTY", name: "Nifty 50", exchange: "NSE", type: "index" },
   { symbol: "BANKNIFTY", name: "Nifty Bank", exchange: "NSE", type: "index" },
   { symbol: "FINNIFTY", name: "Nifty Financial Services", exchange: "NSE", type: "index" },
   { symbol: "MIDCPNIFTY", name: "Nifty Midcap Select", exchange: "NSE", type: "index" },
   { symbol: "NIFTYIT", name: "Nifty IT", exchange: "NSE", type: "index" },
+  { symbol: "NIFTYNXT50", name: "Nifty Next 50", exchange: "NSE", type: "index" },
   { symbol: "INDIAVIX", name: "India VIX", exchange: "NSE", type: "index" },
-  { symbol: "SENSEX", name: "S&P BSE Sensex", exchange: "BSE", type: "index" },
 ];
 
 // Nifty 50 constituents: ranked first among equally good matches ("RELI" → RELIANCE).

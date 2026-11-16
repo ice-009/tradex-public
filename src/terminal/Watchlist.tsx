@@ -45,7 +45,7 @@ const BIG_LIST_REFRESH_MS = 20_000;
 
 /**
  * Snapshot quotes for every symbol, refreshed on a timer. Live ticks are added separately with
- * useLiveTicks for the rows on screen: Fyers' data socket carries 100 symbols on the Standard plan
+ * useLiveTicks for the rows on screen: the hub's stream carries 100 symbols per connection
  * (open charts get first claim), and the F&O list alone is ~220.
  */
 function useQuotes(symbols: string[]) {
@@ -213,7 +213,7 @@ export function Watchlist() {
       <div className="tx-side-head">
         {panel === "watchlist" ? <ListMenu /> : <span className="tx-side-title tx-panel-title">{PANEL_TITLE[panel]}</span>}
         {panel === "watchlist" && Object.values(quotes).some((quote) => quote.delayed) && (
-          <span className="tx-tag tx-eod-tag" title="Live feed offline: prices are the last end-of-day close">
+          <span className="tx-tag tx-eod-tag" title="No live prices from the Market Data Hub: prices are its last stored quotes">
             EOD
           </span>
         )}
@@ -295,7 +295,7 @@ export function Watchlist() {
               <span
                 key={quote?.seq ?? 0}
                 className={`tx-wl-num ${eod ? "is-eod" : ""} ${quote?.seq && quote.dir ? (quote.dir === "up" ? "flash-up" : "flash-down") : ""}`}
-                title={eod ? "Last end-of-day close (live feed offline)" : undefined}
+                title={eod ? "The hub's last stored price (no live price right now)" : undefined}
               >
                 {quote ? formatPrice(quote.ltp) : "—"}
               </span>

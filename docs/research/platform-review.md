@@ -1,5 +1,7 @@
 # Platform review: what the live terminal got wrong, and what other platforms do
 
+> **Historical note.** This review was written when Tradex talked to Fyers and NSE itself. It now gets all market data — quotes, the live stream, futures contracts and their tickers, lot sizes — from a [Market Data Hub](https://github.com/ice-009/market-data-hub); see [ARCHITECTURE.md](../../ARCHITECTURE.md). The findings about the terminal itself still apply.
+
 Based on a screenshot of the live terminal on a MacBook: the "1 large + 2 small" BTST layout on HAL, running on the Fyers feed. Compared with TradingView, Zerodha Kite, Fyers, Chartink and StockEdge.
 
 ## Problems seen in the live terminal, worst first

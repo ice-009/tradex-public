@@ -21,7 +21,7 @@ const time = (at: number) => new Date(at).toLocaleTimeString("en-IN", { hour: "2
 const STATUS_TEXT: Record<Feed["status"], string> = {
   live: "Live",
   closed: "Market closed",
-  "no-broker": "Connect a broker to scan",
+  "no-hub": "Connect a Market Data Hub to scan",
   starting: "Starting…",
   error: "Scan unavailable",
 };
@@ -79,7 +79,7 @@ export function HighLowPanel() {
           {STATUS_TEXT[data.status]}
           {data.status === "live" && data.lastPollAt ? ` · ${data.instruments} instruments · ${time(data.lastPollAt)}` : ""}
           {data.status === "live" ? (
-            <span title="Every F&O stock is re-read through the quotes API at a pace that fits the daily API limit. A late read still catches the new high/low (quotes carry the day's range); symbols streaming live (open charts, top of the watchlist) are checked on every tick.">
+            <span title="Every F&O stock is re-read through the Market Data Hub's quotes at a pace that fits its broker's daily limit. A late read still catches the new high/low (quotes carry the day's range); symbols streaming live (open charts, top of the watchlist) are checked on every tick.">
               {data.sweepMs ? ` · full sweep every ${sweepLabel(data.sweepMs)}` : " · API budget for today used — live symbols only"}
             </span>
           ) : null}
@@ -170,9 +170,9 @@ export function HighLowPanel() {
         </table>
         {!rows.length && (
           <div className="tx-scr-state">
-            {data.status === "no-broker" ? (
+            {data.status === "no-hub" ? (
               <>
-                <strong>Connect Fyers or a Market Data Hub to scan</strong>
+                <strong>Connect a Market Data Hub to scan</strong>
                 <span>The scan reads live day highs and lows for every F&amp;O stock and its near-month future.</span>
               </>
             ) : data.status === "closed" ? (
@@ -183,7 +183,7 @@ export function HighLowPanel() {
             ) : (
               <>
                 <strong>Watching {data.instruments || "all"} F&amp;O instruments</strong>
-                <span>New day highs and lows print here as they happen.</span>
+                <span>New day highs and lows print here as they happen.{data.futures ? "" : " Futures contracts are still loading from the hub: cash prices only for now."}</span>
               </>
             )}
           </div>

@@ -241,23 +241,3 @@ export function generateSampleIntradaySeries(
 
   return series;
 }
-
-export async function fetchPaytmMoneySymbol(symbol: string, days = 90): Promise<PricePoint[]> {
-  const apiUrl = process.env.PAYTM_MONEY_API_URL;
-  const normalized = symbol.trim().toUpperCase();
-
-  if (apiUrl) {
-    try {
-      const response = await fetch(`${apiUrl}?symbol=${encodeURIComponent(normalized)}`);
-      if (!response.ok) {
-        throw new Error(`Paytm Money API returned ${response.status}`);
-      }
-      const result = await response.json();
-      return result.data ?? result;
-    } catch (error) {
-      console.warn("Paytm Money fetch failed, falling back to sample data", error);
-    }
-  }
-
-  return generateSampleSeries(normalized, days);
-}

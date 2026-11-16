@@ -17,7 +17,7 @@ export type { Quote, SymbolInfo };
 
 export interface HistoryResult {
   bars: Bar[];
-  /** Kind of source that answered: live broker, end-of-day store, or generated sample. */
+  /** Kind of source that answered: the Market Data Hub ("broker") or generated sample data. */
   source: SourceKind;
   /** Why a fallback source was used. */
   reason: string | null;
@@ -97,8 +97,8 @@ class LiveHub {
   status: LiveStatus = "idle";
 
   /**
-   * Live ticks for `symbol`. The broker streams a limited number of symbols (100 on
-   * Fyers Standard), so lower `priority` numbers are kept first: 0 = open charts,
+   * Live ticks for `symbol`. The Market Data Hub streams a limited number of symbols
+   * (100 per connection), so lower `priority` numbers are kept first: 0 = open charts,
    * 1 = alerts, 2+ = watchlist rows in list order. Symbols that don't fit get no
    * ticks and stay on the (slower) quote refresh.
    */
@@ -227,7 +227,7 @@ function istDayNumber(time: number) {
   return Math.floor((time + IST_OFFSET_MS) / DAY_MS);
 }
 
-/** Start of the intraday bar containing `time`, aligned to the 09:15 IST session open like Fyers. */
+/** Start of the intraday bar containing `time`, aligned to the 09:15 IST session open (as the hub's candles are). */
 function intradayBucket(time: number, intervalMs: number) {
   const dayStart = istDayNumber(time) * DAY_MS - IST_OFFSET_MS;
   const open = dayStart + SESSION_OPEN_MINUTES * 60_000;

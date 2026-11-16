@@ -23,7 +23,7 @@ export { isMarketOpen };
 /** During market hours: the server refreshes quotes at a budget-paced rate and applies live ticks in between, so polling it often costs no API calls. */
 const LIVE_REFRESH_MS = 10_000;
 const SYNC_POLL_MS = 2_000;
-/** After an error (e.g. Fyers not connected yet), try again instead of giving up. */
+/** After an error (e.g. the Market Data Hub not reachable yet), try again instead of giving up. */
 const ERROR_RETRY_MS = 30_000;
 
 /** One screen a stock matched, with that screen's trade plan. */

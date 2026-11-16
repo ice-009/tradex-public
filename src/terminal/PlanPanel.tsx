@@ -197,7 +197,7 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
         </div>
       )}
       {!evidence ? (
-        <div className="tx-plan-empty">{evidenceStatus === "error" ? "The evidence couldn't be computed, so there is no plan. It needs the stored daily history (Market data → Download F&O history)." : "Testing the screens on the stored history (about 10 seconds the first time each day)…"}</div>
+        <div className="tx-plan-empty">{evidenceStatus === "error" ? "The evidence couldn't be computed, so there is no plan. It needs the F&O stocks' daily history from the Market Data Hub (see Market data in the top bar)." : "Testing the screens on the stored history (about 10 seconds the first time each day)…"}</div>
       ) : !plan ? (
         <div className="tx-plan-empty">Waiting for the screener&apos;s matches…</div>
       ) : !plan.eligible.length ? (

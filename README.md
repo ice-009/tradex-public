@@ -52,10 +52,10 @@
 ![Backtest: equity vs NIFTY, drawdown and out-of-sample check](docs/screenshots/backtest.png)
 
 **Data**
-- A source-independent **data engine**: history, quotes and live prices come through one pipeline, with fallbacks (broker → NSE end-of-day files → labelled sample data).
-- Connect to Fyers directly, or to a shared [Market Data Hub](https://github.com/ice-009/market-data-hub) that owns the broker connection for all your apps.
-- Live prices stream from the broker's socket when available and fall back to polling otherwise. A watchdog reconnects silent feeds.
-- A **request budget** keeps every broker API call inside the plan's per-second, per-minute and per-day limits.
+- All market data comes from a [Market Data Hub](https://github.com/ice-009/market-data-hub): a separate service that owns the one broker connection, its request budget and NSE's daily files, and serves every app on it. Tradex makes no broker or exchange requests itself.
+- Charts from 1 minute to monthly; up to 5 years of daily bars (with NSE delivery %) for the screener, backtests and the daily plan; stock futures (`SBIN26NOVFUT`) charted and quoted like any symbol.
+- Live prices stream from the hub, with polling as the fallback and a watchdog that reconnects silent feeds.
+- Without a hub, Tradex still runs on clearly labelled sample data and says **Connect a Market Data Hub**.
 
 ![Compare: a watchlist ranked by setup score](docs/screenshots/compare.png)
 
@@ -67,7 +67,7 @@
 git clone https://github.com/ice-009/tradex-public.git
 cd tradex-public
 npm install                 # also generates the Prisma client
-cp .env.example .env        # then set NEXTAUTH_SECRET (openssl rand -base64 32)
+cp .env.example .env        # then set NEXTAUTH_SECRET (openssl rand -base64 32), HUB_URL and HUB_KEY
 npm run db:setup            # creates the local SQLite database
 npm run dev
 ```
@@ -76,70 +76,43 @@ npm run dev
 
 Open http://localhost:3000, create a local account (stored only in your `dev.db`) and sign in.
 
-### Connecting a broker (Fyers)
+### Connect a Market Data Hub (required for real data)
 
-Live data currently comes from [Fyers API v3](https://myapi.fyers.in/docs). Create an app in the Fyers API dashboard, then fill in the `FYERS_*` values in `.env` (see [`.env.example`](.env.example)):
-- **App ID and secret** for your API app.
-- **Fyers login ID and PIN.**
-- **TOTP secret** from enabling external 2FA in your Fyers account. Tradex uses it to log in on the server each morning, when Fyers tokens expire.
+Tradex gets all its market data from a [Market Data Hub](https://github.com/ice-009/market-data-hub). The hub logs in to the broker (Fyers today), keeps its request budget and live socket, downloads NSE's daily files, and serves several apps — Tradex, a backtester, notebooks — over HTTP with an API key, so they never trip the broker's rate limits together. Tradex only needs its URL and a key.
 
-Set `FYERS_PLAN=prime` if you're on Prime, so the request budget uses Prime's limits.
-
-On first run with a broker, the screener downloads about a year of daily history for the F&O list. That's one API call per stock, paced inside the rate limits, so it takes roughly 10 minutes. After that, history is extended every evening from NSE's free bhavcopy files.
-
-**Recommended: download the F&O history once.** Click the **API** meter in the top bar → **Market data** → **Download F&O history**. It stores in a local database (`.cache/market.db`), for every F&O stock plus NIFTY, BANKNIFTY and FINNIFTY:
-- 5 years of daily candles;
-- 1 year of 15-minute candles.
-
-| | Daily + 15-minute | Daily only |
-|---|---|---|
-| API calls | about 2,000 (40% of a Fyers Standard day) | about 1,100 |
-| Time | about 2½ hours | about 1 hour |
-
-The download runs in the background, never slows charts, and can be stopped and resumed. If it runs out of the day's budget, it continues the next day.
-
-Afterwards:
-- Charts open from disk.
-- The screener, backtests and the daily plan's evidence use the full 5 years.
-- Only the newest candles are fetched.
-
-### Or connect to a Market Data Hub
-
-If you run a [Market Data Hub](https://github.com/ice-009/market-data-hub), Tradex can get all its market data from it instead of logging in to Fyers itself. The hub owns the one broker login, request budget and live socket; Tradex only needs a URL and an API key. This is the way to run Tradex next to other apps (a backtester, notebooks) on the same Fyers account: only one process talks to the broker, so they can't trip its rate limits together.
-
-1. On the hub, create a key: `npm run hub -- keys create tradex --scopes history,live,fo`.
-2. In Tradex's `.env`, set:
+1. Run a hub: see its [README](https://github.com/ice-009/market-data-hub#readme) (a Mac, a small VM or Docker, optionally behind a Cloudflare Tunnel). For a full 5-year daily history, run its backfill once: `npm run hub -- data backfill --tf 1d --years 5`.
+2. On the hub, create a key for Tradex. Read scopes are enough; Tradex never needs admin:
+   ```bash
+   npm run hub -- keys create tradex --scopes history,live,fo
+   ```
+3. In Tradex's `.env`, set:
    ```bash
    HUB_URL=http://127.0.0.1:8787      # or your hub's HTTPS address
    HUB_KEY=mdh_…
    ```
-3. Restart Tradex. The top bar's meter reads **Hub** and its tooltip says **Connected via Market Data Hub**, with the hub's health and its broker budget.
+4. Restart Tradex. The top bar's meter reads **Hub** with the hub's broker budget; click it for the read-only **Market data** panel: the hub's health and how fresh each dataset is.
 
-With a hub configured:
-- charts, quotes, live prices and the screener's daily bars (with NSE delivery %) come from the hub. Tradex never calls Fyers, and the `FYERS_*` settings are ignored;
-- lot sizes, the F&O ban list, the results calendar and the F&O list come from the hub too, instead of NSE downloads;
-- **Download F&O history** copies the hub's candles into the local database (no broker calls from Tradex);
-- still local: the NSE F&O bhavcopy import (open interest and point-in-time F&O membership, from NSE's free archive).
+Without `HUB_URL` and `HUB_KEY` (or while the hub is unreachable) Tradex shows a **Connect a Market Data Hub** banner, charts draw labelled sample data, and the screener, backtests and plan wait for real data.
 
-Not available through a hub yet: 1-minute and 3-minute charts (the hub has no 1-minute candles; 5m and longer work, 10m/30m/2h/4h are built from its 5m/15m/1h candles) and futures contracts (`NSE:SBIN26NOVFUT`), so the Day High/Low scan covers cash stocks only.
+**What comes from the hub:**
 
-Leave `HUB_URL` and `HUB_KEY` empty to use Fyers directly as above.
-
-### Without a broker
-
-The app runs, but with less:
-
-| Works without a broker | Needs a broker |
+| Tradex feature | Hub endpoint |
 |---|---|
-| Charts (daily from stored history; intraday as clearly labelled sample data) | Live prices |
-| Drawing tools, layouts, alerts UI | The screener's first history download |
-| Backtests on history you already have | Intraday history, Day High/Low |
+| Charts (1m … monthly; 3m from 1m, 10m/30m/2h/4h resampled) | `GET /v1/candles` |
+| Watchlist, order ticket and screener quotes | `GET /v1/quotes` |
+| Live prices | `GET /v1/stream` (Server-Sent Events) |
+| Screener, backtests, plan evidence: up to 5 years of daily bars with delivery % | `GET /v1/candles/batch` |
+| OI buildup next to each F&O setup | `GET /v1/fo/oi/day` |
+| Point-in-time F&O list for backtests | `GET /v1/fo/members?from&to` |
+| Futures contract, basis and lot in the order ticket; Day High/Low futures | `GET /v1/fo/contracts`, futures tickers like `SBIN26NOVFUT` |
+| Lot sizes, F&O ban list, results calendar, F&O list | `/v1/lots`, `/v1/fo/ban`, `/v1/results-calendar`, `/v1/universe/fno` |
+| Health, broker budget | `GET /v1/status` |
 
-To support another broker, write a data-source adapter (see [Architecture](#architecture)).
+> **Upgrading from a version that talked to Fyers itself?** The Fyers login (`FYERS_*`), the **Download F&O history** and **F&O bhavcopy** buttons, and `DATA_SOURCES` are gone: the hub does all of that now. Remove the `FYERS_*` lines from `.env` and set `HUB_URL`/`HUB_KEY`. Candles already in `.cache/market.db` are still used as a chart cache, and the hub can import them (`npm run hub -- data import-tradex`). The screener's daily bars are read again from the hub once, for the full 5 years.
 
 ## Architecture
 
-Tradex is a Next.js 16 app (React 19, TypeScript). The server side runs in the same process: API routes, a disk cache and one broker connection. The code is split into layers, and ESLint enforces the boundaries, so a wrong import fails the build.
+Tradex is a Next.js 16 app (React 19, TypeScript). The server side runs in the same process: API routes, a disk cache and one connection to the Market Data Hub. The code is split into layers, and ESLint enforces the boundaries, so a wrong import fails the build.
 
 ```
             ┌──────────────────────────── browser ────────────────────────────┐
@@ -155,41 +128,39 @@ Tradex is a Next.js 16 app (React 19, TypeScript). The server side runs in the s
             │       ▼                                                         │
             │  src/server/services    one use case per file                   │
             │       ▼                                                         │
-            │  src/server/data        data engine: sources, fallback, cache,  │
+            │  src/server/data        data engine: hub + sample, cache,       │
             │                         live market stream                      │
             │       ▼                                                         │
-            │  src/server/providers   Fyers client/socket/budget, NSE files   │
+            │  src/server/providers   Market Data Hub client, daily bars,     │
+            │                         reference and F&O data, caches          │
             └───────┼─────────────────────────────────────────────────────────┘
-                    ▼
+                    ▼  HTTP + SSE, API key
+            Market Data Hub   (broker, NSE files — github.com/ice-009/market-data-hub)
+
             src/core   pure calculation engine — used by both sides
 ```
 
 | Layer | Folder | What's in it |
 |---|---|---|
-| Engine | `src/core` | Indicators, patterns, screens, scoring, backtester, tick/futures maths, IST session rules, file parsers, rate-limit policy. Pure functions, no I/O. |
+| Engine | `src/core` | Indicators, patterns, screens, scoring, backtester, tick/futures maths, IST session rules, budget pacing. Pure functions, no I/O. |
 | Contracts | `src/contracts/api.ts` | The JSON shape of every API response, shared by both ends. |
-| Data engine | `src/server/data` | `DataSource` adapters (Fyers, Market Data Hub, NSE end-of-day, sample), the `DataEngine` (ordered fallback, rests failing sources, quote cache, incremental history in a local SQLite candle database) and the `MarketStream` (one live price pipeline: socket or polling, with a watchdog). |
-| Providers | `src/server/providers` | Raw clients: Fyers REST/socket/auth, the Market Data Hub client, the API request budget, the NSE bhavcopy daily store, lot sizes, results calendar, universes. |
+| Data engine | `src/server/data` | The `hub` and `sample` `DataSource`s, the `DataEngine` (fallback to labelled sample data, rests a failing hub, quote cache, incremental history in a local SQLite candle cache) and the `MarketStream` (one live price pipeline: the hub's stream or polling, with a watchdog). |
+| Providers | `src/server/providers` | The Market Data Hub client, and what's built on it: the daily-bar store, lot sizes, ban list, results calendar, OI and F&O membership, futures contracts, universes. |
 | Services and routes | `src/server/services`, `src/app/api` | One use case per service; routes only parse, call and return. |
-| Client data | `src/client` | Typed API fetchers and feeds (market data, screener, high/low, lots). |
+| Client data | `src/client` | Typed API fetchers and feeds (market data, screener, high/low, lots, futures, the hub's health). |
 | Renderer | `src/chart` | The canvas chart: drawing, annotations, theme. |
 | UI | `src/terminal` | Panels, dialogs, layouts and UI state. |
 
 **How data flows:**
-1. A chart asks `/api/chart`. The chart service asks the data engine.
-2. The engine tries each source in order, skips ones that are down or out of budget, and returns candles tagged with their source.
-3. Live prices go through one Server-Sent Events stream fed by the `MarketStream`.
+1. A chart asks `/api/chart`. The chart service asks the data engine, which asks the hub (or reads its own cache of the hub's candles).
+2. The screener, backtests and plan read one store of daily bars, filled from the hub's batch candles.
+3. Live prices go through one Server-Sent Events stream: the hub's stream, relayed by the `MarketStream`.
 
-The UI never knows or cares which source answered. Adding a source (Upstox, Zerodha, a vendor feed) means one adapter file in `src/server/data/sources/`.
+`src/hubOnly.test.ts` fails the build if code under `src/` mentions Fyers or NSE's download hosts, or if anything on the server but the hub client calls `fetch()`.
 
-**Broker rate limits:** Fyers Standard allows 5 data calls a second, 50 a minute and 5,000 a day, and blocks the account for the day after repeated per-minute breaches. Every call goes through a budget that:
-- counts calls the way Fyers sees them;
-- serves charts before watchlist refreshes and before background scans;
-- pauses after any 429 instead of retrying.
+**Broker rate limits** are the hub's job: it counts every broker call for every app connected to it. Tradex reads the hub's counters and paces its background work (the screener's live quotes, the Day High/Low sweep) to its share of the day; a meter in the top bar shows the hub's usage.
 
-A normal shortlisting day uses about 500–700 calls, and a meter in the top bar shows usage.
-
-**[ARCHITECTURE.md](ARCHITECTURE.md)** has the details: where to add things, the data engine, the API budget and the backtester's fill rules, costs and limitations.
+**[ARCHITECTURE.md](ARCHITECTURE.md)** has the details: where to add things, the data engine, the hub endpoints, the daily-bar store and the backtester's fill rules, costs and limitations.
 
 ## Project structure
 
@@ -199,10 +170,10 @@ src/
   chart/          canvas chart renderer
   client/         browser data layer (api.ts + feeds)
   contracts/      API types shared by server and browser
-  core/           pure engine: indicators, screener, backtest, market maths, parsers
-  server/         data engine, providers, services, auth
+  core/           pure engine: indicators, screener, backtest, market maths
+  server/         data engine, Market Data Hub client and providers, services, auth
   terminal/       React UI
-data/             index and F&O universe lists (NSE)
+data/             index lists and a fallback F&O list (NSE snapshots)
 docs/             screenshots and research notes
 prisma/           database schema (users, sessions, trade journal)
 ```
@@ -225,22 +196,19 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 |---|---|
 | `NEXTAUTH_SECRET`, `NEXTAUTH_URL` | Sign-in sessions (required) |
 | `DATABASE_URL` | SQLite file (default `file:./dev.db`) |
-| `HUB_URL`, `HUB_KEY` | Get all market data from a [Market Data Hub](https://github.com/ice-009/market-data-hub) instead of Fyers (optional; `HUB_TIMEOUT_MS` sets the request timeout) |
-| `FYERS_*` | Broker connection (optional; ignored with a hub) |
-| `FYERS_PLAN` | `standard` or `prime`: sets the request budget |
-| `DATA_SOURCES` | Source order for the data engine (default `fyers,eod,sample`, or `hub,eod,sample` with a hub) |
+| `HUB_URL`, `HUB_KEY` | The [Market Data Hub](https://github.com/ice-009/market-data-hub) all market data comes from (required for real data; `HUB_TIMEOUT_MS` sets the request timeout) |
+| `MARKET_DB_PATH` | Where the local candle cache lives (default `.cache/market.db`) |
 
-Runtime data is written to `.cache/`, which is git-ignored: the candle database `market.db`, screener daily bars, NSE files and API usage. Set `MARKET_DB_PATH` to keep the candle database elsewhere.
+Runtime data is written to `.cache/`, which is git-ignored: the candle cache `market.db`, the screener's daily bars, the plan's evidence and the hub's last lot sizes.
 
 ## Roadmap
 
 Tradex is young. These are the next things that would help most, and good places to contribute:
 
-- [ ] **More brokers.** Data-source adapters for Upstox, Zerodha Kite and Angel One (one file each in `src/server/data/sources/`).
-- [ ] **Longer history.** An opt-in multi-year daily backfill, so backtests cover several market phases instead of about a year.
 - [ ] **Backtest comparisons.** "Enter at close" vs "wait for strength", and parameter sweeps with walk-forward validation.
 - [ ] **Futures-native data.** Continuous futures series with roll handling instead of cash prices as a proxy.
 - [ ] **Alerts that run without the browser open** (server-side, with push notifications).
+- [ ] **More brokers** — in the [Market Data Hub](https://github.com/ice-009/market-data-hub), so every app on it gets them.
 - [ ] A light theme, and more indicators and drawing tools.
 
 Have an idea? [Open an issue](https://github.com/ice-009/tradex-public/issues/new/choose).
@@ -253,7 +221,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the
 
 - Screens, patterns and scoring cite their sources in code (`sources` on each screen) and in [docs/research](docs/research).
 - Ideas from the MIT-licensed [Day Trader skill](https://github.com/jakeschincariol/day-trader-skill).
-- Market data from [Fyers API v3](https://myapi.fyers.in/docs) and NSE's public files (bhavcopy, F&O lot sizes, event calendar). Use of NSE data is subject to [NSE's terms](https://www.nseindia.com/).
+- Market data through the [Market Data Hub](https://github.com/ice-009/market-data-hub), from the broker's API and NSE's public files (bhavcopy, F&O bhavcopy, lot sizes, ban list, event calendar). Use of NSE data is subject to [NSE's terms](https://www.nseindia.com/).
 
 ## License
 

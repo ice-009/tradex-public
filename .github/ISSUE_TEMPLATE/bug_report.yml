@@ -28,8 +28,8 @@ body:
     attributes:
       label: Data source
       options:
-        - Fyers connected
-        - No broker (end-of-day / sample data)
+        - Market Data Hub connected
+        - No hub (sample data)
         - Not sure
     validations:
       required: true

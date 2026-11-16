@@ -13,7 +13,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: "Tradex Charts",
-  description: "Live charting for the Indian markets: streaming candles, indicators, drawing tools and multi-chart layouts on the Fyers feed.",
+  description: "Live charting for the Indian markets: streaming candles, indicators, drawing tools and multi-chart layouts on data from your Market Data Hub.",
   // Added to the iPad / iPhone Home Screen it opens full-screen, like an app.
   appleWebApp: { capable: true, title: "Tradex", statusBarStyle: "black" },
 };

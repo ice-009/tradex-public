@@ -127,7 +127,7 @@ export class DataEngine {
   /**
    * Quotes for `symbols`. Live quotes no older than `maxAgeMs` come from the cache;
    * the rest are fetched from the first source that has them, then the next source
-   * fills in whatever is still missing (e.g. end-of-day closes when the broker is down).
+   * fills in whatever is still missing.
    */
   async quotes(symbols: string[], options: { maxAgeMs: number; kinds?: SourceKind[] }): Promise<Quote[]> {
     const wanted = [...new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
@@ -202,16 +202,23 @@ export class DataEngine {
   private async fetchQuotes(source: DataSource, symbols: string[]): Promise<Quote[]> {
     const quotes = await source.quotes!.fetch(symbols);
     const delayed = source.quotes!.delayed;
-    return quotes.map((quote) => ({ ...quote, source: source.id, ...(delayed ? { delayed: true } : {}) }));
+    return quotes.map(({ delayed: stale, ...quote }) => ({ ...quote, source: source.id, ...(delayed || stale ? { delayed: true } : {}) }));
   }
 
-  /** Live quotes through the cache: concurrent callers share one fetch per symbol. */
+  /**
+   * Live quotes through the cache: concurrent callers share one fetch per symbol.
+   * A quote the source marks delayed (a stored last price) is answered but not cached.
+   */
   private async fetchLiveQuotes(source: DataSource, symbols: string[], maxAgeMs: number): Promise<Quote[]> {
     const stale = symbols.filter((symbol) => !this.quoteInflight.has(symbol));
+    const delayed = new Map<string, Quote>();
     if (stale.length) {
       const job = this.fetchQuotes(source, stale).then((quotes) => {
         const at = this.now();
-        for (const quote of quotes) this.quoteCache.set(quote.symbol, { at, quote });
+        for (const quote of quotes) {
+          if (quote.delayed) delayed.set(quote.symbol, quote);
+          else this.quoteCache.set(quote.symbol, { at, quote });
+        }
       });
       const settled = job.finally(() => stale.forEach((symbol) => this.quoteInflight.delete(symbol)));
       stale.forEach((symbol) => this.quoteInflight.set(symbol, settled.catch(() => undefined)));
@@ -221,7 +228,8 @@ export class DataEngine {
     const now = this.now();
     return symbols.flatMap((symbol) => {
       const hit = this.quoteCache.get(symbol);
-      return hit && hit.quote.source === source.id && now - hit.at <= Math.max(maxAgeMs, 60_000) ? [hit.quote] : [];
+      if (hit && hit.quote.source === source.id && now - hit.at <= Math.max(maxAgeMs, 60_000)) return [hit.quote];
+      return delayed.has(symbol) ? [delayed.get(symbol)!] : [];
     });
   }
 }

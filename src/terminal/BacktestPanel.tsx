@@ -59,16 +59,26 @@ export function BacktestPanel() {
     }
   }, [form, ready]);
 
+  // The stored history; asked again every 10 s while the Market Data Hub is still sending or downloading it.
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    api
-      .backtestInfo(form.universe, controller.signal)
-      .then(setInfo)
-      .catch((err: unknown) => {
-        if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Couldn't read the stored history.");
-      });
-    return () => controller.abort();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const load = () =>
+      api
+        .backtestInfo(form.universe, controller.signal)
+        .then((next) => {
+          setInfo(next);
+          if (next.sync?.active) timer = setTimeout(load, 10_000);
+        })
+        .catch((err: unknown) => {
+          if (!controller.signal.aborted) setError(err instanceof Error ? err.message : "Couldn't read the stored history.");
+        });
+    void load();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
   }, [form.universe, ready]);
 
   useEffect(() => {
@@ -140,6 +150,17 @@ export function BacktestPanel() {
         {formOpen && <BacktestFormView form={form} onChange={onChange} info={info} running={running} onRun={run} />}
         <div className="tx-bt-main" ref={mainRef}>
           {error && <div className="tx-scr-state is-error">{error}</div>}
+          {info?.sync?.active && (
+            <div className="tx-scr-state">
+              <span className="tx-spinner" />
+              <span>
+                {info.sync.queued
+                  ? `The Market Data Hub is downloading ${info.sync.queued} symbol${info.sync.queued === 1 ? "" : "s"}; results so far use the ${info.covered} of ${info.symbols} stocks already here.`
+                  : "Reading this universe's daily history from the Market Data Hub…"}
+              </span>
+            </div>
+          )}
+          {info?.sync?.error && !info.sync.active && <div className="tx-scr-state is-error">{info.sync.error}</div>}
           {ok ? (
             <BacktestResults data={ok} />
           ) : (
@@ -150,8 +171,8 @@ export function BacktestPanel() {
                   on open positions (best score first), one position per stock, and NSE futures costs.
                 </p>
                 <p>
-                  Results are only as good as the history behind them: about a year is stored now, and most screens need months of it to warm up. More history (via the data
-                  engine, about 5 broker calls per stock on Fyers Standard) would make results more reliable.
+                  Results are only as good as the history behind them: up to 5 years of daily bars from the Market Data Hub, so the period can span several market phases.
+                  Most screens need months of warm-up; the form shows the sessions available.
                 </p>
               </div>
             )

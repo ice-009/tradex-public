@@ -7,7 +7,7 @@ import { HubStream } from "./stream";
 
 export { hubConfig, hubMode } from "./config";
 export { HubClient, HubError } from "./client";
-export type { HubCandle, HubCandles, HubQuote, HubStatus, HubTimeframe } from "./client";
+export type { HubCandle, HubCandles, HubCandlesBatch, HubContracts, HubMembers, HubOiDay, HubOiRow, HubQuote, HubStatus, HubTimeframe } from "./client";
 
 // The app's one hub client, one price stream and a cached view of the hub's
 // health (from GET /v1/status), built on first use from HUB_URL / HUB_KEY.

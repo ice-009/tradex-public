@@ -1,45 +1,36 @@
-// NSE stock-futures contracts: naming and expiry.
+// NSE stock-futures contracts: which one to trade, and lot maths. Pure.
 //
-// Fyers symbol format: NSE:{UNDERLYING}{YY}{MMM}FUT (e.g. NSE:SBIN26NOVFUT).
-// Monthly stock-derivative expiry has been the LAST TUESDAY of the month since
-// September 2025. A holiday can move expiry a day earlier; callers that need to
-// be exact should fall back to the next month if a contract stops quoting.
+// Contracts come from the Market Data Hub (GET /v1/fo/contracts): each listed
+// month's ticker (e.g. SBIN26NOVFUT) and its real expiry, so holiday-shifted
+// expiries and the roll to next month are the hub's job, not guessed here.
 
-const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Last Tuesday of a month (UTC midnight). `month` is 0-based. */
-export function lastTuesday(year: number, month: number): number {
-  const lastDay = new Date(Date.UTC(year, month + 1, 0));
-  const back = (lastDay.getUTCDay() - 2 + 7) % 7;
-  return Date.UTC(year, month, lastDay.getUTCDate() - back);
+export interface FuturesContract {
+  /** The hub's ticker, e.g. "SBIN26NOVFUT". Also the app symbol for charts and quotes. */
+  ticker: string;
+  /** Expiry as a day key (UTC midnight of the date). */
+  expiry: number;
+  kind: "near" | "next";
+}
+
+/** "2026-11-24" → day key (UTC midnight); null when it isn't a date. */
+export function expiryDayKey(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  return match ? Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
 }
 
 /**
- * Near-month futures symbol for an IST day key: this month's contract through its expiry day,
- * next month's after it. `monthsAhead` picks a later contract (1 = next month).
+ * The contract to trade for a plan held about `holdDays` sessions: the near month,
+ * unless it expires within the holding period (+1 session of margin), then the next.
+ * `rollToNext` says the near month was skipped for that reason.
  */
-export function nearMonthFuture(symbol: string, day: number, monthsAhead = 0): string {
-  const date = new Date(day);
-  let year = date.getUTCFullYear();
-  let month = date.getUTCMonth();
-  if (day > lastTuesday(year, month)) month += 1;
-  month += monthsAhead;
-  year += Math.floor(month / 12);
-  month %= 12;
-  return `NSE:${symbol}${String(year).slice(2)}${MONTHS[month]}FUT`;
-}
-
-/** Expiry day (last Tuesday) of a futures symbol like NSE:SBIN26NOVFUT, or null if it isn't one. */
-export function expiryOf(contract: string): number | null {
-  const match = contract.match(/(\d{2})([A-Z]{3})FUT$/);
-  if (!match) return null;
-  const month = MONTHS.indexOf(match[2]);
-  return month < 0 ? null : lastTuesday(2000 + Number(match[1]), month);
-}
-
-/** The underlying of a futures symbol (NSE:SBIN26NOVFUT → SBIN). */
-export function underlyingOf(contract: string): string {
-  return contract.replace(/^NSE:/, "").replace(/\d{2}[A-Z]{3}FUT$/, "");
+export function pickContract(contracts: FuturesContract[], today: number, holdDays: number): { near: FuturesContract | null; next: FuturesContract | null; rollToNext: boolean } {
+  const live = contracts.filter((contract) => contract.expiry >= today).sort((a, b) => a.expiry - b.expiry);
+  const near = live.find((contract) => contract.kind === "near") ?? live[0] ?? null;
+  const next = live.find((contract) => near && contract.expiry > near.expiry) ?? null;
+  const calendarDays = Math.ceil(holdDays * 1.45) + 1;
+  return { near, next, rollToNext: Boolean(near && next && near.expiry - today <= calendarDays * DAY_MS) };
 }
 
 /** Lots that fit a max loss, given the stop distance per share; also what one lot risks. */

@@ -18,7 +18,7 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
             │       ▼                                                         │
             │  src/server/services    orchestration (screener, chart, …)      │
             │       ▼                                                         │
-            │  src/server/providers   data: Fyers, NSE files, caches, db      │
+            │  src/server/providers   the Market Data Hub client, caches, db  │
             └───────┼─────────────────────────────────────────────────────────┘
                     ▼
             src/core   pure calculation engine — used by both sides
@@ -26,13 +26,13 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
 
 | Layer | Folder | What goes here | May import |
 |---|---|---|---|
-| Engine | `src/core` | Indicators, patterns, screens, scoring, backtest, tick and futures maths, IST session rules, file parsers. Pure functions: no I/O, no React, no Next. | `@/core` |
+| Engine | `src/core` | Indicators, patterns, screens, scoring, backtest, tick and futures maths, IST session rules, pacing against the broker budget. Pure functions: no I/O, no React, no Next. | `@/core` |
 | Contracts | `src/contracts/api.ts` | The JSON body each `/api` route returns. Types only. | `@/core` (types) |
 | Data engine | `src/server/data` | One pipeline for market data whatever the source: source adapters, routing with fallback, caches, and the live price stream. See below. | `@/core`, `@/contracts`, `@/server` |
-| Providers | `src/server/providers` | Raw clients for each external system: Fyers client/auth/socket/budget, the Market Data Hub client (`hub/`), NSE bhavcopy store (`dailyStore`), lot files, results calendar, universes, symbols, sample data. | same |
+| Providers | `src/server/providers` | The Market Data Hub client (`hub/`) and what is built on it: the daily-bar store (`dailyBars`, `dailyStore`), reference data (`reference`: lots, ban list, results calendar), F&O data (`foData`: OI, membership), futures contracts (`futures`), universes; plus symbols, sample data and the trade-record database. | same |
 | Services | `src/server/services` | One use case per file: load data from providers, run the engine, return a contract type. | same |
 | Routes | `src/app/api/**/route.ts` | `export const GET = authed(...)`: read params, call one service, `NextResponse.json`. No logic. | `@/server`, `@/contracts` |
-| Client data | `src/client` | `api.ts` (typed fetchers, the only place that knows URLs) plus feeds: `marketData` (history, quotes, live ticks), `screenerFeed`, `highLowFeed`, `lotsFeed`. | `@/core`, `@/contracts`, `@/client` |
+| Client data | `src/client` | `api.ts` (typed fetchers, the only place that knows URLs) plus feeds: `marketData` (history, quotes, live ticks), `screenerFeed`, `highLowFeed`, `lotsFeed`, `futuresFeed`, `usageFeed` (the hub's health and budget). | `@/core`, `@/contracts`, `@/client` |
 | Renderer | `src/chart` | Canvas chart engine, drawings, annotations, theme. Draws engine output; fetches nothing. | `@/core`, `@/chart` |
 | UI | `src/terminal`, `src/components` | React components and UI state (`store`, `uiPrefs`, `presets`, `ideaActions`). | everything except `@/server` and `@/app` |
 
@@ -40,7 +40,7 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
 
 - **A new indicator or pattern:** `src/core/indicators`. Register it in `indicators.ts`; the chart draws it through `annotate()`.
 - **A new screen:** add a `ScreenDef` to `SCREENS` in `src/core/screener/screens.ts`. The service, API and UI pick it up with no other changes.
-- **A new market-data source** (another broker, a vendor API): see "Adding a data source" below. For reference files (lot sizes, calendars), add a provider in `src/server/providers` with its parser in `src/core/parsers`, so the parser can be tested without the network.
+- **New market data** (another dataset, another exchange): add it to the [Market Data Hub](https://github.com/ice-009/market-data-hub), then a typed method on `src/server/providers/hub/client.ts` and a provider that caches it. Tradex itself never calls a broker or an exchange.
 - **A new endpoint:**
   1. Add the response type to `src/contracts/api.ts`.
   2. Add the service in `src/server/services`.
@@ -61,140 +61,90 @@ npm run check   # typecheck + lint (layer rules) + unit tests
 npm test        # unit tests only
 ```
 
-## Data engine (`src/server/data`)
+## Market data: the Market Data Hub
 
-Market data reaches the app through one pipeline that doesn't depend on where it comes from:
+Tradex fetches no market data itself. Everything — candles, quotes, live prices, daily bars with delivery %, open interest, the F&O list, lot sizes, the ban list, results dates, futures contracts — comes from a [Market Data Hub](https://github.com/ice-009/market-data-hub): a separate service that owns the one broker login, its request budget and live socket, and NSE's daily files, and serves them to every app over HTTP with an API key (`HUB_URL`, `HUB_KEY`). Tradex's key needs only the read scopes `history`, `live` and `fo`; backfills and downloads are run on the hub.
+
+`src/hubOnly.test.ts` keeps it that way: no code under `src/` may mention Fyers or NSE's download hosts, and on the server only the hub client may call `fetch()`.
 
 ```
- sources/fyers.ts ─┐ (or sources/hub.ts)               ┌─ /api/chart, /api/quotes (services)
- sources/eod.ts  ──┼─▶ DataEngine (engine.ts) ─────────┼─ screener backfill + live bar (dailyStore)
- sources/sample.ts ┘     history · quotes             ├─ Day High/Low sweep
-        │                                               │
-        └── live socket ─▶ MarketStream (stream.ts) ──┴─ /api/broker/stream (SSE) ─▶ browser liveHub
-            (or hub SSE)     socket, or polled quotes
+ Market Data Hub
+   /v1/candles (1m … 1d), /v1/quotes ─────────▶ providers/hub/client.ts ─▶ sources/hub.ts ─▶ DataEngine ─▶ /api/chart, /api/quotes
+   /v1/stream (one SSE) ──────────────────────▶ providers/hub/stream.ts ─▶ HubLiveFeed ──▶ MarketStream ─▶ /api/broker/stream ─▶ browser
+   /v1/candles/batch (300 symbols, 5 years) ──▶ providers/dailyBars.ts (dailyStore) ─▶ screener, backtests, plan evidence, journal
+   /v1/fo/oi/day ─────────────────────────────▶ providers/foData.ts ─▶ the screener's OI tag
+   /v1/fo/members?from&to ────────────────────▶ providers/foData.ts ─▶ point-in-time F&O list for backtests and evidence
+   /v1/fo/contracts ──────────────────────────▶ providers/futures.ts ─▶ order ticket, Day High/Low futures segment
+   /v1/lots, /v1/fo/ban, /v1/results-calendar ▶ providers/reference.ts
+   /v1/universe/fno ──────────────────────────▶ providers/universe.ts (index lists are snapshots in data/universe)
+   /v1/status ────────────────────────────────▶ providers/hub/index.ts ─▶ budget pacing, top bar, "Market data" panel
 ```
+
+Without `HUB_URL`/`HUB_KEY`, or while the hub is unreachable, charts draw clearly labelled **sample data**, a banner says **Connect a Market Data Hub** (with a link to the hub's README), the screener and backtests wait, and `/api/broker/status` reports the hub's state. There is no other fallback.
+
+### Data engine (`src/server/data`)
 
 | Piece | Job |
 |---|---|
-| `types.ts` | The `DataSource` interface. A source declares what it can do: `history` (which intervals, how far back, whether downloads are worth caching), `quotes` (live or delayed) and `stream` (live socket and its symbol limit). |
-| `engine.ts` | `DataEngine.history()` and `.quotes()`: try sources in order, skip ones that can't serve, and fall back on failure. Sources are rested for 30 s after network, auth, 5xx or rate-limit errors; an error about one symbol doesn't rest the whole source. History is kept on disk incrementally; quotes are cached with per-caller freshness. Every answer is tagged with its source. |
-| `stream.ts` | `MarketStream`: one live pipeline. It uses a source's socket when one connects, highest-priority symbols first, up to the symbol limit. Everything else, or everything when there's no socket, is polled through the engine and sent as identical `Tick` events marked `polled`. When the socket returns, polled symbols move onto it. |
-| `sources/` | `fyers` (broker: history, quotes, socket; every call charged to the Fyers budget), `hub` (the same broker data from a Market Data Hub; see below), `eod` (the screener's daily store: real daily candles and the last close as a delayed quote, at no API cost), `sample` (generated candles, last resort, clearly labelled). |
-| `selectSources.ts`, `index.ts` | Wiring. `DATA_SOURCES` in `.env` sets the order (default `fyers,eod,sample`, or `hub,eod,sample` when `HUB_URL` and `HUB_KEY` are set). Sources are built from factories, so one that isn't chosen is never constructed. `/api/data/sources` shows each source's state. |
-| `seriesKey.ts` | Keys of stored candle series (`NSE:SBIN-EQ:D`): the instrument and resolution in the broker's naming, shared by the `fyers` and `hub` sources. |
+| `types.ts` | The `DataSource` interface: `history` (which intervals, how far back, whether downloads are cached), `quotes` and `stream`. |
+| `engine.ts` | `DataEngine.history()` and `.quotes()`: try sources in order, skip ones that can't serve, fall back on failure. A source is rested for 30 s after network, auth, 5xx or rate-limit errors; an error about one symbol doesn't rest it. History is kept on disk incrementally (`market.db`, `candleDb.ts`), so a chart opened before asks only for its newest candles. Quotes are cached with per-caller freshness; a quote the source marks `delayed` (the hub's stored last price) is answered but never cached as live. |
+| `stream.ts` | `MarketStream`: one live pipeline. Symbols go on the hub's stream (up to 100), highest priority first; the rest are polled through the engine and sent as identical `Tick` events marked `polled`. A watchdog restarts a silent stream. |
+| `sources/hub.ts` | The `hub` source (kind `broker`). Symbols are hub tickers: `SBIN`, `NIFTY`, and stock futures like `SBIN26NOVFUT`; `NSE:SBIN-EQ`, `NSE:NIFTY50-INDEX` and `NSE:SBIN26NOVFUT` (names older layouts saved) are mapped to them, and only plain tickers are sent. Intervals: 1m, 5m, 15m, 1h and 1d as served; 3m from 1m, 10m from 5m, 30m from 15m, 2h/4h from 1h, resampled from 09:15 IST (`resampleIntraday`). Windows: 5 years daily, 1 year intraday, 30 days of 1-minute bars. A 503 that still carries stored candles is shown but not stored as complete. |
+| `sources/sample.ts` | Generated candles: the offline / demo fallback, always labelled "Sample data", never used by the screener or backtests. |
+| `selectSources.ts`, `index.ts` | Wiring: `hub, sample` with a hub, `sample` alone without one. Sources are built from factories, so the hub source isn't constructed without its settings. `DATA_SOURCES` from earlier versions is ignored with a warning. |
+| `seriesKey.ts` | Keys of stored candle series (`NSE:SBIN-EQ:D`, `NSE:SBIN26NOVFUT:1`): unchanged from earlier versions, so their stored candles are reused. |
 
-**What the app sees:**
-- Charts get `source` (`broker`, `eod` or `sample`), `sourceId`, and a `sourceReason` when a fallback answered.
-- Quotes carry `source` and `delayed`.
-- Ticks carry `source` and `polled`.
-- The top bar shows **Live** (socket), **Delayed** (polling) or **Feed offline**.
+**What the app sees:** charts get `source` (`broker` or `sample`), `sourceId` and a `sourceReason` when sample data answered; quotes carry `source` and `delayed`; ticks carry `source` and `polled`; the top bar shows **Live**, **Delayed** or **Feed offline**, and the hub's meter.
 
-The screener asks for broker data only (`kinds: ["broker"]`), so sample data can never get into it.
-
-### Market Data Hub mode
-
-A [Market Data Hub](https://github.com/ice-009/market-data-hub) is a separate service that owns the broker login, request budget, live socket and NSE downloads, and serves them to several apps over HTTP with an API key. Setting `HUB_URL` and `HUB_KEY` switches Tradex to it; leaving them empty keeps Tradex standalone, exactly as before.
-
-```
- Market Data Hub ── /v1/candles, /v1/quotes ──▶ providers/hub/client.ts ─▶ sources/hub.ts ─▶ DataEngine
-                 └─ /v1/stream (one SSE) ─────▶ providers/hub/stream.ts ─▶ HubLiveFeed ──▶ MarketStream
-                 └─ /v1/lots, /fo/ban, /results-calendar, /universe/fno ─▶ lotSizes, fnoBan, resultsCalendar, universe
-                 └─ /v1/candles?tf=1d (with delivery %) ─▶ dailyStore (screener)
-                 └─ /v1/status ─▶ marketBudget (pacing), /api/broker/status and /usage (top bar)
-```
+### Hub client (`src/server/providers/hub`)
 
 | Piece | Job |
 |---|---|
-| `providers/hub/config.ts` | Reads `HUB_URL`, `HUB_KEY`, `HUB_TIMEOUT_MS`. `hubMode()` is the one switch. |
-| `providers/hub/client.ts` | Typed `GET`s with a timeout. 429, 502–504 and network errors are retried with doubling back-off, waiting the hub's `Retry-After` but never more than 10 s (longer means fail now and let the engine fall back). A 503 that still carries stored candles is returned as a partial answer. The key is a private field and is scrubbed from every error message. |
-| `providers/hub/sse.ts`, `stream.ts` | An SSE parser and one stream connection for every live symbol (at most 100). It reopens with the new list when the symbol set changes (changes within 250 ms are coalesced), reconnects with back-off and `Last-Event-ID` after a drop, and treats 45 s of silence (the hub sends a heartbeat every 15 s) as a dead connection. |
-| `sources/hub.ts` | The `hub` source (kind `broker`). Symbols: `SBIN`/`NIFTY` are the hub's tickers; `NSE:SBIN-EQ` and `NSE:NIFTY50-INDEX` are mapped to them; futures and BSE symbols are passed to the next source. Intervals: 5m, 15m, 1h and 1d as served, 10m/30m/2h/4h resampled from 09:15 IST (`resampleIntraday` in `core/market/aggregate.ts`); 1m and 3m aren't served. Candles are cached in `market.db` under the same keys as Fyers, so history downloaded before switching is reused. Stale quotes (the hub's stored last price when its broker can't answer) are left out, so the end-of-day close answers instead, marked delayed. |
-| `providers/marketBudget.ts` | The broker budget as services see it: Tradex's Fyers budget standalone, the hub's counters (from `/v1/status`) in hub mode, for pacing the screener's quotes and the high/low sweep. |
+| `config.ts` | Reads `HUB_URL`, `HUB_KEY`, `HUB_TIMEOUT_MS`. `hubMode()` is the one switch. |
+| `client.ts` | Typed `GET`s with a timeout. 429, 502–504 and network errors are retried with doubling back-off, waiting the hub's `Retry-After` but never more than 10 s. Batch candles are asked 300 symbols at a time and F&O membership 400 days at a time. The key is a private field and is scrubbed from every error message. |
+| `sse.ts`, `stream.ts` | One SSE connection for every live symbol (at most 100): reopened when the symbol set changes (coalesced over 250 ms), reconnected with back-off and `Last-Event-ID`, and treated as dead after 45 s of silence. |
+| `index.ts` | The app's one client and stream, and the hub's `/v1/status` cached for 30 s (`hubHealth`). |
+| `budget.ts` | The hub's broker budget as services see it (`planLimits`, `budgetFor`), from `/v1/status`, for pacing the screener's live quotes and the high/low sweep (`sweepIntervalMs`, `shareOfCaps` in `src/core/ratelimit/budget.ts`). The hub enforces the broker's limits itself; Tradex only avoids spending more than its share of the day. |
 
-In hub mode nothing of Fyers is constructed or called: the `fyers` source isn't built, the Fyers budget, stream manager and SDK are only created on first use (never), and the Fyers login routes answer 409. `src/server/data/hubMode.test.ts` checks this with every Fyers module replaced by spies. The NSE F&O bhavcopy import (open interest, point-in-time membership) still runs in Tradex; it never touched Fyers.
+### Daily bars (`providers/dailyBars.ts`, `dailyStore.ts`)
 
-### Adding a data source
+The screener, backtests, the plan's evidence and the trade journal read one store of daily bars per symbol:
 
-1. Write `src/server/data/sources/<name>.ts` exporting a `DataSource`:
-   - Map the app's symbols (`RELIANCE`, `NIFTY`, `NSE:SBIN26NOVFUT`) to the source's own naming.
-   - Return `unavailable()` reasons when it isn't configured.
-   - Throw `SourceSkip` for "not now", for example when its quota is spent.
-2. Add it to `FACTORIES` in `src/server/data/index.ts` and list it in `DATA_SOURCES`.
-3. Test it the way `engine.test.ts` does, with fake responses.
+- A new symbol is read in full — 5 years — with every other new symbol of the universe in one `/v1/candles/batch` request. After that only the last week is asked for; the overlap replaces provisional bars and fills in delivery %.
+- A stored close that moved (the hub re-downloaded adjusted history after a split or bonus) triggers a full re-read of that symbol.
+- Symbols the hub doesn't hold in full come back in `queued`: the hub downloads them in the background. What it has is used meanwhile (not saved), the screener and backtest panel say "the hub is downloading N symbols", and the store asks again after 30 s. When the hub's broker can't be used, the answer carries a `warning` instead and the store asks again in 5 minutes. Between ~16:00 and ~18:00 IST a stock missing only the day's bar (filled by NSE's evening file) is not queued and counts as held.
+- Bars are kept in memory and in `.cache/screener/daily/` with the range they cover; files from earlier versions (about a year, no coverage) are read in full once.
+- During the session, today's forming bar is laid over the stored ones: the hub's live quotes, refreshed at a pace its broker budget allows (`livePaceMs`), with newer stream ticks on top. A stored last price (`delayed`) is never used as today's bar.
 
-Charts, quotes, the screener, the scanner and the live stream pick it up with no other changes.
+### F&O data (`providers/foData.ts`, `futures.ts`)
 
-## Broker API budget (Fyers)
+- **Open interest** for the screener's tag: `/v1/fo/oi/day` (the newest stored trade day), cached 30 minutes and shown when it's at most a week old. Each row becomes a `FoDayRecord` and `oiFact` (`src/core/market/openInterest.ts`) gives the buildup class (sign of the near-month future's change × sign of the combined OI change) and OI change %. It is **information only and never scored**: over Oct 2025 – Nov 2026 neither the buildup classes nor the futures basis showed a tradeable edge after costs.
+- **Point-in-time F&O membership** for backtests and the plan's evidence: `/v1/fo/members?from&to` over the stored span (400 days per request), cached 6 hours. Days the hub has no F&O file for are absent and fall back to today's list (`src/core/backtest/universe.ts`).
+- **Futures contracts**: `/v1/fo/contracts?symbol=` lists the near and next month as hub tickers with their real expiries and the lot, cached until the near month expires. The order ticket picks the contract (`pickContract`: the near month unless it expires inside the holding period) and reads the basis from one quote of the stock and its future. The Day High/Low sweep loads the F&O list's contracts in the background, two at a time, and sweeps each stock's near-month future once its ticker is known. Right after an expiry the hub may list only one contract (as near) until the evening's file. Tradex never builds a contract name itself.
 
-Fyers limits Data API calls (quotes, history, option chain) per plan. From 16 Oct 2026:
+### Broker budget
 
-| Plan | Per second | Per minute | Per day | Symbols per quote call | Live-socket symbols |
-|---|---|---|---|---|---|
-| Standard | 5 | 50 | 5,000 | 50 | 100 |
-| Prime | 10 | 500 | 5,00,000 | 1,000 | 5,000 |
+The hub enforces the broker's limits (Fyers' Standard plan: 5 calls a second, 50 a minute, 5,000 a day; Prime is 100× the day) for every app connected to it. Tradex reads the hub's counters from `/v1/status` and paces its own background work from them:
 
-More than 3 per-minute breaches in a day block the account for the rest of that day. Set `FYERS_PLAN=prime` in the environment if you're on Prime; the default is `standard`.
+| Priority | Used for | Share of the hub's minute | Share of its day |
+|---|---|---|---|
+| `user` | charts, search, order ticket | all | all |
+| `refresh` | watchlist, alerts, the screener's live quotes | 75% | 85% |
+| `background` | high/low sweep | 50% | 70% |
 
-Every data call goes through `src/server/providers/fyers/budget.ts`, which applies the policy in `src/core/ratelimit/budget.ts` (connected to a Market Data Hub, Tradex makes no Fyers calls; the hub keeps its own budget and the top bar shows that one):
+- The Day High/Low scan runs only while its panel is open, about every 1½ minutes on Standard (`sweepIntervalMs`); symbols on the live stream are checked on every tick.
+- Watchlist quotes may be up to 5 minutes old on Standard; on-screen rows and charts stream live.
+- Screener quotes are refreshed during market hours at a pace worked out from the `refresh` budget left for the session (~35 s for the F&O list on Standard, never under 15 s).
 
-- **Headroom:** at most 3 calls a second (60% of Standard's 5), 80% of the per-minute limit and 95% of the daily one.
-- **Windows are counted as Fyers sees them:** a call holds its slot from when it's sent until one window-length after its response arrives. Counting by send time isn't enough: on a cold start the first calls are slowed by connection setup and reach Fyers together with the next second's calls. That produced real 429s at 4 sends a second.
-- **On a 429:** it is never retried. All calls pause for a minute, and the strike counts once per burst. For the rest of that day the budget runs at 1 call a second and half the per-minute cap, to avoid a 4th strike. Calls from the last minute are saved, so a restart can't start with a burst.
-- **Priorities:** `asPriority("background", fn)` tags every call made inside `fn`.
-
-  | Priority | Used for | Share of each minute | Share of the day |
-  |---|---|---|---|
-  | `user` | charts, search, order ticket | all | all |
-  | `refresh` | watchlist, alerts | 75% | 85% |
-  | `background` | high/low sweep, screener, backfill | 50% | 70% |
-
-- **Persistence:** the day's count is saved to `.cache/fyers-usage.json`, so a restart doesn't reset it. The top bar meter (`/api/broker/usage`) shows the count.
-
-Tradex is for shortlisting; orders are placed in the broker's own app. So the defaults favour a low call count over tick-fresh numbers:
-
-- The Day High/Low scan runs only while its panel is open.
-- Watchlist quotes may be up to 5 minutes old; on-screen rows and charts stream live over the socket at no API cost.
-- Screener quotes are refreshed during market hours at a pace worked out from the `refresh` budget left for the session (`livePaceMs` in `dailyStore.ts`; ~35 s for the F&O list on Standard, never under 15 s). Socket ticks newer than the snapshot are laid over it. The history backfill pauses during market hours if it would eat into that reserve.
-- The order ticket uses cached quotes; it is a planning aid only.
-
-How the app keeps its calls down:
-
-- **Quotes:** one cache in the data engine serves every reader. Each caller says how old a quote it accepts: the order ticket takes 5 s; the watchlist takes 5 min on Standard; the screener takes its live pace (above), so readers share fetches. The high/low sweep usually pays for everyone.
-- **Day high/low sweep:**
-  - It is paced from what's left of the background budget for the rest of the session (`sweepIntervalMs`), about every 1½ min on Standard.
-  - Symbols on the live socket are checked on every tick at no cost.
-- **Chart history:** candles live in a local SQLite database, `.cache/market.db` (`src/server/data/candleDb.ts`), one series per source, symbol and interval.
-  - A chart opened before costs one "tail" call, or nothing within its freshness window.
-  - Downloads use Fyers' request limits: 90 days per intraday request, 365 per daily request.
-  - Fyers' `{ s: "error" }` replies (sent with HTTP 200) are treated as errors. With a broker connected, a failed load shows that error instead of sample candles.
-- **Download F&O history** (`src/server/services/historyPrefetch.ts`, `/api/data/history-db`, the Market data dialog):
-  - fills the database with 5 years of daily and 1 year of 15-minute candles for every F&O stock plus NIFTY, BANKNIFTY and FINNIFTY;
-  - runs at background priority, skips what's stored (resumable), and pauses when the day's background budget is spent;
-  - the screener's daily store extends itself from the database with `history({ offline: true })`, which reads the database only and never calls the API, so backtests get the full 5 years.
-- **Live socket:** charts get the 100 symbols first, then alerts, then watchlist rows in list order. Symbols that don't fit fall back to the quote refresh.
-
-## NSE F&O bhavcopy (stock-futures OI, point-in-time F&O list)
-
-NSE's daily F&O bhavcopy (UDiFF `BhavCopy_NSE_FO_0_0_0_YYYYMMDD_F_0000.csv.zip`) is imported into the market database from NSE's free public archive. It costs **no broker API calls**.
-
-| Piece | Job |
-|---|---|
-| `src/core/parsers/foBhavcopy.ts` | Parse a day's CSV (stock futures, `STF`, only) and aggregate per underlying: near and next month close / settlement / volume (contracts) / OI / change in OI, and OI **combined** across listed months with its change = sum of each month's change (so an expiry roll-off isn't read as unwinding). Renamed tickers are filed under the new name (`LTIM→LTM`, `ICICIPRULI→ICICILIFE`, `TATAMOTORS→TMPV`). Also which days to ask for. |
-| `src/core/market/openInterest.ts` | Buildup class (sign of the near-month future's change × sign of the combined OI change), OI change %, the screener's tag and tooltip. |
-| `src/core/backtest/universe.ts` | Point-in-time F&O membership for backtests and the note saying which list was used. |
-| `src/server/providers/foBhavcopy.ts`, `unzip.ts` | Download (≤ 1 request per 1.1 s, back-off on 403/429/5xx/timeouts), unzip with Node's zlib, and reject a file whose trade date isn't the date asked for (NSE has served another day's file for holidays). |
-| `src/server/providers/foBhavStore.ts` | Tables `fo_bhav_days` (each day checked: ok / holiday / mismatch — makes the backfill resumable) and `fo_futures` (one row per day + underlying). Membership on a day = underlyings with a row. |
-| `src/server/services/foBhavSync.ts` | The backfill (last year, newest first, ~5 minutes; stops after three days in a row fail) started from **Market data → F&O bhavcopy (NSE, free)**, and the evening update `ensureFoRecent()`, which every screener run calls (at most every 30 minutes; today's file is asked for after 18:00 IST). |
-
-The screener shows each F&O stock's buildup and combined OI change (e.g. "Long buildup · OI +6%") next to the setup. It is **information only and never scored**: over Oct 2025 – Nov 2026 neither the buildup classes nor the futures basis showed a tradeable edge after costs.
+The top bar's meter (`/api/broker/usage`) shows the hub's calls today against its cap; clicking it opens the read-only **Market data** panel (`/api/data/hub`): the hub's health, problems and warnings, and how fresh each dataset is.
 
 ## Daily trade plan (`src/core/plan`)
 
 The **Plan** tab (the bottom panel's default) turns the screener into a short list: which trades to take today, how many lots, how to get in and out, plus your open trades and a journal.
 
 ```
- market.db (5y daily) + screener store (1y, delivery %)      disk only, no broker calls
-        │  providers/deepHistory.ts
+ dailyStore: 5 years of daily bars + delivery %, from the hub's batch candles
+        │  + point-in-time F&O list (providers/foData.ts, /v1/fo/members)
         ▼
  scanSignals → evidence.ts replaySignals → summarizeEvidence   services/evidence.ts: background,
         per screen × NIFTY above / below its 200-day             cached in .cache/plan-evidence.json
@@ -214,7 +164,7 @@ The **Plan** tab (the bottom panel's default) turns the screener into a short li
 | `tracker.ts` | Today's action for an open trade from the stored daily bars (server) with the live price laid over it (browser). |
 | `journal.ts` | Realised R, net R after charges, and slippage of your fills against the plan. |
 
-The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers only what is stored: run **Download F&O history** for the 5 years, otherwise it uses the screener's year. Point-in-time F&O membership is used on the sessions the F&O bhavcopy import covers.
+The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers the 5 years of daily bars the hub serves. Point-in-time F&O membership is used on the sessions the hub has an F&O list for.
 
 The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later). Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`.
 
@@ -223,7 +173,7 @@ The trade journal is the Prisma model `Trade` (per user; `side` is stored so sho
 The **Backtest** tab in the bottom dock replays the screens over the stored daily history and trades their signals as one account. It answers "what would this set of screens have done with my sizing, my position limit and real costs", with enough detail to judge whether the result can be trusted.
 
 ```
- screenerStore (stored daily bars, disk only)
+ screenerStore (up to 5 years of daily bars from the hub's batch candles; opening the panel asks for any symbol not held)
         │
         ▼
  signals.ts  scanSignals()   every screen × every stock × every session  ── cached per universe + last session
@@ -249,7 +199,7 @@ The **Backtest** tab in the bottom dock replays the screens over the stored dail
    - otherwise the position is closed at the close after the holding period: each screen's `HOLD_BARS` (BTST 1, swing 10, 15–30 days 25, results 10) or the override. The time exit is never the entry session itself, so a BTST bought at the next open is sold at the following close;
    - anything still open on the period's last session is closed at its close ("Period end").
 4. **Slots.** At most *max positions* open (pending next-open orders count), one position per stock across all screens. When more signals fire than there are free slots, they are taken by the screen's `score`, highest first. Scores of different screens are on different scales, so with several screens they are interleaved: each screen's best signal, then each screen's second best, and so on.
-5. **Sizing.** Risk per trade = *risk %* × current equity (marked to market at the signal close). Quantity = risk ÷ (planned entry − stop), rounded down to **whole futures lots** (NSE lot file, `getLotSizes`) or to whole shares when lots are off or unknown; the result says which. A signal whose single lot risks more than the budget is skipped and counted. Total open notional is capped at equity × *max leverage* (default 4×; stock-futures margin is roughly 20–25% of notional).
+5. **Sizing.** Risk per trade = *risk %* × current equity (marked to market at the signal close). Quantity = risk ÷ (planned entry − stop), rounded down to **whole futures lots** (the hub's lot sizes, `getLotSizes`) or to whole shares when lots are off or unknown; the result says which. A signal whose single lot risks more than the budget is skipped and counted. Total open notional is capped at equity × *max leverage* (default 4×; stock-futures margin is roughly 20–25% of notional).
 6. **Equity** is cash plus open positions marked to the close. R = net P&L ÷ the ₹ risk the trade was sized for.
 
 ### Costs (`costs.ts`)
@@ -291,11 +241,11 @@ Further warnings flag one trade making most of the profit, most signals being sk
 
 ### Known limitations
 
-- **Survivorship bias.** The Nifty universes are today's lists. Stocks that were dropped, delisted or merged during the period are missing, and stocks added after strong runs are included. That flatters results. The **F&O universe is point-in-time** where the NSE F&O bhavcopy has been imported (see below): on those sessions only stocks that had stock futures that day can signal; other sessions use today's list, and every result says how many sessions used which. Former members without stored daily bars still can't be replayed (the note names them). In testing this moved a BTST backtest by only ~0.015 pp a day, so it is a correctness fix, not an edge.
+- **Survivorship bias.** The Nifty universes are today's lists. Stocks that were dropped, delisted or merged during the period are missing, and stocks added after strong runs are included. That flatters results. The **F&O universe is point-in-time** on every session the hub has NSE's F&O bhavcopy for (see "F&O data" above): on those sessions only stocks that had stock futures that day can signal; other sessions use today's list, and every result says how many sessions used which. Former members without stored daily bars still can't be replayed (the note names them). In testing this moved a BTST backtest by only ~0.015 pp a day, so it is a correctness fix, not an edge.
 - **Cash prices stand in for futures.** The futures basis (usually a small premium that decays to expiry) is ignored, as are rollover costs and slippage at monthly expiry. Positions held over an expiry would really be rolled: two more orders and a calendar spread.
 - **Daily bars only.** Inside a session the order of high and low is unknown; that's why a bar touching both stop and target counts as the stop. Intraday entries and trailing stops can't be modelled.
-- **About one year of history.** Roughly 250 sessions are stored. Most screens need 60–250 sessions of warm-up, so a backtest often covers only the last few months: one market phase. The panel shows the sessions, signals and trades behind every result.
+- **Up to five years of history.** The hub serves about 5 years of daily bars (the broker's limit). Most screens need 60–250 sessions of warm-up. The panel shows the sessions, signals and trades behind every result.
 - **Lot sizes are today's**, applied to the whole period; NSE revises them twice a year.
 - **Delivery-based screens** need NSE delivery data, which exists only for completed sessions in the bhavcopy.
 
-More history gives more reliable results. The data engine can fetch longer daily history (`dataEngine().history`, about 5 calls per symbol on Fyers Standard, see the budget section), but the backtester never triggers downloads; it uses what the screener has already stored.
+The daily bars come from the hub's `/v1/candles/batch`; a symbol the hub doesn't hold yet is downloaded by the hub in the background, and the panel says so until it arrives.

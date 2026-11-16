@@ -1,12 +1,11 @@
 // The contract every market-data source implements. The data engine
 // (./engine.ts) and the market stream (./stream.ts) only talk to sources
-// through this interface, so adding a source — another broker, an exchange
-// file, a vendor API — is one adapter in ./sources, with nothing else in the
-// app changing.
+// through this interface. Tradex has two: the Market Data Hub (./sources/hub.ts)
+// and labelled sample data (./sources/sample.ts) for running without one.
 //
-// Symbols are the app's own: "RELIANCE", "NIFTY", or a full exchange symbol
-// such as "NSE:SBIN26NOVFUT" for a futures contract. Each adapter maps them to
-// its source's naming.
+// Symbols are the app's own: "RELIANCE", "NIFTY", or a stock-futures contract
+// such as "SBIN26NOVFUT" (the hub's ticker). Each adapter maps them to its
+// source's naming.
 //
 // No server-only imports here: the engine and these types are unit-tested.
 
@@ -33,8 +32,8 @@ export interface HistoryResult {
   complete: boolean;
 }
 
-/** A quote as a source returns it; the engine adds `source` and `delayed`. */
-export type SourceQuote = Omit<Quote, "source" | "delayed">;
+/** A quote as a source returns it; the engine adds `source`. `delayed` marks one that isn't a live price (e.g. a stored last close). */
+export type SourceQuote = Omit<Quote, "source" | "delayed"> & { delayed?: boolean };
 
 /** A tick as a source emits it; the engine adds `source`. */
 export type SourceTick = Omit<Tick, "source" | "polled">;
@@ -51,7 +50,7 @@ export interface HistoryCapability {
 }
 
 export interface QuoteCapability {
-  /** Not live prices (e.g. last end-of-day close). Delayed quotes are never cached as fresh. */
+  /** Not live prices at all (e.g. last end-of-day closes). Delayed quotes are never cached as fresh. */
   delayed: boolean;
   /** Quotes for these symbols; symbols it doesn't know are simply left out. */
   fetch(symbols: string[]): Promise<SourceQuote[]>;

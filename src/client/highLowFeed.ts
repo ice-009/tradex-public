@@ -17,11 +17,13 @@ export interface Feed {
   totals: { highs: number; lows: number };
   instruments: number;
   lastPollAt: number;
-  /** Current full-sweep interval (ms), paced by the API budget; null when not sweeping. */
+  /** F&O stocks whose near-month future is in the sweep. */
+  futures: number;
+  /** Current full-sweep interval (ms), paced by the hub's broker budget; null when not sweeping. */
   sweepMs: number | null;
 }
 
-let feed: Feed = { status: "starting", day: 0, seq: 0, events: [], totals: { highs: 0, lows: 0 }, instruments: 0, lastPollAt: 0, sweepMs: null };
+let feed: Feed = { status: "starting", day: 0, seq: 0, events: [], totals: { highs: 0, lows: 0 }, instruments: 0, futures: 0, lastPollAt: 0, sweepMs: null };
 const listeners = new Set<() => void>();
 const set = (next: Feed) => {
   feed = next;
@@ -60,7 +62,7 @@ export function useHighLowPolling(enabled = true) {
           // A new trading day (or a restarted server) resets the sequence: start over.
           const reset = json.day !== feed.day || json.seq < feed.seq;
           const events = reset ? json.events : [...feed.events, ...json.events].slice(-KEEP);
-          set({ status: json.status, day: json.day, seq: json.seq, events, totals: json.totals, instruments: json.instruments, lastPollAt: json.lastPollAt, sweepMs: json.sweepMs });
+          set({ status: json.status, day: json.day, seq: json.seq, events, totals: json.totals, instruments: json.instruments, futures: json.futures ?? 0, lastPollAt: json.lastPollAt, sweepMs: json.sweepMs });
         }
       } catch {
         if (!cancelled) set({ ...feed, status: "error" });

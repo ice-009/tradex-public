@@ -5,18 +5,18 @@ import { SourceSkip, type BaseInterval, type DataSource, type SourceQuote, type 
 import { HUB_MAX_SYMBOLS, type HubCandles, type HubClient, type HubQuote, type HubTimeframe } from "@/server/providers/hub/client";
 import type { HubStream } from "@/server/providers/hub/stream";
 
-// Market Data Hub (github.com/ice-009/market-data-hub): history, quotes and a
-// live stream from a separate service that owns the broker connection. With
-// it, Tradex makes no broker calls of its own — no login, no request budget, no
-// socket — so two apps can't trip the broker's rate limits together.
+// Market Data Hub (github.com/ice-009/market-data-hub): Tradex's market data —
+// history, quotes and a live stream — from a separate service that owns the
+// broker connection, its request budget and the NSE files. Tradex makes no
+// broker or exchange calls of its own.
 //
-// It is a "broker" source: the same broker's data, relayed. Candles are kept
-// in the local market database under the same series keys as the Fyers source
-// (./../seriesKey.ts), so history downloaded before switching stays usable.
+// It is a "broker" source: the broker's data, relayed. Candles are kept in the
+// local market database (./../seriesKey.ts), so a chart opened before asks the
+// hub only for its newest candles.
 //
-// Symbols: the app's "SBIN" / "NIFTY" are the hub's tickers; "NSE:SBIN-EQ" and
-// "NSE:NIFTY50-INDEX" are mapped to them. Futures contracts (NSE:SBIN26NOVFUT)
-// and BSE symbols aren't served by the hub and are left to the next source.
+// Symbols: the app's "SBIN" / "NIFTY" / "SBIN26NOVFUT" (a stock future) are the
+// hub's tickers; "NSE:SBIN-EQ", "NSE:NIFTY50-INDEX" and "NSE:SBIN26NOVFUT" (the
+// names older layouts saved) are mapped to them. BSE symbols aren't served.
 //
 // No server-only import: built from injected parts so it can be unit-tested.
 
@@ -24,23 +24,32 @@ import type { HubStream } from "@/server/providers/hub/stream";
 export const HUB_STREAM_SYMBOLS = HUB_MAX_SYMBOLS;
 
 const TICKER = /^[A-Z0-9][A-Z0-9&_-]{0,19}$/;
+/** A stock-futures contract ticker: underlying + YY + MMM + FUT (SBIN26NOVFUT). */
+const FUTURE = /^([A-Z0-9&_-]+)\d{2}[A-Z]{3}FUT$/;
 /** Indices the hub serves (its ticker = the app's symbol). */
 const HUB_INDICES = new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYIT", "INDIAVIX"]);
 const INDEX_BY_INSTRUMENT = new Map(Object.entries(INDEX_INSTRUMENTS).map(([symbol, instrument]) => [instrument, symbol]));
 const BSE_ONLY = new Set(["SENSEX"]);
 
-/** The hub's ticker for an app symbol, or null when the hub doesn't serve it (futures, BSE). */
+/** True for a stock-futures ticker (SBIN26NOVFUT or NSE:SBIN26NOVFUT). */
+export const isFutureTicker = (symbol: string) => FUTURE.test(symbol.trim().toUpperCase().replace(/^NSE:/, ""));
+
+/** The hub's ticker for an app symbol, or null when the hub doesn't serve it (BSE). */
 export function toHubSymbol(symbol: string): string | null {
   const normalized = symbol.trim().toUpperCase();
   if (!normalized.includes(":")) return TICKER.test(normalized) && !BSE_ONLY.has(normalized) ? normalized : null;
   const index = INDEX_BY_INSTRUMENT.get(normalized);
   if (index) return HUB_INDICES.has(index) ? index : null;
+  const future = /^NSE:(.+)$/.exec(normalized)?.[1];
+  if (future && FUTURE.test(future) && TICKER.test(future)) return future;
   const equity = /^NSE:(.+)-EQ$/.exec(normalized)?.[1];
   return equity && TICKER.test(equity) ? equity : null;
 }
 
 /** Which hub timeframe serves a Tradex interval, and the bucket size to resample it to (null = as served). */
 const TIMEFRAMES: Partial<Record<BaseInterval, { tf: HubTimeframe; resampleMinutes: number | null }>> = {
+  "1m": { tf: "1m", resampleMinutes: null },
+  "3m": { tf: "1m", resampleMinutes: 3 },
   "5m": { tf: "5m", resampleMinutes: null },
   "10m": { tf: "5m", resampleMinutes: 10 },
   "15m": { tf: "15m", resampleMinutes: null },
@@ -51,14 +60,16 @@ const TIMEFRAMES: Partial<Record<BaseInterval, { tf: HubTimeframe; resampleMinut
   "1d": { tf: "1d", resampleMinutes: null },
 };
 
-/** Null for intervals the hub can't serve (1m and 3m: it has no 1-minute candle endpoint). */
+/** The hub timeframe for an interval (3m is built from 1m, 10m from 5m, 30m from 15m, 2h/4h from 1h); null when none serves it. */
 export function hubTimeframe(interval: BaseInterval): { tf: HubTimeframe; resampleMinutes: number | null } | null {
   return TIMEFRAMES[interval] ?? null;
 }
 
-/** The hub serves ~5 years of daily and 1 year of intraday history (the broker's limits). */
+/** The hub serves ~5 years of daily and 1 year of intraday history (the broker's limits), and the last 30 days of 1-minute bars. */
 export function hubWindowDays(interval: BaseInterval): number {
-  return interval === "1d" ? 5 * 365 - 3 : 365;
+  if (interval === "1d") return 5 * 365 - 3;
+  if (interval === "1m" || interval === "3m") return 30;
+  return 365;
 }
 
 /** Hub candles → the app's candles at `interval`. */
@@ -172,7 +183,7 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
     kind: "broker",
 
     // Only built when HUB_URL and HUB_KEY are set; a hub that's down fails its
-    // requests and the engine rests it like any other source.
+    // requests and the engine rests it (sample data, labelled, answers meanwhile).
     unavailable: async () => null,
 
     history: {
@@ -201,9 +212,10 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
         const groups = byHubSymbol(symbols);
         if (!groups.size) return [];
         const answer = await deps.client().quotes([...groups.keys()]);
-        // A stale quote is the hub's last stored price (its broker couldn't answer):
-        // leave it out, so the engine falls back to the end-of-day close, marked delayed.
-        return answer.quotes.filter((quote) => !quote.stale).flatMap((quote) => (groups.get(quote.symbol) ?? []).map((symbol) => toSourceQuote(symbol, quote)));
+        // A stale quote is the hub's last stored price (its broker couldn't answer, or
+        // the market is closed): passed on marked delayed, so it's shown but never
+        // cached as live, fires no alert and makes no intraday bar.
+        return answer.quotes.flatMap((quote) => (groups.get(quote.symbol) ?? []).map((symbol) => ({ ...toSourceQuote(symbol, quote), ...(quote.stale ? { delayed: true } : {}) })));
       },
     },
 

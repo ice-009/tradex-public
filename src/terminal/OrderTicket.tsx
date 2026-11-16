@@ -3,13 +3,14 @@
 import { useEffect, useState } from "react";
 import { formatCompact, formatPrice } from "@/core/format";
 import type { TradePlan } from "@/core/screener/screens";
-import { expiryOf, nearMonthFuture } from "@/core/market/futures";
-import { DAY_MS, istParts } from "@/core/market/session";
+import { pickContract } from "@/core/market/futures";
+import { istParts } from "@/core/market/session";
 import { roundToTick, safeTickSize } from "@/core/market/ticks";
 import { addPlanAlerts } from "./Alerts";
 import { fetchQuotes } from "@/client/marketData";
 import { lotsForRisk } from "@/core/market/futures";
 import { useLotSize } from "@/client/lotsFeed";
+import { useFutures } from "@/client/futuresFeed";
 import { usePrefs } from "./uiPrefs";
 import { Modal } from "./ui";
 import { Icons } from "./icons";
@@ -45,19 +46,21 @@ export function OrderTicket({
   const [copied, setCopied] = useState<string | null>(null);
   const [alertsAdded, setAlertsAdded] = useState<number | null>(null);
 
-  // Contract: this month's, unless it expires within the holding period (+1 session of margin).
+  // Contracts from the Market Data Hub: this month's, unless it expires within the holding period (+1 session of margin).
+  const futures = useFutures(symbol);
   const today = istParts().day;
-  const near = nearMonthFuture(symbol, today);
-  const nearExpiry = expiryOf(near);
-  const calendarDays = Math.ceil(holdDays * 1.45) + 1;
-  const rollToNext = nearExpiry !== null && nearExpiry - today <= calendarDays * DAY_MS;
-  const [useNext, setUseNext] = useState(rollToNext);
-  const contract = useNext ? nearMonthFuture(symbol, today, 1) : near;
-  const expiry = expiryOf(contract);
+  const { near, next, rollToNext } = pickContract(futures?.contracts ?? [], today, holdDays);
+  const [choice, setChoice] = useState<"auto" | "near" | "next">("auto");
+  const useNext = choice === "auto" ? rollToNext : choice === "next" && Boolean(next);
+  const picked = useNext ? next : near;
+  const contract = picked?.ticker ?? "";
+  const expiry = picked?.expiry ?? null;
+  const futuresLot = futures?.lot ?? null;
 
   // Basis = futures − cash, from one quote snapshot of both.
   const [quotes, setQuotes] = useState<{ key: string; cash: number | null; fut: number | null } | null>(null);
   useEffect(() => {
+    if (!contract) return;
     let cancelled = false;
     // Planning only (nothing is placed from here): a recent cached quote is enough for the basis.
     fetchQuotes([symbol, contract]).then((items) => {
@@ -85,7 +88,7 @@ export function OrderTicket({
   const target = plan.target !== null ? roundToTick(plan.target + shift, "nearest") : null;
   const risk = entry - stop;
 
-  const lot = knownLot ?? (Number(manualLot) > 0 ? Math.round(Number(manualLot)) : null);
+  const lot = futuresLot ?? knownLot ?? (Number(manualLot) > 0 ? Math.round(Number(manualLot)) : null);
   const maxLoss = (capital * riskPct) / 100;
   const sizing = lot ? lotsForRisk(maxLoss, risk, lot) : null;
   const lots = sizing?.lots ?? 0;
@@ -95,9 +98,9 @@ export function OrderTicket({
     {
       key: "contract",
       label: "Contract · product",
-      value: `${contract.replace("NSE:", "")} · NRML`,
-      copy: contract.replace("NSE:", ""),
-      hint: `Expires ${expiry ? new Date(expiry).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }) : "—"} (last Tuesday). NRML carries overnight; MIS is squared off the same day.`,
+      value: contract ? `${contract} · NRML` : futures ? "No futures listed on the hub" : "Loading contracts…",
+      copy: contract || undefined,
+      hint: `Expires ${expiry ? new Date(expiry).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }) : "—"} (from the Market Data Hub). NRML carries overnight; MIS is squared off the same day.`,
     },
     lot
       ? {
@@ -121,7 +124,7 @@ export function OrderTicket({
   ];
 
   const allText = [
-    `${contract.replace("NSE:", "")} (NRML) — ${setupName}`,
+    `${contract || symbol} (NRML) — ${setupName}`,
     ...rows.map((row) => `${row.label}: ${row.value}`),
     basis !== null ? `Basis ${basis >= 0 ? "+" : ""}${basis.toFixed(2)} (futures − cash) applied to the cash-chart levels` : "Cash-chart levels (no live futures quote for the basis)",
     `Prices rounded to ₹${safeTickSize(entry)} · plan: ${plan.exit}`,
@@ -143,7 +146,9 @@ export function OrderTicket({
         <p className="tx-ticket-sub">
           {setupName}
           {" · "}
-          {loaded === null ? (
+          {!contract ? (
+            "no futures contract to price"
+          ) : loaded === null ? (
             "reading the basis…"
           ) : basis !== null ? (
             <>
@@ -154,17 +159,17 @@ export function OrderTicket({
             <span className="is-warn">no live futures quote — levels are the cash chart&apos;s; check the basis yourself</span>
           )}
         </p>
-        {rollToNext && (
+        {rollToNext && next && (
           <p className="tx-ticket-hint is-warn">
             This month&apos;s contract expires within the holding period, so the next month is selected.{" "}
-            <button type="button" className="tx-scr-clear" onClick={() => setUseNext((value) => !value)}>
+            <button type="button" className="tx-scr-clear" onClick={() => setChoice(useNext ? "near" : "next")}>
               Use {useNext ? "this" : "next"} month instead
             </button>
           </p>
         )}
-        {!rollToNext && (
+        {!rollToNext && next && (
           <p className="tx-ticket-hint">
-            <button type="button" className="tx-scr-clear" onClick={() => setUseNext((value) => !value)}>
+            <button type="button" className="tx-scr-clear" onClick={() => setChoice(useNext ? "near" : "next")}>
               {useNext ? "Back to this month's contract" : "Use next month's contract"}
             </button>
           </p>
@@ -183,7 +188,7 @@ export function OrderTicket({
             )}
           </div>
         ))}
-        {!knownLot && (
+        {!futuresLot && !knownLot && (
           <label className="tx-ticket-lot">
             Lot size
             <input className="tx-input" inputMode="numeric" value={manualLot} onChange={(event) => setManualLot(event.target.value.replace(/[^\d]/g, ""))} placeholder="e.g. 750" />
@@ -200,7 +205,7 @@ export function OrderTicket({
         <p className="tx-ticket-note">
           Place the entry as <strong>NRML</strong>; once filled, add the exit as a <strong>GTT → OCO</strong> on the same contract (Kite supports NRML F&amp;O GTTs;
           F&amp;O triggers run until 3:40 PM). One user has reported a futures GTT stop that triggered without fully exiting — check your position after a stop.
-          Lots from {lotSource === "nse" ? "NSE's lot file" : lotSource === "hub" ? "the Market Data Hub (NSE's lot file)" : lotSource === "fyers" ? "Fyers' symbol master" : lotSource === "disk" ? "the last saved lot file" : "your entry"}.
+          Lots from {futuresLot ? "the Market Data Hub's F&O contracts" : lotSource === "hub" ? "the Market Data Hub (NSE's lot file)" : lotSource === "disk" ? "the last saved copy of the hub's lot sizes" : "your entry"}.
           Prices rounded to ₹{formatPrice(safeTickSize(entry))}. Nothing is sent to a broker from here.
         </p>
       </div>
