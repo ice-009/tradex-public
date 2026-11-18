@@ -15,6 +15,7 @@ import type {
   BacktestRequest,
   BacktestResponse,
   ChartResponse,
+  EvidenceReplayResponse,
   EvidenceResponse,
   HighLowResponse,
   LiveRecordResponse,
@@ -22,6 +23,7 @@ import type {
   PresetList,
   PresetsResponse,
   QuotesResponse,
+  ReplayRequest,
   ResultsResponse,
   ScreenerResponse,
   SymbolsResponse,
@@ -105,6 +107,9 @@ export const api = {
   /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
   evidence: () => getStatusJson<EvidenceResponse>("/api/plan/evidence", {}),
 
+  /** "Re-run this": compute a stamped evidence table again from scratch (~10 s). */
+  replayEvidence: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<EvidenceReplayResponse>("/api/plan/evidence/replay", body, signal),
+
   /** The trade journal: open trades with today's action, closed ones with the summary. */
   trades: () => getJson<TradesResponse>("/api/trades"),
   createTrade: (body: TradeCreateRequest) => postJson<TradeDto>("/api/trades", body),
@@ -117,6 +122,9 @@ export const api = {
 
   /** Run a strategy backtest on the server (the first run per universe scans the history: several seconds). */
   backtest: (request: BacktestRequest, signal?: AbortSignal) => postStatusJson<BacktestResponse>("/api/backtest", request, signal),
+
+  /** "Re-run this": run a stamped backtest again from scratch (no cached scan or result). */
+  replayBacktest: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<BacktestResponse>("/api/backtest/replay", body, signal),
 
   analyze: (symbols: string[]) => getJson<AnalyzeResponse>("/api/analyze", { symbols: csv(symbols) }),
 

@@ -1,0 +1,20 @@
+/* Run stamp and "Re-run this" (RunStampBar.tsx), under backtest results and the evidence table. */
+
+.tx-stamp { display: flex; flex-direction: column; gap: 6px; font-size: 12px; line-height: 1.5; }
+.tx-stamp-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--text-muted); }
+.tx-stamp-label { color: var(--foreground); font-weight: 600; }
+.tx-stamp code { font-family: var(--font-mono); font-size: 11.5px; color: var(--foreground); }
+.tx-stamp-btn { height: 24px; margin-left: auto; padding: 0 10px; font-size: 12px; }
+.tx-stamp-note { font-size: 11.5px; }
+.tx-stamp-note.is-error { color: var(--neg); }
+
+.tx-stamp-result { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-md); }
+.tx-stamp-result.is-ok { border-color: var(--pos-border); background: var(--pos-soft); }
+.tx-stamp-result.is-changed { border-color: var(--warn-border); background: var(--warn-soft); }
+.tx-stamp-result.is-bad { border-color: var(--neg-border); background: var(--neg-soft); }
+.tx-stamp-headline { color: var(--foreground); font-weight: 600; }
+.tx-stamp-list { margin: 4px 0 0; padding-left: 18px; list-style: disc; }
+
+.tx-stamp-diff { width: 100%; margin-top: 6px; border-collapse: collapse; font-family: var(--font-mono); font-size: 11px; }
+.tx-stamp-diff th { color: var(--text-muted); font-family: inherit; font-weight: 500; text-align: left; }
+.tx-stamp-diff th, .tx-stamp-diff td { padding: 2px 8px 2px 0; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; vertical-align: top; }

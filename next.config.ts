@@ -1,7 +1,26 @@
+import { execSync } from "child_process";
 import path from "path";
 import type { NextConfig } from "next";
 
+/**
+ * The commit this build is made from, for run stamps (src/core/repro/stamp.ts):
+ * TRADEX_COMMIT when set (builds without git, e.g. Docker), else git HEAD with
+ * "-dirty" when tracked files have uncommitted changes, else "dev".
+ */
+function buildCommit(): string {
+  if (process.env.TRADEX_COMMIT) return process.env.TRADEX_COMMIT;
+  const run = (args: string) => execSync(`git ${args}`, { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" }).trim();
+  try {
+    const head = run("rev-parse HEAD");
+    return run("status --porcelain --untracked-files=no") ? `${head}-dirty` : head;
+  } catch {
+    return "dev";
+  }
+}
+
 const nextConfig: NextConfig = {
+  // Inlined into the server code at build time (and when `next dev` starts).
+  env: { TRADEX_COMMIT: buildCommit() },
   // The Docker image builds with NEXT_OUTPUT=standalone: .next/standalone gets
   // a minimal server.js plus only the node_modules files it needs. Local
   // `npm run build` / `npm start` are unchanged.

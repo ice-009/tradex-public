@@ -189,6 +189,19 @@ The **Backtest** tab in the bottom dock replays the screens over the stored dail
 - UI: `src/terminal/BacktestPanel.tsx` (form `BacktestForm.tsx`, results `BacktestResults.tsx`, SVG chart `BacktestChart.tsx`, styles `backtest.css`).
 - The screener's **Track** column (`runTrackRecord` in `src/core/screener/backtest.ts`) is separate: it scores each screen's signals one by one, with no account, sizing or costs.
 
+### Reproducible runs (`src/core/repro`)
+
+Every backtest result and the plan's evidence table carry a **run stamp** (`RunStamp` in `stamp.ts`):
+
+- **Data:** a content hash of the inputs the run actually read. It has one part for each input: `bars` (every symbol's and NIFTY's daily bars, hashed per series), `membership` (the point-in-time F&O lists up to the last session), `lots` (lot sizes of the symbols used) and `universe` (today's list). It also records the symbols, the first and last session, and, for reading only, the hub's version and bhavcopy dates.
+- **Code:** the git commit (`TRADEX_COMMIT`, set by `next.config.ts` at build time; `-dirty` with uncommitted changes, `dev` without git) and the engine version (`backtest/6`, `evidence/2`).
+- **Parameters:** the validated request.
+- **Hashes:** `hash` covers the inputs and `resultHash` covers the result. Both are SHA-256 (`sha256.ts`, plain TypeScript) over canonical JSON (`canonical.ts`: sorted keys, integers exact, other numbers to 12 significant digits).
+
+**Re-run this** under a result posts the stamp to `/api/backtest/replay` or `/api/plan/evidence/replay`. The server runs it again from scratch, with no cached scan or result, using the stamp's parameters, its symbols and the bars up to its last session. `compareRuns` then reports the outcome. If the stamp and result hashes match, the run reproduced. If not, it shows which input changed (commit, a data part, a parameter) and which result fields differ. Symbols are scanned in sorted order, so a run doesn't depend on the order of the universe list.
+
+`golden.test.ts` is the guard. It builds a fixed synthetic dataset and runs a backtest and the evidence twice. Both runs must give byte-identical canonical results, and the hashes must match `golden.json` in CI and locally. If a change is meant to alter results, bump the engine version and update `golden.json` from the values the failing test prints.
+
 ### How a session is simulated
 
 1. **Signals.** Each screen's rules run on features computed from that stock's bars **up to and including** the session (`computeFeatures` on `bars.slice(…, i + 1)`), with relative strength ranked across stocks on the same session. `signals.test.ts` checks that rewriting every bar after a date leaves the signals before it unchanged. A stock needs 60 sessions of warm-up; screens that use the 200-day average or the 52-week high fire only once that much history exists.

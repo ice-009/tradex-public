@@ -6,12 +6,15 @@ import { BacktestInputError, runPortfolio, type BacktestResult } from "@/core/ba
 import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/signals";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { DAY_MS, istParts } from "@/core/market/session";
+import { hashDataset, lotsOf, makeStamp, withDataPart, type DataStamp, type RunStamp } from "@/core/repro/stamp";
 import { SCREENS } from "@/core/screener/screens";
+import type { DailyBar } from "@/core/types";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { screenerStore } from "@/server/providers/dailyStore";
 import { foMembership } from "@/server/providers/foData";
 import { getLotSizes } from "@/server/providers/reference";
 import { UNIVERSES, getUniverse } from "@/server/providers/universe";
+import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { BENCHMARK, parseUniverse } from "./screener";
 
 // Strategy backtests: replay the screens over a universe's daily history (up to
@@ -23,24 +26,40 @@ import { BENCHMARK, parseUniverse } from "./screener";
 // Two caches, both keyed by the last stored session so a new session
 // invalidates them:
 //  - the signal scan per universe (the slow part: features for every stock on
-//    every session, ~5–10 s for ~240 stocks × 250 sessions);
+//    every session, ~5–10 s for ~240 stocks × 250 sessions), with the content
+//    hash of the bars it read;
 //  - finished results per request (the portfolio pass itself takes milliseconds).
 //
 // The F&O universe is point-in-time (src/core/backtest/universe.ts) on every
 // session the hub has an F&O list for (GET /v1/fo/members): only stocks that had
 // stock futures that day can signal; other sessions use today's list. Every
 // result says which list was used on how many sessions.
+//
+// Every result carries a run stamp (src/core/repro/stamp.ts): the hash of the
+// data it read, the commit, the parameters, and the hash of the result.
+// `replayBacktest` runs a stamp again from scratch — no cache — on the bars up
+// to the stamped last session, so the browser can show whether it reproduces.
 
 /** Bump when the scan or simulation rules change, so a running server drops cached results. */
-const BACKTEST_VERSION = 5;
+const BACKTEST_VERSION = 6;
+const ENGINE = `backtest/${BACKTEST_VERSION}`;
 const MAX_RESULTS = 24;
 
+interface Scanned {
+  scan: SignalScan;
+  /** Hash of the bars, F&O list and universe the scan read (lot sizes are added per run). */
+  data: DataStamp;
+}
+
 const globalForBacktest = globalThis as unknown as {
-  backtestScans?: Map<string, Promise<SignalScan>>;
-  backtestResults?: Map<string, BacktestResult>;
+  backtestScans?: Map<string, Promise<Scanned>>;
+  backtestResults?: Map<string, { result: BacktestResult; stamp: RunStamp }>;
+  backtestBarHashes?: WeakMap<DailyBar[], string>;
 };
 const scans = (globalForBacktest.backtestScans ??= new Map());
 const results = (globalForBacktest.backtestResults ??= new Map());
+/** Hash per stored series; the store replaces a series' array when it changes, never edits it. */
+const barHashes = (globalForBacktest.backtestBarHashes ??= new WeakMap());
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -51,14 +70,17 @@ interface Membership {
   noHistory: string[];
   /** Changes when more F&O days are imported, so the scan cache refreshes. */
   key: string;
+  /** Range the list was read for. */
+  window: { from: number; to: number };
 }
 
-async function coveredSymbols(universe: string, options: { sync?: boolean } = {}) {
+async function coveredSymbols(universe: string, options: { sync?: boolean; window?: { from: number; to: number } | null } = {}) {
   const id = parseUniverse(universe);
   const symbols = (await getUniverse(id)).map((member) => member.symbol);
   // Point-in-time F&O membership over the stored span, from the hub (cached).
   const today = istParts().day;
-  const byDay = id === "fno" ? await foMembership(today - DEEP_HISTORY_DAYS * DAY_MS, today) : new Map<number, Set<string>>();
+  const window = options.window ?? { from: today - DEEP_HISTORY_DAYS * DAY_MS, to: today };
+  const byDay = id === "fno" ? await foMembership(window.from, window.to) : new Map<number, Set<string>>();
   const pit = byDay.size ? pointInTimeUniverse({ byDay, today: symbols }) : null;
   const wanted = pit ? pit.symbols : symbols;
   // Ask the hub for anything not held yet (in the background); meanwhile use what's stored.
@@ -72,9 +94,11 @@ async function coveredSymbols(universe: string, options: { sync?: boolean } = {}
         isMember: pit.isMember,
         noHistory: pit.symbols.filter((symbol) => !current.has(symbol) && !hasBars(symbol)),
         key: `pit${byDay.size}-${Math.max(...byDay.keys())}`,
+        window,
       }
     : null;
-  return { id, symbols, covered: symbols.filter(hasBars), scanned: wanted.filter(hasBars), membership };
+  // Sorted, so the scan (and the ranking of tied signals) doesn't depend on the list's order.
+  return { id, symbols, covered: symbols.filter(hasBars), scanned: wanted.filter(hasBars).sort(), membership };
 }
 
 export async function backtestInfo(universe: string): Promise<BacktestInfoResponse> {
@@ -126,39 +150,81 @@ export function parseBacktestRequest(body: unknown): BacktestRequest {
   };
 }
 
-async function scanFor(universe: string): Promise<{ scan: SignalScan; key: string; cached: boolean; ms: number; membership: Membership | null }> {
-  const { id, covered, scanned, membership } = await coveredSymbols(universe);
+/** Scan the bars, and hash exactly the bars it read. */
+async function scanAndHash(input: { symbols: string[]; bars: Map<string, DailyBar[]>; membership: Membership | null; universe: string[] }): Promise<Scanned> {
+  const benchmark = input.bars.get(BENCHMARK) ?? [];
+  const scan = await scanSignals({
+    symbols: input.symbols,
+    getBars: (symbol) => input.bars.get(symbol) ?? [],
+    benchmark,
+    pause: yieldToEventLoop,
+    isMember: input.membership?.isMember,
+  });
+  const data = await hashDataset({
+    bars: input.bars,
+    benchmark: BENCHMARK,
+    membership: input.membership?.byDay ?? null,
+    membershipWindow: input.membership?.window ?? null,
+    universe: input.universe,
+    hub: hubVersion(),
+    cache: barHashes,
+    pause: yieldToEventLoop,
+  });
+  return { scan, data };
+}
+
+/** The bars a run reads: every scanned symbol's and the benchmark's, up to `to` when the run is a replay. */
+function barsFor(symbols: string[], to: number | null): Map<string, DailyBar[]> {
+  const bars = new Map<string, DailyBar[]>();
+  for (const symbol of [...symbols, BENCHMARK]) {
+    const stored = screenerStore.getBars(symbol);
+    // The same array when nothing is cut off, so its cached hash is reused.
+    bars.set(symbol, to === null || (stored.at(-1)?.t ?? 0) <= to ? stored : stored.filter((bar) => bar.t <= to));
+  }
+  return bars;
+}
+
+interface ScanRun extends Scanned {
+  key: string;
+  cached: boolean;
+  ms: number;
+  membership: Membership | null;
+}
+
+async function scanFor(universe: string, pin: ReplayPin | null): Promise<ScanRun> {
+  const { id, symbols, covered, scanned, membership } = await coveredSymbols(universe, { window: pin?.membership });
   if (!covered.length) throw new BacktestError(`No daily bars for this universe yet: they are read from the Market Data Hub. ${screenerStore.progress.message || "Try again in a moment."}`);
+  const started = Date.now();
+  if (pin) {
+    // A replay: the stamped symbols (that are still in the universe), up to the stamped last session, scanned afresh.
+    const allowed = new Set(pin.symbols);
+    const replayed = scanned.filter((symbol) => allowed.has(symbol));
+    const result = await scanAndHash({ symbols: replayed, bars: barsFor(replayed, pin.to), membership, universe: symbols });
+    return { ...result, key: "replay", cached: false, ms: Date.now() - started, membership };
+  }
   const lastSession = Math.max(...scanned.map((symbol) => screenerStore.getBars(symbol).at(-1)?.t ?? 0));
   const key = `${id}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
   let pending = scans.get(key);
   const cached = Boolean(pending);
-  const started = Date.now();
   if (!pending) {
     // Concurrent requests share one scan; older scans of this universe are dropped.
-    pending = scanSignals({
-      symbols: scanned,
-      getBars: (symbol) => screenerStore.getBars(symbol),
-      benchmark: screenerStore.getBars(BENCHMARK),
-      pause: yieldToEventLoop,
-      isMember: membership?.isMember,
-    });
+    pending = scanAndHash({ symbols: scanned, bars: barsFor(scanned, null), membership, universe: symbols });
     for (const stale of [...scans.keys()].filter((entry) => entry.startsWith(`${id}:`))) scans.delete(stale);
     scans.set(key, pending);
     pending.catch(() => scans.delete(key));
   }
-  const scan = await pending;
+  const { scan, data } = await pending;
   const ms = Date.now() - started;
   if (!cached) console.info(`Backtest scan for ${id}: ${scan.symbols} stocks × ${scan.dates.length} sessions, ${scan.signals} signals in ${ms} ms`);
-  return { scan, key, cached, ms, membership };
+  return { scan, data, key, cached, ms, membership };
 }
 
 class BacktestError extends Error {}
 
-export async function runBacktest(request: BacktestRequest): Promise<BacktestResponse> {
+async function execute(request: BacktestRequest, pin: ReplayPin | null): Promise<BacktestResponse> {
   if (!request.screenIds.length) return { status: "error", error: "Pick at least one strategy." };
   try {
-    const { scan, key: scanKey, cached: scanCached, ms: scanMs, membership } = await scanFor(request.universe);
+    const { scan, data: scanData, key: scanKey, cached: scanCached, ms: scanMs, membership } = await scanFor(request.universe, pin);
     const preset = COST_PRESETS[request.costPreset].model;
     const costs: CostModel = request.slippage ? { ...preset, slippage: request.slippage } : preset;
 
@@ -169,10 +235,11 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestRes
       if (Object.keys(sizes.lots).length) lots = sizes.lots;
       else lotNote = "Futures lot sizes couldn't be loaded, so positions are sized in whole shares.";
     }
+    const data = withDataPart(scanData, "lots", lots ? lotsOf(lots, scanData) : null);
 
-    const key = JSON.stringify([scanKey, request, lots ? "lots" : "shares"]);
-    const hit = results.get(key);
-    if (hit) return { status: "ready", universe: request.universe, symbols: scan.symbols, result: hit, costs, runtime: { scanMs, simMs: 0, scanCached, cached: true } };
+    const key = JSON.stringify([scanKey, request, data.hash]);
+    const hit = pin ? undefined : results.get(key);
+    if (hit) return { status: "ready", universe: request.universe, symbols: scan.symbols, result: hit.result, costs, runtime: { scanMs, simMs: 0, scanCached, cached: true }, stamp: hit.stamp };
 
     const started = Date.now();
     const result = runPortfolio(scan, {
@@ -196,11 +263,27 @@ export async function runBacktest(request: BacktestRequest): Promise<BacktestRes
       result.warnings.push(universeNote({ sessions, byDay: membership?.byDay ?? new Map(), noHistory: membership?.noHistory ?? [] }));
     }
     const simMs = Date.now() - started;
-    results.set(key, result);
-    while (results.size > MAX_RESULTS) results.delete(results.keys().next().value!);
-    return { status: "ready", universe: request.universe, symbols: scan.symbols, result, costs, runtime: { scanMs, simMs, scanCached, cached: false } };
+    const stamp = makeStamp({ kind: "backtest", code: codeVersion(ENGINE), data, params: { ...request }, result, createdAt: Date.now() });
+    if (!pin) {
+      results.set(key, { result, stamp });
+      while (results.size > MAX_RESULTS) results.delete(results.keys().next().value!);
+    }
+    return { status: "ready", universe: request.universe, symbols: scan.symbols, result, costs, runtime: { scanMs, simMs, scanCached, cached: false }, stamp };
   } catch (error) {
     if (error instanceof BacktestError || error instanceof BacktestInputError) return { status: "error", error: error.message };
     throw error;
   }
+}
+
+export const runBacktest = (request: BacktestRequest) => execute(request, null);
+
+/**
+ * "Re-run this": run a stamped backtest again from scratch (no cached scan or
+ * result) with the stamp's parameters, on the stored bars up to its last
+ * session. The answer carries its own stamp; the browser compares the two.
+ */
+export async function replayBacktest(body: unknown): Promise<BacktestResponse> {
+  const stamp = parseStamp(body, "backtest");
+  if (!stamp) return { status: "error", error: "That isn't a backtest stamp this version can replay." };
+  return execute(parseBacktestRequest(stamp.params), pinOf(stamp));
 }

@@ -26,8 +26,11 @@ RUN npm ci --no-audit --no-fund
 # NEXT_OUTPUT=standalone (next.config.ts): .next/standalone holds server.js and
 # only the node_modules files the server actually loads.
 FROM deps AS build
+# The context has no .git, so the commit for run stamps comes in as a build arg.
+ARG TRADEX_COMMIT=dev
 ENV NEXT_TELEMETRY_DISABLED=1 \
-    NEXT_OUTPUT=standalone
+    NEXT_OUTPUT=standalone \
+    TRADEX_COMMIT=${TRADEX_COMMIT}
 COPY . .
 RUN npm run build
 
