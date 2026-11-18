@@ -53,3 +53,9 @@ next-env.d.ts
 
 # Claude Code worktrees
 /.claude/worktrees/
+
+# end-to-end tests (Playwright)
+/e2e/.run/
+/test-results/
+/playwright-report/
+/blob-report/
