@@ -14,6 +14,7 @@ import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
+import type { RunStamp } from "@/core/repro/stamp";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
 import type { TradeTrack } from "@/core/plan/tracker";
 import type { StockFacts } from "@/core/screener/score";
@@ -211,8 +212,20 @@ export type EvidenceResponse =
       costs: { preset: CostPresetId; label: string; roundTripPct: number };
       /** The BTST live record per overnight screen (null when it couldn't be read). */
       live: Record<string, LiveScreenRecord> | null;
+      /** What the table was computed from and the hash of the table. POST it to /api/plan/evidence/replay to compute it again. */
+      stamp: RunStamp;
     }
   | { status: "error"; error: string };
+
+/** POST /api/plan/evidence/replay: the stamped table computed again from scratch, with its own stamp. */
+export type EvidenceReplayResponse =
+  | { status: "ready"; error?: undefined; table: EvidenceTable; universeNote: string; ms: number; stamp: RunStamp }
+  | { status: "error"; error: string };
+
+/** Body of POST /api/backtest/replay and /api/plan/evidence/replay. */
+export interface ReplayRequest {
+  stamp: RunStamp;
+}
 
 // ------------------------------------------------------------------ /api/trades (the trade journal)
 
@@ -337,6 +350,8 @@ export type BacktestResponse =
       /** Cost model actually used (preset + overrides). */
       costs: CostModel;
       runtime: { scanMs: number; simMs: number; scanCached: boolean; cached: boolean };
+      /** What the run was computed from (data hash, commit, parameters) and the hash of its result. POST it to /api/backtest/replay to run it again. */
+      stamp: RunStamp;
     }
   | { status: "error"; error: string };
 

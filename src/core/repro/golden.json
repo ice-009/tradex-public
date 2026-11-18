@@ -1,0 +1,12 @@
+{
+  "backtest": {
+    "data": "b45eafc2f4df02bd2ccec8a905d69c91ac30ec365e9973dbb662eb02742bfdd7",
+    "stamp": "2451d398d5e7f83de44a6fb32628b30cdfffc0a1d58da9d0314b0d4b9faa24b9",
+    "result": "4a2f54d9f4050c36f6a36ca805e8dc7754ccd7694d3fc8fad4b92493409af4f2"
+  },
+  "evidence": {
+    "data": "b45eafc2f4df02bd2ccec8a905d69c91ac30ec365e9973dbb662eb02742bfdd7",
+    "stamp": "455e3d60f401df987de368bdbdd785f147ee9fe825a77d0f64ad10d537f8cf87",
+    "result": "5c3ac9ca1b35b634ea12b2870afb6209af4e76946635a17c11c947fffaf4ac0a"
+  }
+}
