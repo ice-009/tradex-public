@@ -33,7 +33,7 @@ Both must pass. CI runs the same commands.
 | `chart.firstPaint.2k` | Open a chart on 2,000 daily bars (EMA, SMA, RSI pane, auto patterns) to its first frame | 300 ms |
 | `chart.panZoom.50k.p95` | 95th-percentile frame while panning and zooming across 50,000 5-minute bars | 8 ms |
 | `screener.scan.fno` | A full screener pass over the F&O list (220 stocks × 5 years, with live bars) | 2 s |
-| `backtest.5y.fno` | Signal scan + portfolio simulation, every screen, 5 years × the F&O list | 10 s target, not met yet (~33 s on a GitHub runner); 40 s ceiling meanwhile |
+| `backtest.5y.fno` | Signal scan + portfolio simulation, every screen, 5 years × the F&O list | 10 s target, not met yet (25–33 s on a GitHub runner); 40 s ceiling meanwhile |
 
 The chart runs in Node on a no-op canvas, so it measures the engine's own work per frame (layout, scaling, indicators, building paths), not the browser's rasterising; the 8 ms frame budget leaves the other half of a 60 Hz frame for that.
 

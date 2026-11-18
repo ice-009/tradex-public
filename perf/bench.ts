@@ -172,9 +172,9 @@ async function screenerScan(): Promise<Record<string, Metric>> {
  *
  * Target 10 s (issue #14), not met yet: the scan computes every stock's features
  * from scratch on every session (~270,000 computeFeatures calls on 260-bar
- * windows), ~12 s on an Apple-silicon laptop and ~33 s on a GitHub runner.
- * Until it is made incremental or parallel, CI enforces a 40 s ceiling (the
- * runner's time + ~20%) and the 20% regression check against the base.
+ * windows), ~12 s on an Apple-silicon laptop and 25–33 s on a GitHub runner.
+ * Until it is made incremental or parallel, CI enforces a 40 s ceiling (the slowest
+ * runner time seen + ~20%) and the 20% regression check against the base.
  */
 async function backtest(): Promise<Record<string, Metric>> {
   const { scanSignals } = await import("@/core/backtest/signals");
