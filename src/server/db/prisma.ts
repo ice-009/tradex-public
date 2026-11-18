@@ -1,7 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 
-const adapter = new PrismaBetterSqlite3({ url: "./dev.db" });
+// DATABASE_URL is the setting `prisma db push` uses too (prisma.config.ts), so
+// the app and the schema push open the same file. The Docker image points it
+// at the data volume.
+const adapter = new PrismaBetterSqlite3({ url: process.env.DATABASE_URL || "file:./dev.db" });
 
 function createPrismaClient() {
   return new PrismaClient({
