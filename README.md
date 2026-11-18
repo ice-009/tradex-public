@@ -186,6 +186,7 @@ prisma/           database schema (users, sessions, trade journal)
 | `npm run build` / `npm start` | Production build / serve it |
 | `npm run check` | Typecheck + lint (including layer rules) + unit tests |
 | `npm test` | Unit tests (Vitest) |
+| `npm run perf` | Performance benchmarks against their budgets ([CONTRIBUTING.md](CONTRIBUTING.md#performance-budgets)) |
 | `npm run db:setup` | Create or update the local SQLite database from the schema |
 
 ## Configuration

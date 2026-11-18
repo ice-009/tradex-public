@@ -81,7 +81,8 @@ const median = (values) => {
   const mid = sorted.length >> 1;
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 };
-const fmt = (ms) => (ms === null || ms === undefined ? "–" : ms >= 100 ? `${Math.round(ms)} ms` : `${ms.toFixed(2)} ms`);
+const fmt = (ms) =>
+  ms === null || ms === undefined ? "–" : ms >= 10_000 ? `${(ms / 1000).toFixed(1)} s` : ms >= 100 ? `${Math.round(ms)} ms` : `${ms.toFixed(2)} ms`;
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -124,7 +125,7 @@ async function main() {
   }
 
   const rows = Object.keys(meta).map((metric) => {
-    const { budget, compare, info } = meta[metric];
+    const { budget, target, compare, info } = meta[metric];
     const head = median(samples.head[metric]);
     const base = samples.base[metric] ? median(samples.base[metric]) : null;
     const change = base ? head / base - 1 : null;
@@ -133,19 +134,20 @@ async function main() {
     if (compare && base !== null && change > args.threshold && head - base >= MIN_DELTA_MS) {
       failures.push(`${(change * 100).toFixed(0)}% slower than base (limit ${(args.threshold * 100).toFixed(0)}%)`);
     }
-    return { metric, head, base, change, budget, compare, info, failures, samples: { head: samples.head[metric], base: samples.base[metric] ?? [] } };
+    const warnings = target !== undefined && head > target ? [`over its ${fmt(target)} target (not enforced yet)`] : [];
+    return { metric, head, base, change, budget, target, compare, info, failures, warnings, samples: { head: samples.head[metric], base: samples.base[metric] ?? [] } };
   });
 
   const lines = [
     "### Performance budgets",
     "",
-    `${args.rounds} round(s), median shown${sides.length > 1 ? "; base = the merge base, measured on the same runner" : ""}. Budgets: issue #14.`,
+    `${args.rounds} round(s), median shown${sides.length > 1 ? "; base measured on the same machine, alternating with head" : ""}. Budgets: issue #14.`,
     "",
     "| Metric | Head | Base | Change | Budget | Result |",
     "| --- | ---: | ---: | ---: | ---: | --- |",
     ...rows.map((row) => {
       const change = row.change === null ? "–" : `${row.change >= 0 ? "+" : ""}${(row.change * 100).toFixed(1)}%${row.compare ? "" : " (not compared)"}`;
-      return `| \`${row.metric}\` | ${fmt(row.head)} | ${fmt(row.base)} | ${change} | ${row.budget === null ? "–" : fmt(row.budget)} | ${row.failures.length ? `**FAIL**: ${row.failures.join("; ")}` : "ok"} |`;
+      return `| \`${row.metric}\` | ${fmt(row.head)} | ${fmt(row.base)} | ${change} | ${row.budget === null ? "–" : fmt(row.budget)}${row.target !== undefined ? ` (target ${fmt(row.target)})` : ""} | ${row.failures.length ? `**FAIL**: ${row.failures.join("; ")}` : row.warnings.length ? `ok, ${row.warnings.join("; ")}` : "ok"} |`;
     }),
     "",
     "<details><summary>Details</summary>",
@@ -161,6 +163,7 @@ async function main() {
   if (args.markdown) appendFileSync(args.markdown, markdown);
   if (args.json) writeFileSync(args.json, JSON.stringify(rows, null, 2));
 
+  for (const row of rows) for (const warning of row.warnings) console.warn(`::warning::${row.metric}: ${warning}`);
   const failed = rows.filter((row) => row.failures.length);
   if (failed.length) {
     for (const row of failed) console.error(`::error::${row.metric}: ${row.failures.join("; ")}`);
