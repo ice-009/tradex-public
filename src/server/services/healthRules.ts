@@ -104,7 +104,7 @@ function failedAttempt(entry: HubDataset | undefined): string | null {
 export function hubDatasetHealth(meta: HubDatasetMeta, entry: HubDataset | undefined, context: { now: number; problems: string[]; warnings: string[] }): DatasetHealth {
   const asOf = entry?.lastSession ?? entry?.tradeDate ?? null;
   const updatedAt = entry?.lastSuccessAt ?? null;
-  const detail = meta.id === "lots" && entry?.count ? `${thousands(entry.count)} lot sizes` : meta.id === "resultsCalendar" && entry?.events ? `${thousands(entry.events)} events` : null;
+  const detail = meta.id === "lots" && entry?.count ? `${thousands(entry.count)} lot sizes` : meta.id === "resultsCalendar" && entry?.upcoming != null ? `${thousands(entry.upcoming)} upcoming` : meta.id === "resultsCalendar" && entry?.events ? `${thousands(entry.events)} events` : null;
   const error = failedAttempt(entry);
   const problem = mentions(context.problems, meta.hubLabel);
   const warning = mentions(context.warnings, meta.hubLabel);

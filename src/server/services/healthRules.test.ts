@@ -47,6 +47,8 @@ describe("hub dataset freshness", () => {
     const health = hubDatasetHealth(meta("resultsCalendar"), entry, { now: ist(10, 0), problems: [], warnings: [] });
     expect(health).toMatchObject({ state: "error", error: "NSE timed out", detail: "197 events" });
     expect(health.message).toMatch(/2 days ago/);
+    // Hubs reading the PR zip report results dates still to come instead.
+    expect(hubDatasetHealth(meta("resultsCalendar"), { ...entry, events: undefined, upcoming: 41 }, { now: ist(10, 0), problems: [], warnings: [] }).detail).toBe("41 upcoming");
     // An error from before the last success is history, not a failure.
     expect(hubDatasetHealth(meta("resultsCalendar"), { ...entry, lastSuccessAt: ist(9, 30) }, { now: ist(10, 0), problems: [], warnings: [] }).state).toBe("ok");
   });

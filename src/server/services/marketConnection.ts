@@ -103,7 +103,7 @@ export async function marketDataStatus(): Promise<MarketDataStatus> {
   const data = status?.data;
   const datasets: HubDatasetStatus[] = DATASETS.map(({ id, label }) => {
     const entry = data?.[id];
-    const detail = id === "lots" && entry?.count ? `${entry.count} lot sizes` : id === "resultsCalendar" && entry?.events ? `${entry.events} events` : null;
+    const detail = id === "lots" && entry?.count ? `${entry.count} lot sizes` : id === "resultsCalendar" && entry?.upcoming != null ? `${entry.upcoming} upcoming` : id === "resultsCalendar" && entry?.events ? `${entry.events} events` : null;
     return { id, label, session: entry?.lastSession ?? entry?.tradeDate ?? null, updatedAt: entry?.lastSuccessAt ?? null, detail, error: entry?.lastError ?? null };
   });
   for (const candles of data?.candles ?? []) {

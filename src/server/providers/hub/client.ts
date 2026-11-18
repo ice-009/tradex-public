@@ -98,7 +98,10 @@ export interface HubDataset {
   lastAttemptAt?: number | null;
   lastError?: string | null;
   count?: number;
+  /** Results calendar: events stored (hubs before the PR-zip calendar). */
   events?: number;
+  /** Results calendar: results dates from today on (hubs reading the PR zip). */
+  upcoming?: number;
   source?: string;
 }
 
