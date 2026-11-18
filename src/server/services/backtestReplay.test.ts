@@ -61,7 +61,8 @@ const request: BacktestRequest = {
   oosFraction: 0.3,
 };
 
-describe("backtest replay", async () => {
+// Each case runs whole backtests; slow under coverage instrumentation.
+describe("backtest replay", { timeout: 60_000 }, async () => {
   const { replayBacktest, runBacktest } = await import("./backtest");
   const ready = async (promise: ReturnType<typeof runBacktest>) => {
     const answer = await promise;

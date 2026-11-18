@@ -93,7 +93,8 @@ async function evidenceRun(): Promise<{ stamp: RunStamp; text: string }> {
 
 const summary = (stamp: RunStamp) => ({ data: stamp.data.hash, stamp: stamp.hash, result: stamp.resultHash });
 
-describe("golden runs", () => {
+// Full backtest + evidence runs: a few seconds each, several times that under coverage.
+describe("golden runs", { timeout: 60_000 }, () => {
   it("a backtest gives a byte-identical result twice in a row", async () => {
     const a = await backtestRun();
     const b = await backtestRun();
