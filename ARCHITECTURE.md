@@ -54,7 +54,7 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
 - **Time:** use `src/core/market/session.ts` for IST days, market hours and day keys (UTC midnight of the IST date). Don't write a new `+ 5.5h` helper.
 - **Futures:** contract names, expiry and lot maths live in `src/core/market/futures.ts`. Prices are rounded with `src/core/market/ticks.ts`.
 - **Auth:** every route goes through `authed()` in `src/server/http.ts`.
-- **Tests:** engine tests sit next to the code as `*.test.ts` (vitest). They need no network or server.
+- **Tests:** engine tests sit next to the code as `*.test.ts` (vitest). They need no network or server. End-to-end tests (`e2e/`, Playwright) run the production build against a stub Market Data Hub with fixed data, including screenshots of the chart canvas; see [CONTRIBUTING.md](CONTRIBUTING.md#end-to-end-tests).
 
 ```bash
 npm run check   # typecheck + lint (layer rules) + unit tests

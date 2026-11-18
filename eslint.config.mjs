@@ -47,6 +47,11 @@ const eslintConfig = defineConfig([
     files: ["src/terminal/**", "src/components/**"],
     rules: layer("UI must load data through @/client, not import the backend or route files.", ["@/server/*", "@/app/*"]),
   },
+  {
+    // Playwright fixtures call `use(...)`, which isn't a React hook.
+    files: ["e2e/**"],
+    rules: { "react-hooks/rules-of-hooks": "off" },
+  },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
@@ -56,6 +61,12 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Claude Code worktrees (parallel copies of the repo), not this project's code.
     ".claude/**",
+    // Generated reports and the end-to-end tests' scratch directory.
+    "coverage/**",
+    "playwright-report/**",
+    "test-results/**",
+    "blob-report/**",
+    "e2e/.run/**",
   ]),
 ]);
 

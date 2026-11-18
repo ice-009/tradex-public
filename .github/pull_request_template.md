@@ -10,6 +10,7 @@
 
 - [ ] `npm run check` passes (typecheck, lint with layer rules, unit tests)
 - [ ] `npm run build` passes
+- [ ] `npm run e2e` passes (after the build); chart screenshot changes are intended and re-rendered
 - [ ] New logic in `src/core` has tests
 - [ ] Broker calls go through the data engine (no direct API calls from new places)
 - [ ] No secrets, `.env`, `*.db` or `.cache/` files included
