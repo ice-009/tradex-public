@@ -1,6 +1,7 @@
 import type { HubFeedStatus, HubQuote } from "./client";
 import { HUB_MAX_SYMBOLS } from "./client";
 import { SseParser, type SseEvent } from "./sse";
+import { warnLine } from "@/server/log";
 
 // One Server-Sent Events connection to the hub's /v1/stream for every symbol
 // Tradex wants live, kept open:
@@ -57,6 +58,10 @@ export class HubStream {
   feed: HubFeedStatus | null = null;
   /** Successful connections so far. */
   connects = 0;
+  /** When the last connection failed (epoch ms), or null. */
+  lastErrorAt: number | null = null;
+  /** When the current connection opened (epoch ms), or null while none is open. */
+  openedAt: number | null = null;
 
   constructor(options: HubStreamOptions) {
     this.o = {
@@ -66,7 +71,7 @@ export class HubStream {
       debounceMs: options.debounceMs ?? 250,
       idleMs: options.idleMs ?? 45_000,
       now: options.now ?? Date.now,
-      log: options.log ?? ((message) => console.warn(message)),
+      log: options.log ?? warnLine,
     };
   }
 
@@ -125,6 +130,23 @@ export class HubStream {
     return this.open;
   }
 
+  /** For the health page and metrics. */
+  diagnostics() {
+    return {
+      running: this.running,
+      open: this.open,
+      openedAt: this.openedAt,
+      symbols: this.symbols.length,
+      connects: this.connects,
+      /** Failed attempts in a row (0 once a connection opens). */
+      failures: this.failures,
+      lastError: this.lastError,
+      lastErrorAt: this.lastErrorAt,
+      /** Last data or heartbeat from the hub (epoch ms). */
+      lastHeardAt: this.lastHeardAt || null,
+    };
+  }
+
   /** Running, the last attempt didn't fail and the hub's feed isn't down. */
   healthy() {
     return this.running && this.failures === 0 && this.feed?.mode !== "down";
@@ -163,6 +185,7 @@ export class HubStream {
       try {
         const response = await this.o.open(symbols, this.lastEventId, controller.signal);
         this.open = true;
+        this.openedAt = this.o.now();
         this.streaming = symbols;
         this.connects += 1;
         if (this.failures || this.lastError) this.o.log("Market Data Hub stream: connected.");
@@ -175,12 +198,14 @@ export class HubStream {
           const message = (error as Error).message || String(error);
           if (message !== this.lastError) this.o.log(`Market Data Hub stream: ${message}`);
           this.lastError = message;
+          this.lastErrorAt = this.o.now();
           this.failures += 1;
           retryAfterMs = (error as { retryAfterMs?: number | null }).retryAfterMs ?? null;
         }
       } finally {
         this.idleTimedOut = false;
         this.open = false;
+        this.openedAt = null;
         this.streaming = null;
         if (this.connection === controller) this.connection = null;
       }

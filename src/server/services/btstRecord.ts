@@ -10,6 +10,7 @@ import type { DailyBar } from "@/core/types";
 import { readDay, readTrades, readUnsettled, watchedDays, writeEntries, writeSettlements } from "@/server/providers/btstRecord";
 import { screenerStore } from "@/server/providers/dailyStore";
 import { getLotSizes } from "@/server/providers/reference";
+import { log } from "@/server/log";
 
 // The BTST live record (src/core/screener/liveRecord.ts): written from the
 // screener's own live runs, so it costs no extra API calls and doesn't depend on
@@ -33,9 +34,9 @@ export function updateBtstRecord(params: { results: Record<string, ScreenerRow[]
     }
   } catch (error) {
     // The record is a side note; never let it break the screener.
-    console.error("BTST live record: recording failed", error);
+    log.error("BTST live record: recording failed", { error });
   }
-  void settleBtstRecord(now, live).catch((error) => console.error("BTST live record: settling failed", error));
+  void settleBtstRecord(now, live).catch((error) => log.error("BTST live record: settling failed", { error }));
 }
 
 let settling: Promise<void> | null = null;

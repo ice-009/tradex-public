@@ -14,6 +14,7 @@ import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/ses
 import type { DailyBar } from "@/core/types";
 import { screenerStore } from "@/server/providers/dailyStore";
 import { UNIVERSES, getUniverse, isUniverseId, type UniverseId } from "@/server/providers/universe";
+import { log } from "@/server/log";
 
 // Screener and track-record orchestration: load bars (dailyStore, filled from
 // the Market Data Hub), hand them to the engine (src/core/screener), shape the
@@ -142,7 +143,7 @@ export async function trackRecord(universeId: UniverseId): Promise<TrackResult> 
     // Concurrent requests share one replay.
     const started = Date.now();
     pending = runTrackRecord(covered, (symbol) => screenerStore.getBars(symbol), BENCHMARK).then((replay): TrackResult => {
-      console.info(`Track record for ${universeId}: ${covered.length} stocks × ${replay.sessions} sessions in ${Date.now() - started} ms`);
+      log.info("Track record", { universe: universeId, stocks: covered.length, sessions: replay.sessions, ms: Date.now() - started });
       return { status: "ready", universe: universeId, ...replay };
     });
     for (const stale of [...trackCache.keys()].filter((entry) => entry.startsWith(`${universeId}:`))) trackCache.delete(stale);

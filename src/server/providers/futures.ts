@@ -3,6 +3,7 @@ import "server-only";
 import { expiryDayKey, type FuturesContract } from "@/core/market/futures";
 import { istParts } from "@/core/market/session";
 import { HubError, hubClient } from "@/server/providers/hub";
+import { log } from "@/server/log";
 
 // Stock-futures contracts from the Market Data Hub (GET /v1/fo/contracts): the
 // listed months' tickers (e.g. SBIN26NOVFUT, which the hub serves in candles,
@@ -54,7 +55,7 @@ async function load(symbol: string): Promise<StockFutures | null> {
     // 404 not_found: the stock has no futures — remember that like any answer. Anything else
     // (404 not_ready: no F&O file stored yet, network) is asked again in 10 minutes.
     if (error instanceof HubError && error.status === 404 && error.code === "not_found") return { symbol, lot: null, contracts: [] };
-    console.warn(`Futures contracts for ${symbol} from the Market Data Hub:`, (error as Error).message);
+    log.warn("Futures contracts from the Market Data Hub failed", { symbol, error: (error as Error).message });
     return null;
   }
 }

@@ -12,6 +12,8 @@ import { EXIT_REASONS, realisedR, slippageR, type ExitReason } from "@/core/plan
 import { withLivePrice, type TradeTrack } from "@/core/plan/tracker";
 import { SCREENS, SCREEN_MAP } from "@/core/screener/screens";
 import type { LiveScreenRecord } from "@/core/screener/liveRecord";
+import type { RunStamp } from "@/core/repro/stamp";
+import { api } from "@/client/api";
 import { closeTrade, editTrade, removeTrade, takeTrade, usePlanFeed } from "@/client/planFeed";
 import { refreshScreener, riskReward, useScreenerFeed } from "@/client/screenerFeed";
 import { openIdea } from "./ideaActions";
@@ -21,6 +23,7 @@ import { setSizing, usePrefs } from "./uiPrefs";
 import { useDailyPlan, useMarketState } from "./usePlan";
 import { useLiveTick, useVisibleLiveTick } from "./LivePrice";
 import { Icons } from "./icons";
+import { RunStampBar, type Replay } from "./RunStampBar";
 
 // The Plan tab: today's trades to take (from screens with a tested edge in
 // this market), how many lots, how to get in and out; your open trades with
@@ -722,6 +725,14 @@ function BucketCells({ bucket }: { bucket: EvidenceBucket }) {
   );
 }
 
+/** "Re-run this" for the evidence: the server computes its stamp again from scratch. */
+const replayEvidence =
+  (stamp: RunStamp) =>
+  async (signal: AbortSignal): Promise<Replay> => {
+    const answer = await api.replayEvidence({ stamp }, signal);
+    return answer.status === "ready" ? { stamp: answer.stamp, result: { table: answer.table, note: answer.universeNote } } : { error: answer.error };
+  };
+
 function EvidenceTableView({ evidence }: { evidence: Extract<EvidenceResponse, { status: "ready" }> }) {
   const { table } = evidence;
   const rows = SCREENS.map((screen) => table.screens[screen.id]).filter(Boolean);
@@ -778,6 +789,15 @@ function EvidenceTableView({ evidence }: { evidence: Extract<EvidenceResponse, {
         n = trades, R = mean net R per trade, t over signal days, first 60% / last 40% of each column&apos;s signals in date order. ✓ = used by the plan in that market. {evidence.universeNote}
         {" "}Computed {new Date(evidence.computedAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })} in {(evidence.ms / 1000).toFixed(1)} s.
       </p>
+      {evidence.stamp && (
+        <RunStampBar
+          key={`${evidence.stamp.hash}:${evidence.stamp.resultHash}`}
+          stamp={evidence.stamp}
+          result={{ table: evidence.table, note: evidence.universeNote }}
+          replay={replayEvidence(evidence.stamp)}
+          slow="Replaying every screen over the stored history again from scratch: about 10 seconds."
+        />
+      )}
     </div>
   );
 }

@@ -2,12 +2,13 @@ import "server-only";
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { EvidenceResponse } from "@/contracts/api";
+import type { EvidenceReplayResponse, EvidenceResponse } from "@/contracts/api";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { scanSignals } from "@/core/backtest/signals";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { marketStates, replaySignals, roundTripPct, summarizeEvidence, type EvidenceTable } from "@/core/plan/evidence";
 import { DAY_MS, istParts } from "@/core/market/session";
+import { hashDataset, makeStamp, type RunStamp } from "@/core/repro/stamp";
 import type { DailyBar } from "@/core/types";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { screenerStore } from "@/server/providers/dailyStore";
@@ -16,6 +17,8 @@ import { getLotSizes } from "@/server/providers/reference";
 import { getUniverse } from "@/server/providers/universe";
 import { liveRecord } from "@/server/services/btstRecord";
 import { BENCHMARK } from "@/server/services/screener";
+import { log } from "@/server/log";
+import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 
 // Strategy evidence for the daily plan (rules in src/core/plan/evidence.ts):
 // every screen replayed over the F&O list's daily history — the five years the
@@ -28,9 +31,15 @@ import { BENCHMARK } from "@/server/services/screener";
 // once a day, so it's cached in memory and on disk (.cache/plan-evidence.json)
 // keyed by the last stored session; a restart reads it back instead of
 // replaying again.
+//
+// The table carries a run stamp (src/core/repro/stamp.ts): the hash of the bars,
+// F&O lists and lot sizes it read, the commit and the parameters, and the hash
+// of the table. `replayEvidence` computes a stamped table again from scratch on
+// the bars up to its last session, so the browser can show whether it reproduces.
 
 /** Bump when the replay or the statistics change, so cached tables are rebuilt. */
-const EVIDENCE_VERSION = 1;
+const EVIDENCE_VERSION = 2;
+const ENGINE = `evidence/${EVIDENCE_VERSION}`;
 const COST_PRESET: CostPresetId = "futures-2026";
 const CACHE_FILE = path.join(process.cwd(), ".cache", "plan-evidence.json");
 /** How long a computed cache key is trusted before the stored history is checked again. */
@@ -43,6 +52,7 @@ interface Computed {
   computedAt: number;
   ms: number;
   note: string;
+  stamp: RunStamp;
 }
 
 interface State {
@@ -58,6 +68,8 @@ interface KeyInfo {
   byDay: Map<number, Set<string>>;
   today: string[];
   lastDay: number;
+  /** Range the point-in-time F&O list was read for. */
+  window: { from: number; to: number };
 }
 
 const globalForEvidence = globalThis as unknown as { planEvidence?: State };
@@ -80,8 +92,10 @@ async function keyInfo(): Promise<KeyInfo> {
   const today = (await getUniverse("fno")).map((member) => member.symbol);
   // Point-in-time F&O membership over the stored span, from the hub (cached).
   const day = istParts().day;
-  const byDay = await foMembership(day - DEEP_HISTORY_DAYS * DAY_MS, day);
-  const symbols = byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : today;
+  const window = { from: day - DEEP_HISTORY_DAYS * DAY_MS, to: day };
+  const byDay = await foMembership(window.from, window.to);
+  // Sorted, so the replay (and the order of tied signals) doesn't depend on the list's order.
+  const symbols = byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : [...today].sort();
   screenerStore.ensureFresh([...symbols, BENCHMARK]);
   await screenerStore.hasData([...symbols, BENCHMARK]);
   const lastDay = lastFinalDay();
@@ -98,7 +112,7 @@ async function keyInfo(): Promise<KeyInfo> {
   }
   const membership = byDay.size ? `pit${byDay.size}-${Math.max(...byDay.keys())}` : "today";
   // More symbols or a deeper history (the hub finished a download) changes the key too.
-  const value = { key: `${last}:${covered}/${symbols.length}:${Number.isFinite(first) ? first : 0}:${membership}:${COST_PRESET}:${EVIDENCE_VERSION}`, symbols, byDay, today, lastDay };
+  const value = { key: `${last}:${covered}/${symbols.length}:${Number.isFinite(first) ? first : 0}:${membership}:${COST_PRESET}:${EVIDENCE_VERSION}`, symbols, byDay, today, lastDay, window };
   state.keyMemo = { at: Date.now(), value };
   return value;
 }
@@ -106,17 +120,29 @@ async function keyInfo(): Promise<KeyInfo> {
 async function readDisk(key: string): Promise<Computed | null> {
   try {
     const saved = JSON.parse(await readFile(CACHE_FILE, "utf8")) as Computed;
-    return saved.key === key && saved.table?.screens ? saved : null;
+    return saved.key === key && saved.table?.screens && saved.stamp ? saved : null;
   } catch {
     return null;
   }
 }
 
-async function compute(info: KeyInfo): Promise<Computed> {
+/** What the replay reads: the stamped symbols still in the F&O lists, up to the stamped last session. */
+async function pinnedInfo(pin: ReplayPin): Promise<KeyInfo> {
+  const today = (await getUniverse("fno")).map((member) => member.symbol);
+  const window = pin.membership ?? { from: istParts().day - DEEP_HISTORY_DAYS * DAY_MS, to: istParts().day };
+  const byDay = await foMembership(window.from, window.to);
+  const listed = new Set(byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : today);
+  const symbols = [...new Set(pin.symbols)].filter((symbol) => listed.has(symbol)).sort();
+  await screenerStore.hasData([...symbols, BENCHMARK]);
+  return { key: "replay", symbols, byDay, today, lastDay: pin.to, window };
+}
+
+async function compute(info: KeyInfo, progress: { done: number; total: number }): Promise<Computed> {
   const started = Date.now();
   const bars = new Map<string, DailyBar[]>();
   for (const symbol of [...info.symbols, BENCHMARK]) {
-    bars.set(symbol, barsThrough(symbol, info.lastDay));
+    const through = barsThrough(symbol, info.lastDay);
+    if (through.length) bars.set(symbol, through);
     await yieldToEventLoop();
   }
   const pit = info.byDay.size ? pointInTimeUniverse({ byDay: info.byDay, today: info.today }) : null;
@@ -124,15 +150,14 @@ async function compute(info: KeyInfo): Promise<Computed> {
   const symbols = info.symbols.filter((symbol) => (bars.get(symbol)?.length ?? 0) > 0);
   if (!symbols.length || benchmark.length < 200) throw new Error(`Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim());
 
-  const pending = state.pending!;
-  pending.total = new Set(symbols.flatMap((symbol) => bars.get(symbol)!.map((bar) => bar.t))).size;
+  progress.total = new Set(symbols.flatMap((symbol) => bars.get(symbol)!.map((bar) => bar.t))).size;
   const scan = await scanSignals({
     symbols,
     getBars: (symbol) => bars.get(symbol) ?? [],
     benchmark,
     isMember: pit?.isMember,
     pause: async () => {
-      pending.done += 1;
+      progress.done += 1;
       await yieldToEventLoop();
     },
   });
@@ -143,14 +168,27 @@ async function compute(info: KeyInfo): Promise<Computed> {
   const table = summarizeEvidence(trades, { dates, symbols: scan.symbols, lastState: states.get(benchmark.at(-1)!.t) ?? null });
   const noHistory = pit ? pit.symbols.filter((symbol) => !info.today.includes(symbol) && !(bars.get(symbol)?.length ?? 0)) : [];
   const note = universeNote({ sessions: dates, byDay: info.byDay, noHistory });
-  const ms = Date.now() - started;
-  console.info(`Strategy evidence: ${scan.symbols} stocks × ${scan.dates.length} sessions, ${trades.length} trades in ${ms} ms`);
-  return { key: info.key, table, computedAt: Date.now(), ms, note };
+  const data = await hashDataset({
+    bars,
+    benchmark: BENCHMARK,
+    membership: info.byDay.size ? info.byDay : null,
+    membershipWindow: info.byDay.size ? info.window : null,
+    lots,
+    universe: info.today,
+    hub: hubVersion(),
+    pause: yieldToEventLoop,
+  });
+  const computedAt = Date.now();
+  const stamp = makeStamp({ kind: "evidence", code: codeVersion(ENGINE), data, params: { universe: "fno", costPreset: COST_PRESET }, result: { table, note }, createdAt: computedAt });
+  const ms = computedAt - started;
+  log.info("Strategy evidence computed", { stocks: scan.symbols, sessions: scan.dates.length, trades: trades.length, ms });
+  return { key: info.key, table, computedAt, ms, note, stamp };
 }
 
 function start(info: KeyInfo) {
-  state.pending = { key: info.key, startedAt: Date.now(), done: 0, total: 0 };
-  void compute(info)
+  const pending = { key: info.key, startedAt: Date.now(), done: 0, total: 0 };
+  state.pending = pending;
+  void compute(info, pending)
     .then(async (result) => {
       state.current = result;
       state.error = null;
@@ -158,12 +196,23 @@ function start(info: KeyInfo) {
       await writeFile(CACHE_FILE, JSON.stringify(result));
     })
     .catch((error: Error) => {
-      console.error("Strategy evidence failed", error);
+      log.error("Strategy evidence failed", { error });
       state.error = { key: info.key, message: error.message, at: Date.now() };
     })
     .finally(() => {
       state.pending = null;
     });
+}
+
+/** For the health page: the table in memory (the session it runs through, when computed), a computation running, the last failure. */
+export function evidenceHealth(): { through: number | null; computedAt: number | null; pending: { startedAt: number; done: number; total: number } | null; error: { message: string; at: number } | null } {
+  const through = Number(state.current?.key.split(":")[0]);
+  return {
+    through: Number.isFinite(through) && through > 0 ? through : null,
+    computedAt: state.current?.computedAt ?? null,
+    pending: state.pending ? { startedAt: state.pending.startedAt, done: state.pending.done, total: state.pending.total } : null,
+    error: state.error ? { message: state.error.message, at: state.error.at } : null,
+  };
 }
 
 /** The evidence table, or "computing" (started in the background on first ask) with its progress. */
@@ -195,5 +244,22 @@ export async function strategyEvidence(): Promise<EvidenceResponse> {
     universeNote: current!.note,
     costs: { preset: COST_PRESET, label: preset.label, roundTripPct: roundTripPct(preset.model) },
     live: live?.screens ?? null,
+    stamp: current!.stamp,
   };
+}
+
+/**
+ * "Re-run this": compute a stamped evidence table again from scratch (not from
+ * the cache) on the stored bars up to its last session. The answer carries its
+ * own stamp; the browser compares the two.
+ */
+export async function replayEvidence(body: unknown): Promise<EvidenceReplayResponse> {
+  const stamp = parseStamp(body, "evidence");
+  if (!stamp) return { status: "error", error: "That isn't an evidence stamp this version can replay." };
+  try {
+    const result = await compute(await pinnedInfo(pinOf(stamp)), { done: 0, total: 0 });
+    return { status: "ready", table: result.table, universeNote: result.note, ms: result.ms, stamp: result.stamp };
+  } catch (error) {
+    return { status: "error", error: (error as Error).message };
+  }
 }

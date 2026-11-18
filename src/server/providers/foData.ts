@@ -4,6 +4,7 @@ import { expiryDayKey } from "@/core/market/futures";
 import { oiFact, type FoDayRecord, type FoLeg, type OiFact } from "@/core/market/openInterest";
 import { DAY_MS, istParts } from "@/core/market/session";
 import { hubClient, type HubOiRow } from "@/server/providers/hub";
+import { log } from "@/server/log";
 
 // Stock-futures data from NSE's daily F&O bhavcopy, as the Market Data Hub
 // keeps it:
@@ -66,7 +67,7 @@ export function latestOiFacts(now = Date.now()): { day: number; bySymbol: Map<st
         oiState.value = records.length ? { day: records[0].day, bySymbol: new Map(records.map((record) => [record.symbol, oiFact(record)])) } : null;
         oiState.ok = true;
       })
-      .catch((error: Error) => console.warn("F&O open interest from the Market Data Hub:", error.message))
+      .catch((error: Error) => log.warn("F&O open interest from the Market Data Hub failed", { error: error.message }))
       .finally(() => {
         oiState.at = Date.now();
         oiState.pending = null;
@@ -74,6 +75,11 @@ export function latestOiFacts(now = Date.now()): { day: number; bySymbol: Map<st
   }
   const value = oiState.value;
   return value && istParts(now).day - value.day <= MAX_OI_AGE_MS ? value : null;
+}
+
+/** For the health page: the trade day of the OI held in memory and when it was last asked for (never fetches). */
+export function oiHealth(): { day: number | null; fetchedAt: number | null; answered: boolean } {
+  return { day: oiState.value?.day ?? null, fetchedAt: oiState.at || null, answered: oiState.ok };
 }
 
 /** Wait for an OI request started by latestOiFacts (tests). */
@@ -107,7 +113,7 @@ export async function foMembership(from: number, to: number): Promise<Map<number
         }
         current.value = byDay;
       })
-      .catch((error: Error) => console.warn("F&O membership from the Market Data Hub:", error.message))
+      .catch((error: Error) => log.warn("F&O membership from the Market Data Hub failed", { error: error.message }))
       .finally(() => {
         current.at = Date.now();
         current.pending = null;

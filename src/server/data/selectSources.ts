@@ -1,4 +1,5 @@
 import type { DataSource } from "./types";
+import { warnLine } from "@/server/log";
 
 // Which data sources the engine uses, in order. Pure, so it can be tested.
 //
@@ -15,7 +16,7 @@ export const HUB_ORDER = ["hub", "sample"];
 export const OFFLINE_ORDER = ["sample"];
 
 export function selectSources(params: { hub: boolean; factories: Record<string, () => DataSource>; dataSources?: string; warn?: (message: string) => void }): DataSource[] {
-  const warn = params.warn ?? ((message) => console.warn(message));
+  const warn = params.warn ?? warnLine;
   if (params.dataSources?.trim()) warn("DATA_SOURCES is no longer used: Tradex gets its market data from the Market Data Hub (HUB_URL, HUB_KEY), with sample data as the offline fallback.");
   const ids = (params.hub ? HUB_ORDER : OFFLINE_ORDER).filter((id) => params.factories[id]);
   return ids.map((id) => params.factories[id]());

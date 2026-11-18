@@ -1,0 +1,26 @@
+# Keep the build context small and free of secrets and local state.
+.git
+.github
+.claude
+node_modules
+.next
+out
+build
+coverage
+.cache
+src/generated
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets and local databases: never in an image
+.env*
+*.pem
+*.db
+*.db-journal
+*.db.bak*
+
+# not needed to build
+docs
+compose*.yaml
+Dockerfile
+.dockerignore

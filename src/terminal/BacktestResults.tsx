@@ -6,12 +6,22 @@ import type { BacktestTrade, SampleStats } from "@/core/backtest/portfolio";
 import type { MonthReturn } from "@/core/backtest/metrics";
 import { SCREEN_MAP } from "@/core/screener/screens";
 import { formatPrice } from "@/core/format";
+import { api } from "@/client/api";
 import { GROUP_LABEL } from "@/client/screenerFeed";
 import { openIdea } from "./ideaActions";
 import { EquityChart } from "./BacktestChart";
 import { formatDate, formatPct, formatR, formatRatio, formatRupees } from "./BacktestFormat";
+import { RunStampBar, type Replay } from "./RunStampBar";
 
 type Ready = Extract<BacktestResponse, { status: "ready" }>;
+
+/** "Re-run this" for a backtest: the server runs its stamp again from scratch. */
+const replay =
+  (data: Ready) =>
+  async (signal: AbortSignal): Promise<Replay> => {
+    const answer = await api.replayBacktest({ stamp: data.stamp }, signal);
+    return answer.status === "ready" ? { stamp: answer.stamp, result: answer.result } : { error: answer.error };
+  };
 
 const tone = (value: number | null | undefined) => (value === null || value === undefined || !Number.isFinite(value) || value === 0 ? "" : value > 0 ? "is-up" : "is-down");
 
@@ -30,6 +40,10 @@ export function BacktestResults({ data }: { data: Ready }) {
           {runtime.cached ? "Cached result" : `Ran in ${runtime.scanCached ? "" : `${(runtime.scanMs / 1000).toFixed(1)} s scan + `}${runtime.simMs} ms`}.
         </span>
       </p>
+
+      {data.stamp && (
+        <RunStampBar key={`${data.stamp.hash}:${data.stamp.resultHash}`} stamp={data.stamp} result={result} replay={replay(data)} slow="Scanning every stock's history again from scratch (no cache): up to ~15 s." />
+      )}
 
       {result.warnings.length > 0 && (
         <ul className="tx-bt-warnings">

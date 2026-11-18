@@ -18,6 +18,7 @@ import { isMarketOpen } from "@/core/market/session";
 import type { StreamStatus, Tick } from "@/contracts/api";
 import type { DataEngine } from "./engine";
 import type { DataSource, SourceTick } from "./types";
+import { warnLine } from "@/server/log";
 
 export interface MarketStreamOptions {
   /** How often polled symbols are refreshed (ms). */
@@ -58,6 +59,8 @@ export class MarketStream {
   private lastRestartAt = 0;
   private lastPollAt = 0;
   private timer: unknown = null;
+  /** subscribe() calls not yet matched by unsubscribe() (open browser streams, the scanner). */
+  private subscribers = 0;
   private pollJob: Promise<void> | null = null;
   private readonly o: Settings;
 
@@ -73,7 +76,7 @@ export class MarketStream {
       restartEveryMs: options.restartEveryMs ?? 60_000,
       isMarketOpen: options.isMarketOpen ?? ((now) => isMarketOpen(now)),
       now: options.now ?? Date.now,
-      log: options.log ?? ((message) => console.warn(message)),
+      log: options.log ?? warnLine,
       setInterval: options.setInterval,
       clearInterval: options.clearInterval,
       runPolling: options.runPolling,
@@ -101,6 +104,7 @@ export class MarketStream {
    */
   async subscribe(symbols: string[]): Promise<StreamStatus> {
     const wanted = [...new Set(symbols.map((symbol) => symbol.trim().toUpperCase()).filter(Boolean))];
+    this.subscribers += 1;
     const fresh: string[] = [];
     for (const symbol of wanted) {
       const count = this.refCounts.get(symbol) ?? 0;
@@ -115,6 +119,7 @@ export class MarketStream {
   }
 
   unsubscribe(symbols: string[]) {
+    this.subscribers = Math.max(0, this.subscribers - 1);
     const dropLive: string[] = [];
     for (const raw of new Set(symbols.map((symbol) => symbol.trim().toUpperCase()))) {
       const count = (this.refCounts.get(raw) ?? 0) - 1;
@@ -145,6 +150,22 @@ export class MarketStream {
     const pollSource = this.pollSource;
     const mode: StreamStatus["mode"] = live.length && !polled.length ? "live" : polled.length && pollSource ? "polling" : live.length ? "live" : "offline";
     return { mode, source: live.length ? (this.feed?.id ?? null) : pollSource, live, polled };
+  }
+
+  /** For the health page and metrics: what is subscribed, and when the socket and polling last delivered. */
+  diagnostics(): { subscribers: number; symbols: number; feed: string | null; lastFeedTickAt: number | null; lastRestartAt: number | null; lastPollAt: number | null; lastTickAt: number | null; polling: boolean } {
+    let lastTickAt = 0;
+    for (const tick of this.latest.values()) lastTickAt = Math.max(lastTickAt, tick.ts);
+    return {
+      subscribers: this.subscribers,
+      symbols: this.refCounts.size,
+      feed: this.feed?.id ?? null,
+      lastFeedTickAt: this.feedHeardAt || null,
+      lastRestartAt: this.lastRestartAt || null,
+      lastPollAt: this.lastPollAt || null,
+      lastTickAt: lastTickAt || null,
+      polling: this.polledSymbols().length > 0,
+    };
   }
 
   /** Refresh polled symbols once; if a poll is already running, wait for that one. */

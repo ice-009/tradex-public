@@ -1,0 +1,11 @@
+# Use a signed release image of Tradex instead of building it from this checkout:
+#
+#   docker compose -f compose.yaml -f compose.release.yaml up -d
+#
+# TRADEX_VERSION (in .env) pins a release, e.g. 0.2.0; the default is the latest.
+# Verify the signature first (README, "Release images").
+services:
+  tradex:
+    image: ghcr.io/ice-009/tradex-public:${TRADEX_VERSION:-latest}
+    build: !reset null
+    pull_policy: missing

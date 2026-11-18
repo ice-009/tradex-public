@@ -3,6 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { hubClient, type HubClient } from "@/server/providers/hub";
+import { log } from "@/server/log";
 
 // Scan universes. The F&O list is the Market Data Hub's (GET /v1/universe/fno,
 // from the newest NSE F&O bhavcopy, so it follows NSE's additions and
@@ -64,9 +65,9 @@ async function fnoFromHub(hub: HubClient): Promise<UniverseMember[] | null> {
       return { symbol, name: member.name || industries.get(symbol)?.name || symbol, industry: member.industry || industries.get(symbol)?.industry || "" };
     });
     if (members.length >= 50) hubFno.members = members;
-    else console.warn(`F&O list from the Market Data Hub has only ${members.length} stocks; using the snapshot.`);
+    else log.warn(`F&O list from the Market Data Hub has only ${members.length} stocks; using the snapshot.`);
   } catch (error) {
-    console.warn("F&O list from the Market Data Hub unavailable; using the snapshot:", (error as Error).message);
+    log.warn("F&O list from the Market Data Hub unavailable; using the snapshot", { error: (error as Error).message });
   }
   return hubFno.members;
 }

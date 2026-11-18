@@ -8,6 +8,7 @@ import { dataEngine, marketStream } from "@/server/data";
 import { knownNearFutures } from "@/server/providers/futures";
 import { budgetFor, planLimits } from "@/server/providers/hub/budget";
 import { getUniverse } from "@/server/providers/universe";
+import { log } from "@/server/log";
 
 // Day high / low scanner for every F&O stock, cash and near-month futures,
 // all through the Market Data Hub.
@@ -144,10 +145,15 @@ function schedule() {
     try {
       await poll();
     } catch (error) {
-      console.error("High/low scan failed", error);
+      log.error("High/low scan failed", { error });
     }
     schedule();
   }, delay);
+}
+
+/** For the health page: whether the sweep runs, when it last swept and how often. */
+export function highLowHealth(): { running: boolean; status: ScanStatus; lastPollAt: number | null; sweepMs: number | null; instruments: number } {
+  return { running: service.running, status: service.status, lastPollAt: service.lastPollAt || null, sweepMs: service.sweepMs, instruments: service.instruments };
 }
 
 /** Called by the API on every client request: keeps the scanner running and returns events after `after`. */
@@ -162,7 +168,7 @@ export async function readHighLow(after: number): Promise<HighLowResponse> {
     try {
       await poll();
     } catch (error) {
-      console.error("High/low scan failed", error);
+      log.error("High/low scan failed", { error });
     }
     schedule();
   }
