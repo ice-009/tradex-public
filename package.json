@@ -11,6 +11,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p .",
     "check": "npm run typecheck && npm run lint && npm test",
+    "perf": "node perf/run.mjs",
     "db:setup": "prisma db push",
     "postinstall": "prisma generate"
   },
