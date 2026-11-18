@@ -21,6 +21,10 @@ function buildCommit(): string {
 const nextConfig: NextConfig = {
   // Inlined into the server code at build time (and when `next dev` starts).
   env: { TRADEX_COMMIT: buildCommit() },
+  // The Docker image builds with NEXT_OUTPUT=standalone: .next/standalone gets
+  // a minimal server.js plus only the node_modules files it needs. Local
+  // `npm run build` / `npm start` are unchanged.
+  output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,
   // better-sqlite3 is a native Node addon: keep it out of the Server Components
   // bundle and let it load via native require.
   serverExternalPackages: ["better-sqlite3"],
