@@ -61,6 +61,40 @@
 
 ## Getting started
 
+### With Docker (one command)
+
+**Requirements:** Docker Engine 25 or newer with Compose v2.24+ (Docker Desktop 4.27+).
+
+```bash
+git clone https://github.com/ice-009/tradex-public.git
+cd tradex-public
+docker compose up -d        # first run builds Tradex and the Market Data Hub (a few minutes)
+```
+
+Open http://localhost:3000, create a local account and sign in. Nothing has to be configured first: [`compose.yaml`](compose.yaml) runs Tradex with its own [Market Data Hub](https://github.com/ice-009/market-data-hub), built from the hub's repo. On first start a one-shot `hub-key` service creates Tradex's hub key (read-only scopes), and Tradex generates its `NEXTAUTH_SECRET`. Both stay in Docker volumes and are never printed.
+
+- **Data** lives in three named volumes: `hub-data` (the hub's database and broker token), `hub-key` (Tradex's key) and `tradex-data` (accounts, candle cache, session secret). `docker compose down` keeps them; `docker compose down -v` deletes them.
+- **Real prices** need the hub's broker login: copy `.env.example` to `.env`, fill in the `FYERS_*` lines in its *Docker Compose* section, and `docker compose up -d` again. Those values go to the hub container only. Without them the hub serves what it has stored plus NSE's daily files.
+- **Port and address:** Tradex listens on `127.0.0.1:3000`. Set `TRADEX_PORT`, `TRADEX_BIND=0.0.0.0` (to open it to your network) and `TRADEX_URL` in `.env` to change that. The hub is not published on the host; only Tradex reaches it.
+- **Updating:** `git pull && docker compose up -d --build` rebuilds Tradex and pulls the hub's latest `main` (`HUB_REF` pins a branch, tag or commit). The accounts database is brought up to the new schema on start.
+- **Hub admin:** `docker compose exec hub node dist/cli.js keys list` (or `data status`, `data backfill --tf 1d --years 5`, …). See the [hub's README](https://github.com/ice-009/market-data-hub#readme).
+
+**Release images.** Each version tag publishes a signed multi-arch image (`linux/amd64`, `linux/arm64`) to `ghcr.io/ice-009/tradex-public`, with an SBOM and build provenance. To run one instead of building from the checkout (`TRADEX_VERSION` in `.env` pins a release):
+
+```bash
+docker compose -f compose.yaml -f compose.release.yaml up -d
+```
+
+Images are signed with [cosign](https://docs.sigstore.dev/) keyless signing by the release workflow. Verify before running:
+
+```bash
+cosign verify ghcr.io/ice-009/tradex-public:latest \
+  --certificate-identity-regexp '^https://github\.com/ice-009/tradex-public/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+### With Node.js
+
 **Requirements:** Node.js 20.9 or newer, and npm.
 
 ```bash
@@ -174,6 +208,7 @@ src/
   server/         data engine, Market Data Hub client and providers, services, auth
   terminal/       React UI
 data/             index lists and a fallback F&O list (NSE snapshots)
+docker/           the container's start script (Dockerfile, compose.yaml at the root)
 docs/             screenshots and research notes
 prisma/           database schema (users, sessions, trade journal)
 ```
@@ -200,8 +235,11 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 | `MARKET_DB_PATH` | Where the local candle cache lives (default `.cache/market.db`) |
 | `LOG_LEVEL` | Server log threshold: `debug`, `info` (default), `warn`, `error`. Logs are JSON lines with a request id |
 | `METRICS_TOKEN` | Bearer token a Prometheus scraper uses for `/api/metrics` (otherwise a signed-in session is needed) |
+| `TRADEX_PORT`, `TRADEX_BIND`, `TRADEX_URL`, `HUB_REF`, `TRADEX_VERSION`, `FYERS_*` | Docker Compose only: where Tradex is published, which hub to build, which release image to run, and the hub's broker login |
 
 **Why is a number old?** Open **`/health`** (also linked from the top bar's hub meter → Market data panel). It shows the hub connection, how fresh each dataset is (the hub's NSE files and Tradex's own copies), the broker budget, every live socket between the broker and your browser, background jobs and the server's recent warnings and errors, with a plain-language list of what is stale and why.
+
+In the Docker image, `DATABASE_URL` is `file:/data/tradex.db` and `.cache/` points into the `/data` volume.
 
 Runtime data is written to `.cache/`, which is git-ignored: the candle cache `market.db`, the screener's daily bars, the plan's evidence and the hub's last lot sizes.
 

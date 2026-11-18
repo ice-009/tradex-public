@@ -23,3 +23,45 @@ jobs:
           NEXTAUTH_SECRET: ci-only-not-a-secret
           NEXTAUTH_URL: http://localhost:3000
           DATABASE_URL: file:./dev.db
+
+  # The one-command install: builds the Tradex image and the hub (from its
+  # repo), starts the stack with no .env, and checks that Tradex is up, runs as
+  # non-root, holds a working hub key, and keeps its data across a restart.
+  docker:
+    runs-on: ubuntu-latest
+    env:
+      TRADEX_PORT: "3100"
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose up
+        run: docker compose up -d --build
+      - name: Tradex is healthy and connected to the hub
+        run: |
+          wait_healthy() {
+            for i in $(seq 1 90); do
+              curl -fsS http://127.0.0.1:3100/api/health > health.json 2>/dev/null && return 0
+              sleep 2
+            done
+            return 1
+          }
+          wait_healthy
+          cat health.json; echo
+          grep -q '"hub":true' health.json
+          test "$(docker compose exec -T tradex id -u)" != "0"
+          docker compose exec -T tradex node -e "fetch('http://hub:8787/v1/status', { headers: { authorization: 'Bearer ' + require('fs').readFileSync('/run/hub/tradex', 'utf8') } }).then((r) => { console.log('hub /v1/status with the generated key:', r.status); process.exit(r.ok ? 0 : 1); })"
+          curl -fsS -X POST http://127.0.0.1:3100/api/auth/signup -H 'content-type: application/json' -d '{"email":"ci@example.com","password":"ci-only-password","name":"CI"}'
+          echo
+      - name: Data survives a restart
+        run: |
+          docker compose down
+          docker compose up -d
+          for i in $(seq 1 90); do curl -fsS http://127.0.0.1:3100/api/health && break; sleep 2; done
+          echo
+          docker compose logs hub-key | grep -q "already exists"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3100/api/auth/signup -H 'content-type: application/json' -d '{"email":"ci@example.com","password":"ci-only-password","name":"CI"}')" = "400"
+      - name: Logs
+        if: always()
+        run: docker compose logs --no-color
+      - name: Clean up
+        if: always()
+        run: docker compose down -v

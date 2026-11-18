@@ -1,0 +1,111 @@
+# Tradex and its Market Data Hub, one command:
+#
+#   docker compose up -d          → http://localhost:3000 (first run builds both images)
+#   docker compose up -d --build  → after `git pull`, or to update the hub
+#   docker compose logs -f        → what they're doing
+#   docker compose down           → stop (data stays in the volumes)
+#
+# Nothing has to be configured first. On first start the hub-key service creates
+# Tradex's hub key (read-only scopes) and Tradex generates its NEXTAUTH_SECRET;
+# both are kept in volumes. Optional settings (port, broker login for real data)
+# are read from .env — see .env.example, section "Docker Compose".
+#
+# Signed release images instead of building Tradex here:
+#   docker compose -f compose.yaml -f compose.release.yaml up -d
+
+name: tradex
+
+services:
+  # One-shot: creates the hub API key Tradex uses, once. The key goes to the
+  # hub-key volume (readable only by the app user); it is never printed.
+  hub-key:
+    image: market-data-hub:${HUB_REF:-main}
+    build:
+      # market-data-hub publishes no image yet, so it's built from its repo.
+      # HUB_REF picks a branch, tag or commit.
+      context: https://github.com/ice-009/market-data-hub.git#${HUB_REF:-main}
+    pull_policy: never
+    user: root  # to hand the files it writes to the hub's and Tradex's user (uid 1000)
+    volumes:
+      - hub-data:/data
+      - hub-key:/keys
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -s /keys/tradex ]; then echo "Tradex's hub key already exists."; exit 0; fi
+        out=$$(node dist/cli.js keys create tradex --scopes history,live,fo)
+        key=$$(printf '%s\n' "$$out" | grep -o 'mdh_[A-Za-z0-9_-]*' | head -n 1 || true)
+        if [ -z "$$key" ]; then echo "Could not create a hub key for Tradex." >&2; exit 1; fi
+        (umask 077 && printf '%s' "$$key" > /keys/tradex)
+        chown -R node:node /data /keys/tradex
+        printf '%s\n' "$$out" | head -n 1
+
+  hub:
+    image: market-data-hub:${HUB_REF:-main}  # built by hub-key above
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      hub-key:
+        condition: service_completed_successfully
+    environment:
+      # Optional, from .env. Without a broker account the hub serves what it has
+      # stored plus NSE's daily files. Full list: market-data-hub's .env.example.
+      FYERS_CLIENT_ID: ${FYERS_CLIENT_ID:-}
+      FYERS_SECRET_KEY: ${FYERS_SECRET_KEY:-}
+      FYERS_FY_ID: ${FYERS_FY_ID:-}
+      FYERS_PIN: ${FYERS_PIN:-}
+      FYERS_TOTP_SECRET: ${FYERS_TOTP_SECRET:-}
+      FYERS_PLAN: ${FYERS_PLAN:-standard}
+      FYERS_REDIRECT_URL: ${FYERS_REDIRECT_URL:-}
+      HUB_LIVE: ${HUB_LIVE:-on}
+      HUB_LIVE_SYMBOLS: ${HUB_LIVE_SYMBOLS:-NIFTY,BANKNIFTY}
+      HUB_JOBS: ${HUB_JOBS:-on}
+      HUB_LOG_LEVEL: ${HUB_LOG_LEVEL:-info}
+    volumes:
+      - hub-data:/data
+    # Not published on the host: only Tradex talks to it, over the compose
+    # network. Admin CLI: docker compose exec hub node dist/cli.js keys list
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+
+  tradex:
+    image: tradex:local
+    build: .
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      hub-key:
+        condition: service_completed_successfully
+      hub:
+        condition: service_healthy
+    environment:
+      # The address you open Tradex at (sign-in redirects go there).
+      NEXTAUTH_URL: ${TRADEX_URL:-http://localhost:${TRADEX_PORT:-3000}}
+      # Empty = generated on first start and kept in the tradex-data volume.
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
+      HUB_URL: http://hub:8787
+      HUB_KEY_FILE: /run/hub/tradex
+    volumes:
+      - tradex-data:/data
+      - hub-key:/run/hub:ro
+    ports:
+      # Loopback only by default; TRADEX_BIND=0.0.0.0 opens it to your network.
+      - "${TRADEX_BIND:-127.0.0.1}:${TRADEX_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
+
+volumes:
+  hub-data:     # the hub's SQLite database (candles, NSE datasets, API keys) and broker token
+  hub-key:      # Tradex's hub API key
+  tradex-data:  # Tradex's accounts database, candle cache and NEXTAUTH_SECRET
