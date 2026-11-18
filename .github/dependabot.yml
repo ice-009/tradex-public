@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      # Next.js and its ESLint config move together.
+      next:
+        patterns: ["next", "eslint-config-next", "@next/*"]
+      prisma:
+        patterns: ["prisma", "@prisma/*"]
+      # A new Playwright means new browsers: the chart screenshots may need re-rendering
+      # (label the PR "update-screenshots", see CONTRIBUTING.md).
+      playwright:
+        patterns: ["@playwright/test", "playwright"]
+      vitest:
+        patterns: ["vitest", "@vitest/*"]
+      dev-dependencies:
+        dependency-type: development
+        update-types: [minor, patch]
+        exclude-patterns: ["@playwright/test", "playwright", "vitest", "@vitest/*", "eslint-config-next"]
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

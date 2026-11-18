@@ -1,0 +1,68 @@
+name: Re-render chart screenshots
+
+# Renders the chart screenshot baselines (e2e/__screenshots__) in the same
+# Playwright container CI compares them in, and uploads them as the
+# `e2e-screenshots` artifact: download it, check the images, and commit them
+# to the branch. Run it by adding the label "update-screenshots" to a pull
+# request (it is removed again so the label can be re-added later), or by hand
+# from the Actions tab.
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  playwright-version:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.label.name == 'update-screenshots' }}
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: read
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+
+  render:
+    needs: playwright-version
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.playwright-version.outputs.version }}-noble
+      options: --ipc=host
+    env:
+      NEXTAUTH_SECRET: ci-only-not-a-secret
+      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: file:./dev.db
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Render the baselines
+        run: npx playwright test e2e/chart.visual.spec.ts --update-snapshots=all
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e2e-screenshots
+          path: e2e/__screenshots__/
+          retention-days: 14
+
+  unlabel:
+    needs: render
+    if: ${{ always() && github.event_name == 'pull_request' && github.event.label.name == 'update-screenshots' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - run: gh pr edit "$PR" --repo "$REPO" --remove-label update-screenshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
