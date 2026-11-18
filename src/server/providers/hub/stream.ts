@@ -5,7 +5,9 @@ import { SseParser, type SseEvent } from "./sse";
 // One Server-Sent Events connection to the hub's /v1/stream for every symbol
 // Tradex wants live, kept open:
 //  - when the symbol set changes, the connection is reopened with the new list
-//    (changes within `debounceMs` are coalesced into one reconnect);
+//    (changes within `debounceMs` are coalesced into one reconnect, and a set
+//    that ends up back where the open connection already is — a browser tab
+//    reconnecting drops its symbols, then adds them again — reconnects nothing);
 //  - a dropped or failed connection is reopened with back-off (the hub's
 //    `retry:` hint, doubling on repeated failures up to `maxReconnectMs`, or the
 //    hub's Retry-After), sending Last-Event-ID so the hub resumes where it left;
@@ -43,6 +45,8 @@ export class HubStream {
   private failures = 0;
   private serverRetryMs: number | null = null;
   private lastHeardAt = 0;
+  /** Symbols the open connection was opened with (null while none is open). */
+  private streaming: string[] | null = null;
   private readonly listeners = new Set<HubStreamListener>();
   private readonly o: Required<Omit<HubStreamOptions, "open">> & Pick<HubStreamOptions, "open">;
   /** Resume point: the id of the last event received. */
@@ -81,7 +85,7 @@ export class HubStream {
   /** Stream these hub symbols (at most 100); reconnects when the set changed. */
   setSymbols(next: string[]) {
     const unique = [...new Set(next)].sort().slice(0, HUB_MAX_SYMBOLS);
-    if (unique.length === this.symbols.length && unique.every((symbol, index) => symbol === this.symbols[index])) return;
+    if (sameList(unique, this.symbols)) return;
     this.symbols = unique;
     if (!this.running) {
       this.start();
@@ -90,6 +94,7 @@ export class HubStream {
     if (this.resubscribe) clearTimeout(this.resubscribe);
     this.resubscribe = setTimeout(() => {
       this.resubscribe = null;
+      if (this.open && sameList(this.streaming, this.symbols)) return;
       this.reconnectNow();
     }, this.o.debounceMs);
   }
@@ -154,9 +159,11 @@ export class HubStream {
       const controller = new AbortController();
       this.connection = controller;
       let retryAfterMs: number | null = null;
+      const symbols = this.symbols;
       try {
-        const response = await this.o.open(this.symbols, this.lastEventId, controller.signal);
+        const response = await this.o.open(symbols, this.lastEventId, controller.signal);
         this.open = true;
+        this.streaming = symbols;
         this.connects += 1;
         if (this.failures || this.lastError) this.o.log("Market Data Hub stream: connected.");
         this.failures = 0;
@@ -174,6 +181,7 @@ export class HubStream {
       } finally {
         this.idleTimedOut = false;
         this.open = false;
+        this.streaming = null;
         if (this.connection === controller) this.connection = null;
       }
       if (!this.running) break;
@@ -236,4 +244,8 @@ export class HubStream {
       }
     }
   }
+}
+
+function sameList(a: string[] | null, b: string[]) {
+  return a !== null && a.length === b.length && a.every((symbol, index) => symbol === b[index]);
 }

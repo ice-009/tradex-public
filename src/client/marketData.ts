@@ -79,6 +79,32 @@ export async function getSymbolInfo(symbol: string): Promise<SymbolInfo | null> 
 export type LiveStatus = "idle" | "connecting" | "live" | "delayed" | "offline";
 type TickListener = (tick: LiveTick) => void;
 
+/** Most symbols the hub streams live on one connection; past it, list order is priority. */
+export const STREAM_SYMBOL_LIMIT = 100;
+/** A connection still carrying symbols nobody listens to is trimmed after this long. */
+const PRUNE_AFTER_MS = 30_000;
+/** The old connection is closed once the new one answers, or after this long regardless. */
+const HANDOVER_MS = 10_000;
+
+/**
+ * What the open stream (`open`, the symbols it was opened with, in priority order)
+ * needs for the symbols wanted now (`wanted`, in priority order):
+ *  - "reconnect" when a wanted symbol isn't on it, or (past the limit) a top-priority
+ *    one isn't among its live slots;
+ *  - "prune" when it carries extra symbols — they cost nothing in the browser, so
+ *    it's trimmed later rather than now (a row scrolled away often comes back);
+ *  - "keep" otherwise. Order alone never reconnects: a sorted watchlist reorders on
+ *    every tick, and each reconnect is a gap in the prices.
+ */
+export function streamChange(open: string[], wanted: string[], limit = STREAM_SYMBOL_LIMIT): "keep" | "reconnect" | "prune" {
+  if (!wanted.length) return open.length ? "reconnect" : "keep";
+  const all = new Set(open);
+  if (wanted.some((symbol) => !all.has(symbol))) return "reconnect";
+  const liveSlots = new Set(open.slice(0, limit));
+  if (wanted.slice(0, limit).some((symbol) => !liveSlots.has(symbol))) return "reconnect";
+  return open.length > wanted.length ? "prune" : "keep";
+}
+
 class LiveHub {
   private readonly listeners = new Map<string, Set<TickListener>>();
   private readonly statusListeners = new Set<(status: LiveStatus) => void>();
@@ -92,8 +118,12 @@ class LiveHub {
   lastTickAt = 0;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private source: EventSource | null = null;
-  private sourceKey = "";
+  /** Symbols `source` was opened with, in priority order. */
+  private sourceSymbols: string[] = [];
+  /** The previous connection, kept open until `source` answers (no gap in prices). */
+  private retiring: { source: EventSource; timer: ReturnType<typeof setTimeout> } | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private pruneTimer: ReturnType<typeof setTimeout> | null = null;
   status: LiveStatus = "idle";
 
   /**
@@ -159,33 +189,65 @@ class LiveHub {
   private watch() {
     if (this.watchdog || typeof window === "undefined") return;
     this.watchdog = setInterval(() => {
-      if (this.source && Date.now() - this.lastEventAt > 40_000) this.reconnect(true);
+      if (this.source && Date.now() - this.lastEventAt > 40_000) this.reconnect("force");
     }, 10_000);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && this.source && Date.now() - this.lastEventAt > 20_000) this.reconnect(true);
+      if (document.visibilityState === "visible" && this.source && Date.now() - this.lastEventAt > 20_000) this.reconnect("force");
     });
   }
 
-  private reconnect(force = false) {
-    this.timer = null;
+  /**
+   * Bring the connection in line with the symbols wanted now (see `streamChange`).
+   * `force` reopens it even when nothing changed (a dead connection); `prune` is the
+   * delayed trim of symbols nobody listens to any more.
+   */
+  private reconnect(mode: "change" | "force" | "prune" = "change") {
+    if (mode === "prune") this.pruneTimer = null;
+    else this.timer = null;
     this.watch();
     const rank = (symbol: string) => Math.min(...(this.priorities.get(symbol)?.values() ?? [Infinity]));
     const symbols = [...this.listeners.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-    const key = symbols.join(",");
-    if (key === this.sourceKey && this.source && !force) return;
-    this.source?.close();
+    const change = this.source ? streamChange(this.sourceSymbols, symbols) : symbols.length ? "reconnect" : "keep";
+    if (mode !== "force" && change === "keep") return;
+    if (mode === "change" && change === "prune") {
+      this.pruneTimer ??= setTimeout(() => this.reconnect("prune"), PRUNE_AFTER_MS);
+      return;
+    }
+    if (this.pruneTimer) clearTimeout(this.pruneTimer);
+    this.pruneTimer = null;
+
+    // Make before break: the old connection keeps delivering until the new one answers,
+    // and the server never sees its symbols drop to no subscribers in between.
+    this.retire(); // a connection already being replaced isn't needed any more
+    const previous = this.source;
     this.source = null;
-    this.sourceKey = key;
+    this.sourceSymbols = symbols;
     if (!symbols.length) {
+      previous?.close();
       this.setStatus("idle");
       return;
     }
+    if (previous) this.retiring = { source: previous, timer: setTimeout(() => this.retire(), HANDOVER_MS) };
+    if (!previous || this.status !== "live") this.setStatus("connecting");
 
-    this.setStatus("connecting");
     this.lastEventAt = Date.now();
-    const source = new EventSource(`/api/broker/stream?symbols=${encodeURIComponent(key)}`);
+    const source = new EventSource(`/api/broker/stream?symbols=${encodeURIComponent(symbols.join(","))}`);
     this.source = source;
+    this.listen(source);
+  }
+
+  /** Close the connection being replaced, if any. */
+  private retire() {
+    if (!this.retiring) return;
+    clearTimeout(this.retiring.timer);
+    this.retiring.source.close();
+    this.retiring = null;
+  }
+
+  private listen(source: EventSource) {
     source.addEventListener("status", (event) => {
+      if (this.source !== source) return; // the retiring connection's status is stale
+      this.retire();
       try {
         this.lastEventAt = Date.now();
         const data = JSON.parse((event as MessageEvent).data) as StreamStatus;
@@ -200,6 +262,7 @@ class LiveHub {
       try {
         const tick = JSON.parse((event as MessageEvent).data) as LiveTick;
         if (typeof tick.ltp !== "number") return;
+        if (this.source === source) this.retire();
         this.lastEventAt = this.lastTickAt = Date.now();
         const next = tick.polled ? "delayed" : "live";
         if (this.status !== next && !(next === "delayed" && this.status === "live")) this.setStatus(next);

@@ -113,6 +113,43 @@ describe("daily plan", () => {
     expect(plan.more.map((idea) => idea.symbol)).toEqual(["DDD", "EEE", "FFF", "GGG"]);
   });
 
+  it("drops a match whose plan no longer holds at the live price, and the next one takes its slot", () => {
+    const rows = ["AAA", "BBB", "CCC"].map((symbol) => row(symbol, 100, 95));
+    const settings = { ...DEFAULT_PLAN_SETTINGS, maxOpen: 2 };
+    const plan = buildPlan(input({ results: { "res-drift": rows }, settings, prices: { AAA: 94, BBB: 103 } }));
+    expect(plan.ideas.map((idea) => idea.symbol)).toEqual(["CCC"]);
+    expect(plan.invalid.map((idea) => [idea.symbol, idea.status.kind])).toEqual([
+      ["AAA", "stop-broken"],
+      ["BBB", "moved"],
+    ]);
+    // No live price: checked at the scan close, so nothing changes.
+    expect(buildPlan(input({ results: { "res-drift": rows }, settings })).ideas.map((idea) => idea.symbol)).toEqual(["AAA", "BBB"]);
+  });
+
+  it("keeps a buy-stop below its trigger but drops one the price has fallen far below (the PAYTM case)", () => {
+    // Buy-stop 1,962 over a 1,909 scan close, ATR 63: 0.84 ATR to the trigger is a tested next-session order.
+    const paytm = row("AAA", 1962, 1805, { close: 1909, facts: { atr14: 63 } as ScreenerRow["facts"] });
+    const lots = { AAA: 10 };
+    expect(buildPlan(input({ results: { "res-drift": [paytm] }, lots, prices: { AAA: 1904 } })).ideas.map((idea) => idea.symbol)).toEqual(["AAA"]);
+    // At 1,860 the trigger is 1.6 ATR away: it won't fill next session.
+    const far = buildPlan(input({ results: { "res-drift": [paytm] }, lots, prices: { AAA: 1860 } }));
+    expect(far.ideas).toHaveLength(0);
+    expect(far.invalid[0].status.kind).toBe("far");
+    // Below the stop: invalid.
+    expect(buildPlan(input({ results: { "res-drift": [paytm] }, lots, prices: { AAA: 1800 } })).invalid[0].status.kind).toBe("stop-broken");
+  });
+
+  it("uses another eligible match of the same stock when the best one's plan has gone stale", () => {
+    const plan = buildPlan(
+      input({
+        results: { "pos-turtle-adx": [row("AAA", 110, 95, { close: 100, facts: { atr14: 2 } as ScreenerRow["facts"] })], "res-drift": [row("AAA", 100, 95)] },
+        prices: { AAA: 100 },
+      }),
+    );
+    expect(plan.ideas.map((idea) => idea.screenId)).toEqual(["res-drift"]);
+    expect(plan.invalid).toHaveLength(0);
+  });
+
   it("writes plain entry and exit instructions", () => {
     expect(entryText(entryKind({ exit: "next-open" }, { entry: 100, stop: 98 }, 100), 100)).toBe("Buy 3:15–3:25 PM near ₹100.00, sell at tomorrow's open");
     expect(entryText(entryKind({}, { entry: 105, stop: 98 }, 100), 105)).toBe("Buy-stop at ₹105.00 next session");
