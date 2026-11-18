@@ -300,6 +300,7 @@ export function assessHealth(input: AssessInput): { verdict: HealthReport["verdi
     add("problem", "hub", `Tradex can't reach the hub at ${hub.url}${hub.error ? ` (${hub.error})` : ""}. Charts fall back to sample data; the screener and plan keep the bars they already hold.`);
   }
 
+  if (hub.endOfDay) add("info", "hub", `End-of-day data (no broker connected). ${hub.modeNote ?? "Live quotes and intraday charts need a broker on the hub."}`);
   for (const problem of hub.problems) add("problem", "hub", `Hub: ${problem}`);
   for (const warning of hub.warnings) add("warning", "hub", `Hub: ${warning}`);
 

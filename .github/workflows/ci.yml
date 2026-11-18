@@ -116,16 +116,34 @@ jobs:
           retention-days: 14
 
   # The one-command install: builds the Tradex image and the hub (from its
-  # repo), starts the stack with no .env, and checks that Tradex is up, runs as
-  # non-root, holds a working hub key, and keeps its data across a restart.
+  # repo), starts the stack with no .env and no broker keys, and checks that
+  # Tradex is up, runs as non-root, holds a working hub key, works in the hub's
+  # end-of-day mode (charts, quotes, screens, backtests, plan), and keeps its
+  # data across a restart. NSE is replaced by e2e/nse-stub.mjs
+  # (e2e/compose.no-broker.yaml), so CI makes no request to NSE.
   docker:
     runs-on: ubuntu-latest
     env:
       TRADEX_PORT: "3100"
+      COMPOSE_FILE: compose.yaml:e2e/compose.no-broker.yaml
     steps:
       - uses: actions/checkout@v7
-      - name: docker compose up
-        run: docker compose up -d --build
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # End-of-day mode is market-data-hub#32: build that branch until it is on the hub's main.
+      # (Remove this step once it has merged; compose.yaml then builds main as usual.)
+      - name: Pick the hub version
+        run: |
+          # A commit, not the branch name: HUB_REF is also the image tag, which can't hold a "/".
+          if curl -fsS https://raw.githubusercontent.com/ice-009/market-data-hub/main/src/status.ts | grep -q end_of_day; then ref=main; else ref=$(git ls-remote https://github.com/ice-009/market-data-hub.git refs/heads/feat/32-no-broker | cut -f1); fi
+          test -n "$ref"
+          echo "HUB_REF=$ref" >> "$GITHUB_ENV"
+          echo "Building the hub from $ref"
+      - name: docker compose up (no .env, no broker keys)
+        run: |
+          test ! -e .env
+          docker compose up -d --build
       - name: Tradex is healthy and connected to the hub
         run: |
           wait_healthy() {
@@ -142,6 +160,9 @@ jobs:
           docker compose exec -T tradex node -e "fetch('http://hub:8787/v1/status', { headers: { authorization: 'Bearer ' + require('fs').readFileSync('/run/hub/tradex', 'utf8') } }).then((r) => { console.log('hub /v1/status with the generated key:', r.status); process.exit(r.ok ? 0 : 1); })"
           curl -fsS -X POST http://127.0.0.1:3100/api/auth/signup -H 'content-type: application/json' -d '{"email":"ci@example.com","password":"ci-only-password","name":"CI"}'
           echo
+      - name: Without a broker, charts, quotes, screens and backtests work
+        # The hub holds only its two-week catch-up here (no archive download), so a backtest may say the history is too short.
+        run: SHORT_HISTORY=1 node e2e/no-broker-smoke.mjs http://127.0.0.1:3100
       - name: Data survives a restart
         run: |
           docker compose down

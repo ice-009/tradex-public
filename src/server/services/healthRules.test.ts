@@ -119,7 +119,7 @@ describe("jobs", () => {
 });
 
 describe("why a number may be old", () => {
-  const hub: HealthReport["hub"] = { configured: true, url: "http://127.0.0.1:8787", reachable: true, error: null, version: "0.1.0", healthy: true, problems: [], warnings: [], brokerConnected: true, feed: "socket", streamOpen: true, checkedAt: ist(10, 0), uptimeSec: 100, keyName: "tradex", scopes: ["history"], streams: 1 };
+  const hub: HealthReport["hub"] = { configured: true, url: "http://127.0.0.1:8787", reachable: true, error: null, version: "0.1.0", healthy: true, problems: [], warnings: [], brokerConnected: true, endOfDay: false, modeNote: null, feed: "socket", streamOpen: true, checkedAt: ist(10, 0), uptimeSec: 100, keyName: "tradex", scopes: ["history"], streams: 1 };
   const live: HealthReport["live"] = {
     hubFeed: null,
     hubStream: { running: true, open: true, openedAt: ist(9, 15), symbols: 5, connects: 1, failures: 0, lastError: null, lastErrorAt: null, lastHeardAt: ist(10, 0) },
@@ -130,6 +130,12 @@ describe("why a number may be old", () => {
 
   it("is ok with nothing to say during a healthy session", () => {
     expect(assessHealth(base)).toEqual({ verdict: "ok", issues: [] });
+  });
+
+  it("says so, without calling it a problem, when the hub has no broker (end-of-day data)", () => {
+    const eod = assessHealth({ ...base, hub: { ...hub, brokerConnected: false, endOfDay: true, modeNote: "Live quotes and intraday charts need a broker on the hub." }, live: { ...live, hubStream: null } });
+    expect(eod.verdict).toBe("ok");
+    expect(eod.issues).toEqual([{ severity: "info", area: "hub", text: "End-of-day data (no broker connected). Live quotes and intraday charts need a broker on the hub." }]);
   });
 
   it("is down without a hub, or when it can't be reached", () => {

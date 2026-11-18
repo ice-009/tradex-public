@@ -40,6 +40,8 @@ npm run e2e              # starts the stub hub (port 8797) and the app (port 310
 
 The app runs in a throwaway directory (`e2e/.run`) with its own `dev.db` and `.cache`, so your own account and caches are never touched. `E2E_PORT` and `STUB_HUB_PORT` change the ports.
 
+CI's `docker` job runs the real stack instead: `docker compose up` with no `.env` and no broker keys, so the hub is in end-of-day mode, with `e2e/nse-stub.mjs` standing in for NSE (`e2e/compose.no-broker.yaml`). `e2e/no-broker-smoke.mjs` then checks charts, quotes, the screener, a backtest and the plan through Tradex's API. To run it yourself: `COMPOSE_FILE=compose.yaml:e2e/compose.no-broker.yaml docker compose up -d --build`, then `SHORT_HISTORY=1 node e2e/no-broker-smoke.mjs http://127.0.0.1:3000`.
+
 - `e2e/smoke.spec.ts`: sign in, open a chart, run a screen, run a backtest, open the plan.
 - `e2e/chart.visual.spec.ts`: screenshots of the chart canvas (candles, the trade-plan overlay, drawings) compared with the baselines in `e2e/__screenshots__`, with a small tolerance for anti-aliasing.
 

@@ -1,12 +1,12 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { HubClient, type HubStatus } from "./client";
+import { HubClient, isEndOfDay, type HubStatus } from "./client";
 import { hubConfig } from "./config";
 import { HubStream } from "./stream";
 
 export { hubConfig, hubMode } from "./config";
-export { HubClient, HubError } from "./client";
+export { HubClient, HubError, isEndOfDay } from "./client";
 export type { HubCandle, HubCandles, HubCandlesBatch, HubContracts, HubMembers, HubOiDay, HubOiRow, HubQuote, HubStatus, HubTimeframe } from "./client";
 
 // The app's one hub client, one price stream and a cached view of the hub's
@@ -75,4 +75,19 @@ export async function hubHealth(options: { wait?: boolean } = {}): Promise<{ sta
 export function lastHubStatus(): HubStatus | null {
   if (hubClient()) void hubHealth();
   return status.status;
+}
+
+/**
+ * True when the hub serves end-of-day data only (no broker connected to it), as
+ * of its last status: live quotes, the stream and intraday candles then don't
+ * exist. False until the hub has answered once (see hubEndOfDayNow).
+ */
+export function hubEndOfDay(): boolean {
+  return isEndOfDay(lastHubStatus());
+}
+
+/** hubEndOfDay, waiting for the hub's first status answer if there hasn't been one. */
+export async function hubEndOfDayNow(): Promise<boolean> {
+  if (!hubClient()) return false;
+  return isEndOfDay((await hubHealth()).status);
 }

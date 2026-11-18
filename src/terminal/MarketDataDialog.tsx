@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { MarketDataStatus } from "@/contracts/api";
 import { api } from "@/client/api";
+import { END_OF_DAY_LABEL } from "./endOfDay";
 import { Modal } from "./ui";
 
 // "Market data: provided by your hub". Tradex fetches no market data itself:
@@ -92,11 +93,16 @@ export function MarketDataDialog({ onClose }: { onClose: () => void }) {
               <div>
                 <dt>Broker · live feed</dt>
                 <dd>
-                  {status.broker.connected === null ? "—" : status.broker.connected ? "Connected" : "Not connected"}
-                  {hub.feed ? ` · ${hub.feed}` : ""}
+                  {hub.endOfDay ? "None · end-of-day data only" : status.broker.connected === null ? "—" : status.broker.connected ? "Connected" : "Not connected"}
+                  {hub.feed && !hub.endOfDay ? ` · ${hub.feed}` : ""}
                 </dd>
               </div>
             </dl>
+            {hub.endOfDay && (
+              <p className="tx-mdata-message">
+                <strong>{END_OF_DAY_LABEL}.</strong> {hub.modeNote}
+              </p>
+            )}
             {hub.error && <p className="tx-mdata-error">{hub.error}</p>}
             {hub.problems.map((problem) => (
               <p key={problem} className="tx-mdata-error">

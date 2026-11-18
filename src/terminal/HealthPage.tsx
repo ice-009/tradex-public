@@ -195,7 +195,8 @@ function HubCard({ report, now }: { report: HealthReport; now: number }) {
           ["Hub health", hub.healthy === null ? "—" : hub.healthy ? "Healthy" : `${hub.problems.length} problem${hub.problems.length === 1 ? "" : "s"}`, hub.healthy === false ? "is-bad" : hub.healthy ? "is-ok" : ""],
           ["Version · uptime", `${hub.version ? `v${hub.version}` : "—"}${hub.uptimeSec !== null ? ` · ${span(hub.uptimeSec * 1000)}` : ""}`],
           ["Status read", ago(hub.checkedAt, now)],
-          ["Broker login", broker.configured === false ? "Not configured" : yesNo(broker.connected, "Connected", "Not connected"), broker.connected ? "is-ok" : broker.connected === false ? "is-bad" : ""],
+          ["Mode", hub.endOfDay ? "End-of-day data (no broker connected)" : "Full (broker configured)"],
+          ["Broker login", broker.configured === false ? "Not configured" : yesNo(broker.connected, "Connected", "Not connected"), broker.connected ? "is-ok" : broker.connected === false && !hub.endOfDay ? "is-bad" : ""],
           ["Owns broker connection", yesNo(broker.ownsConnection, "Yes", "No (serves stored data only)"), broker.ownsConnection === false ? "is-warn" : ""],
         ]}
       />
