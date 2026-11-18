@@ -1,0 +1,53 @@
+name: Performance
+
+# Performance budgets (issue #14): perf/run.mjs times the chart engine, the
+# screener and the backtest on fixed synthetic fixtures. A pull request is
+# measured against its merge base in the same job, on the same runner,
+# alternating head and base round by round — absolute timings differ between
+# runners, the ratio between head and base on one runner doesn't. Fails on a
+# >20% slowdown of a compared metric or on any metric over its budget.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  budgets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check out the merge base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          base=$(git merge-base HEAD "origin/$BASE_REF")
+          echo "Merge base: $base"
+          git worktree add --detach "$RUNNER_TEMP/perf-base" "$base"
+      - name: Benchmarks
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node perf/run.mjs --base "$RUNNER_TEMP/perf-base" --json perf-results.json
+          else
+            node perf/run.mjs --rounds 2 --json perf-results.json
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-results
+          path: perf-results.json
+          if-no-files-found: ignore
