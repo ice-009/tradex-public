@@ -6,6 +6,7 @@ import type { LotsResponse } from "@/contracts/api";
 import { dedupeEvents, type ResultsEvent } from "@/core/market/results";
 import { DAY_MS, istDayKey } from "@/core/market/session";
 import { hubClient } from "@/server/providers/hub";
+import { log } from "@/server/log";
 
 // Reference data from the Market Data Hub, which keeps NSE's files current:
 //
@@ -54,7 +55,7 @@ function cached<T>(state: Cached<T>, ttl: number, load: (previous: T) => Promise
         return state.value;
       })
       .catch((error: Error) => {
-        console.warn("Market Data Hub reference data:", error.message);
+        log.warn("Market Data Hub reference data failed", { error: error.message });
         return state.value;
       })
       .finally(() => {
@@ -92,7 +93,7 @@ export function getLotSizes(): Promise<LotSizes> {
       await writeFile(LOTS_FILE, JSON.stringify(value));
       return value;
     } catch (error) {
-      console.warn("Lot sizes from the Market Data Hub:", (error as Error).message);
+      log.warn("Lot sizes from the Market Data Hub failed", { error: (error as Error).message });
       return previous.source === "hub" ? previous : await lastSavedLots();
     }
   });

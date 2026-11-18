@@ -102,6 +102,27 @@ export interface HubDataset {
   source?: string;
 }
 
+/** A backfill job on the hub (the newest few are in /v1/status `jobs`). */
+export interface HubJob {
+  id: number;
+  kind: string;
+  params?: unknown;
+  state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled" | string;
+  done: number;
+  total: number;
+  failed: number;
+  message: string | null;
+  resumeAfter: number | null;
+  updatedAt: number;
+}
+
+/** The hub's gap repair of live 1-minute bars (/v1/status `live.recovery`). */
+export interface HubRecovery {
+  running: boolean;
+  pending: number;
+  last?: { reason: string; startedAt: number; finishedAt: number | null; planned?: number; calls?: number; bars?: number; skipped?: number; failed?: number; pending?: number; error?: string | null } | null;
+}
+
 export interface HubStatus {
   /** Health first: `problems` are worth an alert, `warnings` worth knowing. */
   healthy?: boolean;
@@ -109,9 +130,20 @@ export interface HubStatus {
   warnings?: string[];
   service: string;
   version: string;
+  /** The hub's clock when it answered (epoch ms). */
+  time?: number;
   uptimeSec?: number;
   key?: { name: string; scopes: string[] };
-  broker: { configured: boolean; connected: boolean; ownsConnection?: boolean; lastLoginError?: string | null; budget?: HubBudget };
+  broker: {
+    configured: boolean;
+    connected: boolean;
+    ownsConnection?: boolean;
+    lastLoginAt?: number | null;
+    lastLoginError?: string | null;
+    /** While a failed login waits to be retried (epoch ms). */
+    loginRetryAfter?: number | null;
+    budget?: HubBudget;
+  };
   data?: {
     dbBytes?: number;
     cashBhav?: HubDataset;
@@ -121,7 +153,16 @@ export interface HubStatus {
     resultsCalendar?: HubDataset;
     candles?: Array<{ tf: string; series: number; candles: number; lastSession?: string | null }>;
   };
-  live?: { enabled: boolean; running: boolean; feed?: HubFeedStatus & { pollingStopped?: string | null } };
+  jobs?: HubJob[];
+  live?: {
+    enabled: boolean;
+    running: boolean;
+    feed?: HubFeedStatus & { pollingStopped?: string | null };
+    persistentSymbols?: string[];
+    /** Open /v1/stream connections (every app on the hub). */
+    streams?: number;
+    recovery?: HubRecovery | null;
+  };
 }
 
 /** One symbol's series in a batch answer. */

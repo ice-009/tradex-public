@@ -138,6 +138,23 @@ The hub enforces the broker's limits (Fyers' Standard plan: 5 calls a second, 50
 
 The top bar's meter (`/api/broker/usage`) shows the hub's calls today against its cap; clicking it opens the read-only **Market data** panel (`/api/data/hub`): the hub's health, problems and warnings, and how fresh each dataset is.
 
+## Health, logs and metrics
+
+The **`/health`** page answers "why is this number old?". It reads `GET /api/health/details` (signed in) every 15 s:
+
+| Section | From |
+|---|---|
+| Why might a number be old? | `assessHealth` in `services/healthRules.ts`: the hub's own `problems`/`warnings`, plus what only Tradex knows: a resting data source, its stream from the hub failing, no ticks while the market is open, the hub's day budget nearly spent, its own copies behind the hub, failed jobs, and the market being closed. Verdict `ok` / `degraded` / `down`. |
+| Market Data Hub, broker, budget | The hub's `/v1/status` (cached 30 s, `providers/hub/index.ts`). |
+| Live prices | Three links: broker → hub (`live.feed` in `/v1/status`), hub → Tradex (`HubStream.diagnostics()`), Tradex → browsers (`MarketStream.diagnostics()`), and any source resting after errors. |
+| Data freshness | Each hub dataset (`hubDatasetHealth`): **stale** when the hub's health check says so (it knows exchange holidays), **late** for its "fine if a holiday" warning, **refresh failed** when its newest attempt failed but an older copy is used, **waiting** during a weekday before the evening NSE file is due (20:00 IST). Then Tradex's own copies: the screener's daily bars (behind the hub's newest session?), the OI tag, the plan evidence; and the hub's stored candles for information. Each row says what in Tradex uses it. |
+| Background jobs | The hub's backfills and live gap repair; Tradex's daily-bar sync, plan evidence and Day High/Low sweep. |
+| Recent warnings and errors | The newest 30 warn/error lines of the server log, with their request ids. |
+
+**Logs** (`src/server/log.ts`): one JSON object per line on stdout (warn/error on stderr), threshold `LOG_LEVEL`. Every API route goes through `authed()` (`src/server/http.ts`), which gives the request an id (the caller's `X-Request-Id` if sane, else a UUID), returns it as `X-Request-Id`, puts it on every log line written while handling the request (AsyncLocalStorage), and includes it in a 500's body. Requests are logged at `debug`, or `info` when slow (≥ 1 s) or 4xx, `warn` when 5xx. The hub key, `METRICS_TOKEN`, `NEXTAUTH_SECRET`, hub API keys and bearer tokens are scrubbed from every line. `src/instrumentation.ts` logs server start and errors Next.js catches itself. Use `log` instead of `console` on the server.
+
+**Metrics** (`GET /api/metrics`, Prometheus text format, no client library): a signed-in session or `Authorization: Bearer $METRICS_TOKEN`. Request counts and a duration histogram per route (`tradex_http_*`), log lines per level, and the health page as gauges: `tradex_hub_reachable`, `tradex_hub_budget_*`, `tradex_hub_feed_*`, `tradex_hub_stream_*`, `tradex_dataset_stale{dataset}`, `tradex_dataset_as_of_timestamp_seconds{dataset}`, `tradex_job_failed{job}` and more (`services/metrics.ts`).
+
 ## Daily trade plan (`src/core/plan`)
 
 The **Plan** tab (the bottom panel's default) turns the screener into a short list: which trades to take today, how many lots, how to get in and out, plus your open trades and a journal.

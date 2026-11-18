@@ -16,6 +16,7 @@ import { getLotSizes } from "@/server/providers/reference";
 import { UNIVERSES, getUniverse } from "@/server/providers/universe";
 import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { BENCHMARK, parseUniverse } from "./screener";
+import { log } from "@/server/log";
 
 // Strategy backtests: replay the screens over a universe's daily history (up to
 // the 5 years the Market Data Hub serves; src/core/backtest/signals.ts), then
@@ -215,7 +216,7 @@ async function scanFor(universe: string, pin: ReplayPin | null): Promise<ScanRun
   }
   const { scan, data } = await pending;
   const ms = Date.now() - started;
-  if (!cached) console.info(`Backtest scan for ${id}: ${scan.symbols} stocks × ${scan.dates.length} sessions, ${scan.signals} signals in ${ms} ms`);
+  if (!cached) log.info("Backtest scan", { universe: id, stocks: scan.symbols, sessions: scan.dates.length, signals: scan.signals, ms });
   return { scan, data, key, cached, ms, membership };
 }
 

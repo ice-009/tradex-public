@@ -26,6 +26,8 @@ export type { ResultsEvent };
 /** Body of every failed request (status ≥ 400). */
 export interface ApiError {
   error: string;
+  /** On a 500: the request's id, as in the server's log and the X-Request-Id header. */
+  requestId?: string;
 }
 
 // ------------------------------------------------------------------ GET /api/chart?symbol&interval&range
@@ -533,4 +535,137 @@ export interface MarketDataStatus {
   scopes: string[];
   /** Tradex's own daily-bar store (screener, backtests): what it holds and what the hub is still downloading. */
   store: { message: string; queued: number };
+}
+
+// ------------------------------------------------------------------ GET /api/health/details
+
+/** How fresh one dataset is. `waiting`: the next file isn't due yet; `late`: due, but fine on a holiday. */
+export type FreshnessState = "ok" | "waiting" | "late" | "stale" | "error" | "missing" | "info";
+
+/** One dataset on the /health page: what it holds, how fresh, and what in Tradex reads it. */
+export interface DatasetHealth {
+  id: string;
+  label: string;
+  /** Kept by the hub, or Tradex's own cache of it. */
+  owner: "hub" | "tradex";
+  state: FreshnessState;
+  /** Newest session / trade date it holds (YYYY-MM-DD), when it has one. */
+  asOf: string | null;
+  /** When it was last refreshed (epoch ms). */
+  updatedAt: number | null;
+  /** e.g. "224 lot sizes", "239 series · 280,239 candles". */
+  detail: string | null;
+  /** Why it's in this state, in plain words (null when ok). */
+  message: string | null;
+  /** The newest refresh attempt's error, when that attempt failed. */
+  error: string | null;
+  /** What in Tradex shows it, e.g. "Screener, plan, backtests". */
+  usedBy: string;
+}
+
+/** A background job: the hub's backfills and gap repair, Tradex's daily-bar sync, plan evidence and Day High/Low sweep. */
+export interface JobHealth {
+  id: string;
+  label: string;
+  owner: "hub" | "tradex";
+  state: "running" | "queued" | "paused" | "idle" | "done" | "failed" | "cancelled" | string;
+  /** Progress, e.g. "120 / 239". */
+  progress: string | null;
+  message: string | null;
+  /** Last activity (epoch ms). */
+  updatedAt: number | null;
+}
+
+/** One reason a number may be old or missing. */
+export interface HealthIssue {
+  severity: "problem" | "warning" | "info";
+  /** Which part it's about: hub, broker, budget, live, data, jobs, tradex. */
+  area: string;
+  text: string;
+}
+
+/** A recent warning or error from the server's log. */
+export interface HealthLogEntry {
+  time: number;
+  level: "warn" | "error";
+  msg: string;
+  requestId?: string;
+  detail?: string;
+}
+
+/** The hub's broker socket (from its /v1/status). */
+export interface HubFeedHealth {
+  mode: string;
+  socket: string | null;
+  socketSymbols: number;
+  polledSymbols: number;
+  capacity: number | null;
+  lastTickAt: number | null;
+  reconnects: number;
+  pollingStopped: string | null;
+}
+
+/** Tradex's one SSE connection to the hub's /v1/stream. */
+export interface HubStreamHealth {
+  running: boolean;
+  open: boolean;
+  openedAt: number | null;
+  symbols: number;
+  connects: number;
+  /** Failed attempts in a row. */
+  failures: number;
+  lastError: string | null;
+  lastErrorAt: number | null;
+  /** Last data or heartbeat from the hub. */
+  lastHeardAt: number | null;
+}
+
+/** GET /api/health/details (signed in): everything the /health page shows. */
+export interface HealthReport {
+  checkedAt: number;
+  /** ok: nothing stale; degraded: something is stale or failing; down: no market data at all (no hub, or unreachable). */
+  verdict: "ok" | "degraded" | "down";
+  /** Why a number may be old, worst first. Empty when all is well. */
+  issues: HealthIssue[];
+  /** e.g. "Open until 15:30 IST", "Closed: weekend". */
+  market: { open: boolean; label: string };
+  tradex: { version: string; startedAt: number; uptimeSec: number; node: string; logLevel: string; metricsToken: boolean; logCounts: { warn: number; error: number } };
+  hub: HubHealth & {
+    uptimeSec: number | null;
+    keyName: string | null;
+    scopes: string[];
+    /** Open price streams on the hub (every app). */
+    streams: number | null;
+  };
+  broker: {
+    configured: boolean | null;
+    connected: boolean | null;
+    ownsConnection: boolean | null;
+    lastLoginAt: number | null;
+    lastLoginError: string | null;
+    loginRetryAfter: number | null;
+  };
+  budget: {
+    plan: "standard" | "prime";
+    usedToday: number;
+    dayCap: number;
+    usedThisMinute: number;
+    minuteCap: number;
+    byPriority: Record<string, number>;
+    strikes: number;
+    slowed: boolean;
+    coolingDown: boolean;
+    stoppedForToday: boolean;
+  } | null;
+  live: {
+    hubFeed: HubFeedHealth | null;
+    hubStream: HubStreamHealth | null;
+    /** Tradex's own price pipeline to the browser. */
+    market: { mode: StreamStatus["mode"]; source: string | null; live: number; polled: number; subscribers: number; lastTickAt: number | null; lastPollAt: number | null; lastRestartAt: number | null };
+    /** Chart and quote sources, and whether one is resting after errors. */
+    sources: Array<{ id: string; label: string; lastError: string | null; restingUntil: number | null }>;
+  };
+  datasets: DatasetHealth[];
+  jobs: JobHealth[];
+  errors: HealthLogEntry[];
 }

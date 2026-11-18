@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { MarketDataStatus } from "@/contracts/api";
 import { api } from "@/client/api";
@@ -134,9 +135,12 @@ export function MarketDataDialog({ onClose }: { onClose: () => void }) {
                 Screener &amp; backtest daily bars: {status.store.message}
               </p>
             )}
-            <p className="tx-dim">
-              {hub.url}
-              {status.scopes.length ? ` · this key: ${status.scopes.join(", ")}` : ""} · read-only
+            <p className="tx-dim tx-mdata-foot">
+              <span>
+                {hub.url}
+                {status.scopes.length ? ` · this key: ${status.scopes.join(", ")}` : ""} · read-only
+              </span>
+              <Link href="/health">Health page: why is a number old?</Link>
             </p>
           </>
         )}

@@ -10,6 +10,7 @@ import { toHubSymbol } from "@/server/data/sources/hub";
 import { DailyBarStore, type StoredSeries } from "@/server/providers/dailyBars";
 import { hubClient, type HubCandlesBatch } from "@/server/providers/hub";
 import { budgetFor, planLimits } from "@/server/providers/hub/budget";
+import { warnLine } from "@/server/log";
 
 export type { DailyBar };
 
@@ -150,7 +151,7 @@ function createStore() {
     batch,
     read,
     write,
-    log: (message) => console.warn(message),
+    log: warnLine,
   });
 }
 

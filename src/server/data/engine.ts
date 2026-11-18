@@ -14,6 +14,7 @@
 import { CHART_INTERVAL_CONFIG } from "@/core/market/intervals";
 import type { PricePoint, Quote } from "@/contracts/api";
 import { SourceSkip, type BaseInterval, type DataSource, type HistoryResult, type SourceKind } from "./types";
+import { warnLine } from "@/server/log";
 
 /** A failing source is skipped for this long, then tried again. */
 export const REST_MS = 30_000;
@@ -65,7 +66,7 @@ export class DataEngine {
     private readonly options: EngineOptions,
   ) {
     this.now = options.now ?? Date.now;
-    this.log = options.log ?? ((message) => console.warn(message));
+    this.log = options.log ?? warnLine;
   }
 
   // ------------------------------------------------------------------ history
