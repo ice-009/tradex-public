@@ -6,6 +6,7 @@ import { mergeTail, planHistoryFetch, type StoredHistory } from "@/core/market/h
 import type { PricePoint } from "@/contracts/api";
 import { readCandles, readSeries, touchSeries, writeSeries } from "@/server/data/candleDb";
 import type { HistoryResult as Download } from "@/server/data/types";
+import { log } from "@/server/log";
 
 // Candle history per source + symbol + interval, kept in the local market-data
 // database (./candleDb.ts). Data fetched before costs one small "tail" request
@@ -67,7 +68,7 @@ export function getHistory(params: { key: string; from: number; freshMs: number;
         }
         return merged;
       }
-      console.info(`History for ${key} was adjusted (split/bonus?) — downloading it again.`);
+      log.info("History was adjusted (split/bonus?): downloading it again", { series: key });
     }
     const { candles, complete } = await params.download(from);
     if (candles.length) {

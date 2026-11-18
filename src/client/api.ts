@@ -11,6 +11,7 @@ import type {
   BacktestInfoResponse,
   BrokerStatusResponse,
   FuturesResponse,
+  HealthReport,
   MarketDataStatus,
   BacktestRequest,
   BacktestResponse,
@@ -137,6 +138,9 @@ export const api = {
 
   /** "Market data: provided by your hub": its health and the freshness of each dataset (read-only). */
   marketData: () => getJson<MarketDataStatus>("/api/data/hub"),
+
+  /** The /health page: hub connection, data freshness, budget, sockets, jobs, recent errors and why a number may be old. */
+  health: () => getJson<HealthReport>("/api/health/details"),
 
   /** Ready-made lists; fetched once per page load and shared. */
   presets: (() => {

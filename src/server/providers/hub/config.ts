@@ -3,6 +3,8 @@
 // labelled sample data.
 // Pure: reads only the env object it's given.
 
+import { log } from "@/server/log";
+
 export interface HubConfig {
   /** Base URL without a trailing slash, e.g. "https://hub.example.com". */
   url: string;
@@ -16,7 +18,7 @@ const warned = new Set<string>();
 const warnOnce = (message: string) => {
   if (warned.has(message)) return;
   warned.add(message);
-  console.warn(message);
+  log.warn(message);
 };
 
 /** The hub settings, or null when the hub isn't configured (Tradex then shows sample data and "Connect a Market Data Hub"). */

@@ -16,6 +16,7 @@ import { getLotSizes } from "@/server/providers/reference";
 import { getUniverse } from "@/server/providers/universe";
 import { liveRecord } from "@/server/services/btstRecord";
 import { BENCHMARK } from "@/server/services/screener";
+import { log } from "@/server/log";
 
 // Strategy evidence for the daily plan (rules in src/core/plan/evidence.ts):
 // every screen replayed over the F&O list's daily history — the five years the
@@ -144,7 +145,7 @@ async function compute(info: KeyInfo): Promise<Computed> {
   const noHistory = pit ? pit.symbols.filter((symbol) => !info.today.includes(symbol) && !(bars.get(symbol)?.length ?? 0)) : [];
   const note = universeNote({ sessions: dates, byDay: info.byDay, noHistory });
   const ms = Date.now() - started;
-  console.info(`Strategy evidence: ${scan.symbols} stocks × ${scan.dates.length} sessions, ${trades.length} trades in ${ms} ms`);
+  log.info("Strategy evidence computed", { stocks: scan.symbols, sessions: scan.dates.length, trades: trades.length, ms });
   return { key: info.key, table, computedAt: Date.now(), ms, note };
 }
 
@@ -158,12 +159,23 @@ function start(info: KeyInfo) {
       await writeFile(CACHE_FILE, JSON.stringify(result));
     })
     .catch((error: Error) => {
-      console.error("Strategy evidence failed", error);
+      log.error("Strategy evidence failed", { error });
       state.error = { key: info.key, message: error.message, at: Date.now() };
     })
     .finally(() => {
       state.pending = null;
     });
+}
+
+/** For the health page: the table in memory (the session it runs through, when computed), a computation running, the last failure. */
+export function evidenceHealth(): { through: number | null; computedAt: number | null; pending: { startedAt: number; done: number; total: number } | null; error: { message: string; at: number } | null } {
+  const through = Number(state.current?.key.split(":")[0]);
+  return {
+    through: Number.isFinite(through) && through > 0 ? through : null,
+    computedAt: state.current?.computedAt ?? null,
+    pending: state.pending ? { startedAt: state.pending.startedAt, done: state.pending.done, total: state.pending.total } : null,
+    error: state.error ? { message: state.error.message, at: state.error.at } : null,
+  };
 }
 
 /** The evidence table, or "computing" (started in the background on first ask) with its progress. */
