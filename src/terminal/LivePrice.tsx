@@ -50,6 +50,50 @@ export function PriceCells({ tick, close, changePct, priceClassName }: { tick: L
   );
 }
 
+/**
+ * Latest live price per symbol for a list that isn't on screen as rows (the
+ * plan checks every candidate against it). Subscribed at the screen-row
+ * priority; the map updates at most every `throttleMs` so a burst of ticks
+ * doesn't re-render the caller on each one.
+ */
+export function useLivePrices(symbols: string[], throttleMs = 2000): Record<string, number> {
+  const key = [...new Set(symbols)].sort().join(",");
+  const [prices, setPrices] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (!key) return;
+    const list = key.split(",");
+    const latest: Record<string, number> = {};
+    for (const symbol of list) {
+      const tick = liveHub.getLatest(symbol);
+      if (tick) latest[symbol] = tick.ltp;
+    }
+    const flush = () => {
+      timer = null;
+      setPrices({ ...latest });
+    };
+    // Prices already on the stream show at once; new ticks are batched.
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(flush, 0);
+    const unsubscribe = list.map((symbol) =>
+      liveHub.subscribe(
+        symbol,
+        (tick) => {
+          if (tick.symbol !== symbol) return;
+          latest[symbol] = tick.ltp;
+          timer ??= setTimeout(flush, throttleMs);
+        },
+        SCREEN_ROW_PRIORITY,
+      ),
+    );
+    return () => {
+      if (timer) clearTimeout(timer);
+      for (const stop of unsubscribe) stop();
+    };
+  }, [key, throttleMs]);
+
+  return prices;
+}
+
 /** The latest live tick for one symbol (always subscribed while mounted). */
 export function useLiveTick(symbol: string, priority = 0): LiveTick | null {
   const [tick, setTick] = useState<LiveTick | null>(() => liveHub.getLatest(symbol));

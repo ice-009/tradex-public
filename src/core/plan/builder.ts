@@ -1,3 +1,4 @@
+import { planStatus, type PlanStatus } from "@/core/screener/planStatus";
 import { SCREEN_MAP, type ScreenerRow } from "@/core/screener/screens";
 import { bucketFor, eligibleIn, type MarketState, type ScreenEvidence } from "./evidence";
 import { entryKind, entryText, exitRuleFor, exitText, holdSessionsFor, type EntryKind, type ExitRule } from "./instructions";
@@ -13,6 +14,11 @@ import { entryKind, entryText, exitRuleFor, exitText, holdSessionsFor, type Entr
 //      evidence says the score picks better trades; elsewhere it is noise, so
 //      ties stay in symbol order.
 //   4. F&O-ban stocks and stocks already held are left out (and listed).
+//      So is a match whose plan no longer holds at the live price (stop
+//      broken, price run away from a buy-at-close entry, buy-stop triggered or
+//      out of reach: src/core/screener/planStatus.ts). It is listed as "not
+//      valid now" and doesn't take a slot; another eligible match of the same
+//      stock whose plan still holds is used instead.
 //   5. Free slots = max open − open trades. Each idea is sized at risk % of
 //      capital ÷ (entry − stop), in whole lots, under a cap on total notional
 //      (leverage × capital, as the backtester does). An idea whose single lot
@@ -46,6 +52,8 @@ export interface PlanInput {
   open: OpenPosition[];
   lots: Record<string, number>;
   settings: PlanSettings;
+  /** Latest live price per symbol; a symbol without one is checked at its scan close. */
+  prices?: Record<string, number>;
 }
 
 export type SizeStatus = "ok" | "too-big" | "no-room";
@@ -85,6 +93,8 @@ export interface PlanIdea {
   alsoMatched: string[];
   /** The score ordered this screen's ties (it ranks trades in the evidence). */
   scoreRanks: boolean;
+  /** The plan checked against the live price ("ok" for every idea that can be taken). */
+  status: PlanStatus;
 }
 
 export interface Plan {
@@ -100,6 +110,8 @@ export interface Plan {
   unsized: PlanIdea[];
   /** Sizeable ideas left over once the slots were full. */
   more: PlanIdea[];
+  /** Matches whose plan no longer holds at the live price (see `status`): not to be taken. */
+  invalid: PlanIdea[];
   skipped: { banned: string[]; held: string[]; noLot: string[] };
 }
 
@@ -115,7 +127,7 @@ function sizeIdea(entry: number, stop: number, lot: number, budget: number, room
 }
 
 export function buildPlan(input: PlanInput): Plan {
-  const { results, evidence, state, banned, open, lots, settings } = input;
+  const { results, evidence, state, banned, open, lots, settings, prices } = input;
   const held = new Set(open.map((position) => position.symbol));
   const riskBudget = (settings.capital * settings.riskPct) / 100;
   const freeSlots = Math.max(0, Math.round(settings.maxOpen) - open.length);
@@ -124,21 +136,30 @@ export function buildPlan(input: PlanInput): Plan {
     .sort((a, b) => (bucketFor(b, state).mean ?? 0) - (bucketFor(a, state).mean ?? 0))
     .map((entry) => entry.screenId);
 
-  // One candidate per stock: its eligible match with the highest expected R.
-  const best = new Map<string, { screenId: string; row: ScreenerRow; expectedR: number; others: string[] }>();
+  // Each stock's eligible matches, best expected R first (`eligible` is sorted that way).
+  type Match = { screenId: string; row: ScreenerRow; expectedR: number; status: PlanStatus };
+  const matches = new Map<string, Match[]>();
   for (const screenId of eligible) {
     const expectedR = bucketFor(evidence[screenId], state).mean ?? 0;
     for (const row of results[screenId] ?? []) {
       if (!(row.plan.entry - row.plan.stop > 0)) continue;
-      const current = best.get(row.symbol);
-      if (!current) best.set(row.symbol, { screenId, row, expectedR, others: [] });
-      else current.others.push(screenId); // `eligible` is sorted best first, so the first match stays
+      const price = prices?.[row.symbol];
+      const status = planStatus(row.plan, row.close, price && price > 0 ? price : row.close, row.facts?.atr14 ?? NaN);
+      matches.set(row.symbol, [...(matches.get(row.symbol) ?? []), { screenId, row, expectedR, status }]);
     }
+  }
+  // One candidate per stock: its best match whose plan still holds; else its best match, as invalid.
+  const best = new Map<string, Match & { others: string[] }>();
+  for (const [symbol, list] of matches) {
+    const valid = list.filter((match) => match.status.kind === "ok");
+    const [first, ...rest] = valid.length ? valid : list;
+    best.set(symbol, { ...first, others: rest.map((match) => match.screenId) });
   }
 
   const skipped = { banned: [] as string[], held: [] as string[], noLot: [] as string[] };
   const candidates: PlanIdea[] = [];
-  for (const [symbol, { screenId, row, expectedR, others }] of best) {
+  const invalid: PlanIdea[] = [];
+  for (const [symbol, { screenId, row, expectedR, status, others }] of best) {
     if (banned.has(symbol)) {
       skipped.banned.push(symbol);
       continue;
@@ -156,7 +177,7 @@ export function buildPlan(input: PlanInput): Plan {
     const kind = entryKind(screen, row.plan, row.close);
     const rule = exitRuleFor(screen, row.plan);
     const hold = holdSessionsFor(screen);
-    candidates.push({
+    (status.kind === "ok" ? candidates : invalid).push({
       symbol,
       name: row.name,
       screenId,
@@ -174,6 +195,7 @@ export function buildPlan(input: PlanInput): Plan {
       size: { status: "ok", lot: lots[symbol], lots: 0, qty: 0, risk: 0, notional: 0, oneLotRisk: 0 },
       alsoMatched: others,
       scoreRanks: Boolean(bucket.score?.ranks),
+      status,
     });
   }
   candidates.sort(
@@ -201,5 +223,6 @@ export function buildPlan(input: PlanInput): Plan {
     }
   }
   for (const list of Object.values(skipped)) list.sort();
-  return { state, riskBudget, openCount: open.length, freeSlots, eligible, ideas, unsized, more, skipped };
+  invalid.sort((a, b) => b.expectedR - a.expectedR || a.symbol.localeCompare(b.symbol));
+  return { state, riskBudget, openCount: open.length, freeSlots, eligible, ideas, unsized, more, invalid, skipped };
 }

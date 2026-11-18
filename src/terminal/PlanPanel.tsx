@@ -221,6 +221,7 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
         </ol>
       )}
       {plan && plan.unsized.length > 0 && <UnsizedList plan={plan} />}
+      {plan && plan.invalid.length > 0 && <InvalidList plan={plan} />}
       {plan && !live && eodDate && plan.ideas.length > 0 && (
         <p className="tx-scr-note">These matched at the close of {day(eodDate)}. During the session they are re-checked on live prices: take what still matches at 3:15–3:25 PM.</p>
       )}
@@ -295,6 +296,35 @@ function UnsizedList({ plan }: { plan: Plan }) {
   );
 }
 
+/** Matches whose plan the live price has left behind: listed so you know why they're gone, not to be taken. */
+function InvalidList({ plan }: { plan: Plan }) {
+  const [open, setOpen] = useState(false);
+  const shown = open ? plan.invalid : plan.invalid.slice(0, 6);
+  return (
+    <div className="tx-plan-unsized">
+      <span className="tx-dim" title="Their plan was made at the last screener scan and no longer holds at the live price. They come back if the next scan makes a fresh plan.">
+        Not valid at the live price:
+      </span>
+      {shown.map((idea) => (
+        <button
+          type="button"
+          key={idea.symbol}
+          className="tx-plan-chip"
+          onClick={() => openIdea(idea.symbol, idea.screenId)}
+          title={`${SCREEN_MAP[idea.screenId]?.name} · ${idea.entry.text}${idea.status.kind !== "ok" ? `\n${idea.status.detail}` : ""}`}
+        >
+          {idea.symbol} <span className={`tx-plan-status is-${idea.status.kind}`}>{idea.status.kind !== "ok" ? idea.status.label : ""}</span>
+        </button>
+      ))}
+      {plan.invalid.length > shown.length && (
+        <button type="button" className="tx-scr-clear" onClick={() => setOpen(true)}>
+          +{plan.invalid.length - shown.length} more
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** "live 4/6" (BTST live record) or "you 2/3" (your own closed trades of this setup). */
 function liveLine(screenId: string, live: Record<string, LiveScreenRecord> | null, trades: TradesResponse | null): string | null {
   const record = live?.[screenId];
@@ -329,7 +359,12 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
           <span className={`tx-plan-size is-${size.status}`} title={sizeTitle}>
             {sizeText}
           </span>
-          {tick && <span className="tx-dim tx-plan-ltp">now {formatPrice(tick.ltp)}</span>}
+          {tick && (
+            <span className="tx-dim tx-plan-ltp" title={idea.entry.kind === "buy-stop" ? "A buy-stop is an order for the next session: it fills only if the price trades up to it. Nothing is bought below it." : undefined}>
+              now {formatPrice(tick.ltp)}
+              {idea.entry.kind === "buy-stop" && tick.ltp < idea.entry.price ? ` · ${(((idea.entry.price - tick.ltp) / tick.ltp) * 100).toFixed(1)}% below the buy-stop` : ""}
+            </span>
+          )}
         </span>
         <span className="tx-plan-line2">
           {idea.entry.kind === "buy-stop" ? "buy-stop" : "entry"} ~{formatPrice(idea.entry.price)} · stop {formatPrice(idea.stop)} · exit: {exitShort(idea.exitRule, idea, idea.holdSessions)}

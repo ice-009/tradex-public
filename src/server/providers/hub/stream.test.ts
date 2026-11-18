@@ -119,6 +119,23 @@ describe("HubStream", () => {
     expect(hub.connections.map((connection) => connection.symbols)).toEqual([["SBIN"], ["INFY", "SBIN", "TCS"]]);
   });
 
+  it("doesn't reconnect when the symbols go back to what the open stream carries", async () => {
+    const hub = await mockHub(({ res }) => {
+      sse(res);
+      res.write(": hello\n\n");
+    });
+    cleanup.push(() => hub.server.close());
+    const { stream } = follow(hub.client);
+    stream.setSymbols(["SBIN", "INFY"]);
+    await until(() => stream.isOpen());
+    // a browser tab reconnecting: its symbols drop out, then come back
+    stream.setSymbols(["SBIN"]);
+    stream.setSymbols(["INFY", "SBIN"]);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(hub.connections).toHaveLength(1);
+    expect(stream.connects).toBe(1);
+  });
+
   it("backs off after a refused connection, reports it, and recovers", async () => {
     const hub = await mockHub(({ res }, index) => {
       if (index < 2) {
