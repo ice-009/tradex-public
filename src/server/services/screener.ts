@@ -6,11 +6,13 @@ import { runTrackRecord } from "@/core/screener/backtest";
 import { buildFeatureSets, marketOverview, runScreens } from "@/core/screener/run";
 import { emptyFresh, freshKey, updateFresh, type FreshState } from "@/core/screener/fresh";
 import { marketRegime } from "@/core/screener/regime";
+import { sectorIndexStat, sectorSources, strengthRanks, type SectorIndexStat } from "@/core/screener/sectorIndex";
 import { latestOiFacts } from "@/server/providers/foData";
-import { getFnoBan } from "@/server/providers/reference";
+import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
+import { getFnoBan, getIndexCatalog } from "@/server/providers/reference";
 import { updateBtstRecord } from "@/server/services/btstRecord";
 import type { ScreenerRow } from "@/core/screener/screens";
-import { SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
+import { DAY_MS, SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
 import type { DailyBar } from "@/core/types";
 import { screenerStore } from "@/server/providers/dailyStore";
 import { UNIVERSES, getUniverse, isUniverseId, type UniverseId } from "@/server/providers/universe";
@@ -19,8 +21,17 @@ import { log } from "@/server/log";
 // Screener and track-record orchestration: load bars (dailyStore, filled from
 // the Market Data Hub), hand them to the engine (src/core/screener), shape the
 // API response.
+//
+// NIFTY (the market regime's 200-day average, and relative strength's 6-month
+// benchmark) and the sector indices come from the hub's daily index history
+// (NSE's index file, 2012 on), so they reach back as far as the stocks' bars.
+// Sector strength ranks each industry by its sector index's 1-month return —
+// a synthetic equal-weight basket where no NSE index has that much history —
+// and by the median of the universe's own stocks when the hub has neither.
 
 export const BENCHMARK = "NIFTY";
+/** A sector index is used when its history starts within this many days of the stocks' window. */
+const SECTOR_HISTORY_SLACK_DAYS = 30;
 /** Below this share of the universe with history, keep showing the sync progress instead of results. */
 const MIN_COVERAGE = 0.95;
 /** Bump when the replay rules change so a running server drops cached results. */
@@ -46,8 +57,12 @@ function stampFirstSeen(universeId: string, results: Record<string, ScreenerRow[
 export async function runScreener(universeId: UniverseId, useLive: boolean): Promise<ScreenerResponse> {
   const members = await getUniverse(universeId);
   const symbols = members.map((member) => member.symbol);
-  screenerStore.ensureFresh([...symbols, BENCHMARK]);
-  await screenerStore.hasData([...symbols, BENCHMARK]);
+  const catalog = await getIndexCatalog();
+  const needFrom = istParts().day - (DEEP_HISTORY_DAYS - SECTOR_HISTORY_SLACK_DAYS) * DAY_MS;
+  const sources = sectorSources(catalog, members.map((member) => member.industry || "Other"), needFrom);
+  const sectorSymbols = [...new Set([...sources.values()].map((source) => source.symbol))];
+  screenerStore.ensureFresh([...symbols, BENCHMARK, ...sectorSymbols]);
+  await screenerStore.hasData([...symbols, BENCHMARK, ...sectorSymbols]);
 
   const covered = symbols.filter((symbol) => screenerStore.getBars(symbol).length > 0);
   const progress = screenerStore.progress;
@@ -79,9 +94,18 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
     aboveSma50: sets.live.filter((f) => f.close > f.sma50).length,
     counted: sets.live.filter((f) => Number.isFinite(f.sma50)).length,
   });
-  // Sector strength: each sector's rank (0 weakest – 1 strongest) by median 1-month return.
-  const sectorsByReturn = [...market.sectors].filter((sector) => Number.isFinite(sector.ret21)).sort((a, b) => a.ret21 - b.ret21);
-  const sectorPct = new Map(sectorsByReturn.map((sector, index) => [sector.sector, sectorsByReturn.length > 1 ? index / (sectorsByReturn.length - 1) : 0.5]));
+  // Sector strength: each sector's rank (0 weakest – 1 strongest) by its sector index's 1-month
+  // return (end of day), or the median 1-month return of its stocks when the hub has no index for it.
+  const indexStats = new Map<string, SectorIndexStat>();
+  for (const [industry, source] of sources) {
+    const bars = stored(source.symbol);
+    if (bars.length) indexStats.set(industry, sectorIndexStat(source, bars, stored(BENCHMARK)));
+  }
+  for (const sector of market.sectors) {
+    const stat = indexStats.get(sector.sector);
+    if (stat) sector.index = stat;
+  }
+  const sectorPct = strengthRanks(new Map(market.sectors.map((sector) => [sector.sector, sector.index && Number.isFinite(sector.index.ret21) ? sector.index.ret21 : sector.ret21])));
   const ban = await getFnoBan();
   const banned = new Set(ban.available ? ban.symbols : []);
   // Futures OI from the hub's newest F&O bhavcopy day (GET /v1/fo/oi/day, cached; never waits).
