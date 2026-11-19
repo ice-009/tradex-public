@@ -133,13 +133,6 @@ jobs:
           node-version: 22
       # End-of-day mode is market-data-hub#32: build that branch until it is on the hub's main.
       # (Remove this step once it has merged; compose.yaml then builds main as usual.)
-      - name: Pick the hub version
-        run: |
-          # A commit, not the branch name: HUB_REF is also the image tag, which can't hold a "/".
-          if curl -fsS https://raw.githubusercontent.com/ice-009/market-data-hub/main/src/status.ts | grep -q end_of_day; then ref=main; else ref=$(git ls-remote https://github.com/ice-009/market-data-hub.git refs/heads/feat/32-no-broker | cut -f1); fi
-          test -n "$ref"
-          echo "HUB_REF=$ref" >> "$GITHUB_ENV"
-          echo "Building the hub from $ref"
       - name: docker compose up (no .env, no broker keys)
         run: |
           test ! -e .env

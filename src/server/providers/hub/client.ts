@@ -199,6 +199,8 @@ export interface HubBatchSeries {
   complete: boolean;
   coverage: { from: number; to: number } | null;
   candles: HubCandle[];
+  /** Indices and baskets only: true for a synthetic equal-weight basket (EW-IT…), false for an NSE index. */
+  synthetic?: boolean;
 }
 
 /** GET /v1/candles/batch: many symbols' daily or weekly bars in one request. */
@@ -293,6 +295,23 @@ export interface HubFoBan {
   symbols: string[];
   fetchedAt: number;
   current: boolean;
+}
+
+/** How far back one index's or basket's stored daily history reaches (YYYY-MM-DD). */
+export interface HubIndexHistory {
+  firstSession: string | null;
+  lastSession: string | null;
+  sessions: number;
+  coverage: { from: string; to: string } | null;
+}
+
+/** GET /v1/indices: NSE indices (from NSE's index file, 2012 on) and synthetic baskets, with the industry → sector map. */
+export interface HubIndices {
+  indices: Array<HubIndexHistory & { symbol: string; name: string; synthetic: false; source: string; intraday: boolean }>;
+  baskets: Array<HubIndexHistory & { symbol: string; name: string; synthetic: true; source: string; universe: string; industry: string | null; standsFor: string | null; members: number }>;
+  /** NIFTY 500 industries: their NSE sector indices (best first) and synthetic basket. */
+  sectors: Array<{ industry: string; indices: string[]; basket: string }>;
+  basketMethod: string;
 }
 
 export interface HubResultsCalendar {
@@ -584,6 +603,11 @@ export class HubClient {
 
   foBan(): Promise<HubFoBan> {
     return this.get<HubFoBan>("/v1/fo/ban");
+  }
+
+  /** Indices and synthetic baskets with daily history, and the industry → sector-index map. */
+  indices(): Promise<HubIndices> {
+    return this.get<HubIndices>("/v1/indices");
   }
 
   /** Results dates between two IST dates (YYYY-MM-DD). */

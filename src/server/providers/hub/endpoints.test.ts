@@ -81,3 +81,19 @@ describe("GET /v1/fo/oi/day and /v1/fo/contracts", () => {
     await expect(client.foContracts("TCS")).rejects.toMatchObject({ status: 404, code: "not_found" });
   });
 });
+
+describe("GET /v1/indices", () => {
+  it("reads the index catalogue: NSE indices, synthetic baskets and the sector map", async () => {
+    const body = {
+      indices: [{ symbol: "NIFTYIT", name: "Nifty IT", synthetic: false, source: "nse_index_file", intraday: true, firstSession: "2012-03-01", lastSession: "2026-11-17", sessions: 3640, coverage: null }],
+      baskets: [{ symbol: "EW-IT", name: "Equal-weight Information Technology basket (synthetic)", synthetic: true, source: "equal_weight_basket", universe: "nifty500", industry: "Information Technology", standsFor: "NIFTYIT", members: 25, firstSession: "1994-11-04", lastSession: "2026-11-17", sessions: 8000, coverage: null }],
+      sectors: [{ industry: "Information Technology", indices: ["NIFTYIT"], basket: "EW-IT" }],
+      basketMethod: "…",
+    };
+    const { client, requests } = fakeHub([{ status: 200, body }]);
+    const answer = await client.indices();
+    expect(requests[0].pathname).toBe("/v1/indices");
+    expect(answer.baskets[0]).toMatchObject({ symbol: "EW-IT", synthetic: true });
+    expect(answer.sectors[0].indices).toEqual(["NIFTYIT"]);
+  });
+});
