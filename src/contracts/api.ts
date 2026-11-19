@@ -460,6 +460,13 @@ export interface HubHealth {
   warnings: string[];
   /** The hub's own broker login (null when unknown). */
   brokerConnected: boolean | null;
+  /**
+   * The hub has no broker (end-of-day mode): daily candles, screens, backtests
+   * and the plan work from NSE's daily files; live quotes and intraday charts don't exist.
+   */
+  endOfDay: boolean;
+  /** The hub's own words for its mode, when it isn't the full one. */
+  modeNote: string | null;
   /** The hub's live feed: socket, polling, mixed, idle or down (null when unknown). */
   feed: string | null;
   /** Tradex's price stream from the hub is open. */

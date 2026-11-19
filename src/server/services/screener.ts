@@ -79,7 +79,9 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
   const stored = (symbol: string) => screenerStore.getBars(symbol);
   const sets = buildFeatureSets(covered, stored, live);
   const benchToday = live.get(BENCHMARK);
-  const nifty = computeFeatures(BENCHMARK, benchToday ? [...stored(BENCHMARK), benchToday] : stored(BENCHMARK), Boolean(benchToday));
+  // No NIFTY bars (a hub in end-of-day mode has no index history yet): relative strength and the regime go without it.
+  const benchBars = benchToday ? [...stored(BENCHMARK), benchToday] : stored(BENCHMARK);
+  const nifty = benchBars.length ? computeFeatures(BENCHMARK, benchBars, Boolean(benchToday)) : { ret126: NaN, close: NaN, sma50: NaN, sma200: NaN };
   const memberBySymbol = new Map(members.map((member) => [member.symbol, member]));
 
   const results = runScreens(sets, { niftyRet126: nifty.ret126 }, memberBySymbol);

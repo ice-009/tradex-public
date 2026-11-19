@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HubCandles, HubQuote, HubQuotes } from "@/server/providers/hub/client";
+import type { HubCandles, HubCandlesBatch, HubQuote, HubQuotes } from "@/server/providers/hub/client";
 import type { HubStream, HubStreamListener } from "@/server/providers/hub/stream";
 import { SourceSkip, type SourceTick } from "../types";
-import { createHubSource, hubTimeframe, toHubSymbol } from "./hub";
+import { END_OF_DAY_INTRADAY, createHubSource, hubTimeframe, toHubSymbol } from "./hub";
 
 const MIN = 60_000;
 /** 09:15 IST on 2026-11-09, in UTC ms. */
@@ -10,8 +10,12 @@ const OPEN = Date.UTC(2026, 10, 9, 3, 45);
 
 const quote = (symbol: string, ltp: number, extra: Partial<HubQuote> = {}): HubQuote => ({ symbol, ltp, ch: 1, chp: 0.1, open: ltp, high: ltp, low: ltp, prevClose: ltp - 1, volume: 10, ltt: 5, ts: 6, source: "socket", ...extra });
 
-function fakeClient(candles: (symbol: string, tf: string, from: number) => HubCandles, quotes: (symbols: string[]) => HubQuotes = () => ({ quotes: [], missing: [] })) {
-  const calls = { candles: [] as Array<[string, string, number]>, quotes: [] as string[][] };
+function fakeClient(
+  candles: (symbol: string, tf: string, from: number) => HubCandles,
+  quotes: (symbols: string[]) => HubQuotes = () => ({ quotes: [], missing: [] }),
+  batch: (symbols: string[]) => HubCandlesBatch["series"] = () => ({}),
+) {
+  const calls = { candles: [] as Array<[string, string, number]>, quotes: [] as string[][], batch: [] as string[][] };
   return {
     calls,
     client: {
@@ -22,6 +26,10 @@ function fakeClient(candles: (symbol: string, tf: string, from: number) => HubCa
       quotes: async (symbols: string[]) => {
         calls.quotes.push(symbols);
         return quotes(symbols);
+      },
+      candlesBatch: async (symbols: string[], tf: "1d" | "1w", from: number): Promise<HubCandlesBatch> => {
+        calls.batch.push(symbols);
+        return { tf, from, to: from, series: batch(symbols), queued: [], unknown: [] };
       },
     },
   };
@@ -172,5 +180,53 @@ describe("hub live feed", () => {
     expect(feed.isConnected()).toBe(false);
     expect(await feed.restart!("quiet")).toBe(false);
     expect(fake.state.restarts).toBe(1);
+  });
+});
+
+describe("hub source in end-of-day mode (a hub without a broker)", () => {
+  const day = (iso: string) => Date.parse(`${iso}T00:00:00Z`);
+  const bar = (iso: string, c: number) => ({ t: day(iso), o: c - 1, h: c + 2, l: c - 3, c, v: 500 });
+
+  it("offers daily history only, and marks a short answer for another try", async () => {
+    const { client, calls } = fakeClient(() => answer([bar("2026-11-06", 100)], { tf: "1d", complete: false }));
+    const source = createHubSource({ client: () => client, stream: () => fakeStream().stream, endOfDay: () => true });
+    expect(source.history!.supports("1d")).toBe(true);
+    for (const interval of ["1m", "5m", "15m", "1h", "4h"] as const) expect(source.history!.supports(interval), interval).toBe(false);
+    await expect(source.history!.fetch({ symbol: "SBIN", interval: "15m", from: 0 })).rejects.toThrow(END_OF_DAY_INTRADAY);
+    expect(await source.history!.fetch({ symbol: "SBIN", interval: "1d", from: 0 })).toMatchObject({ complete: false, candles: [{ close: 100 }] });
+    expect(calls.candles).toHaveLength(1);
+  });
+
+  it("quotes the last daily close (delayed), from one batch call reused for a minute", async () => {
+    const clock = { now: day("2026-11-08") };
+    const { client, calls } = fakeClient(
+      () => answer([]),
+      () => {
+        throw new Error("/v1/quotes must not be called without a broker");
+      },
+      (symbols) => Object.fromEntries(symbols.map((symbol) => [symbol, { complete: true, coverage: null, candles: [bar("2026-11-05", 100), bar("2026-11-06", 105)] }])),
+    );
+    const source = createHubSource({ client: () => client, stream: () => fakeStream().stream, endOfDay: () => true, now: () => clock.now });
+    const quotes = await source.quotes!.fetch(["SBIN", "NSE:SBIN-EQ", "INFY"]);
+    expect(quotes).toEqual([
+      { symbol: "SBIN", ltp: 105, ch: 5, chp: 5, open: 104, high: 107, low: 102, prevClose: 100, volume: 500, delayed: true },
+      { symbol: "NSE:SBIN-EQ", ltp: 105, ch: 5, chp: 5, open: 104, high: 107, low: 102, prevClose: 100, volume: 500, delayed: true },
+      { symbol: "INFY", ltp: 105, ch: 5, chp: 5, open: 104, high: 107, low: 102, prevClose: 100, volume: 500, delayed: true },
+    ]);
+    await source.quotes!.fetch(["SBIN"]);
+    expect(calls.batch).toEqual([["SBIN", "INFY"]]);
+    clock.now += 61_000;
+    await source.quotes!.fetch(["SBIN"]);
+    expect(calls.batch).toHaveLength(2);
+    expect(calls.quotes).toHaveLength(0);
+  });
+
+  it("keeps the stream closed: nothing is subscribed, so the market stream polls", async () => {
+    const fake = fakeStream();
+    const source = createHubSource({ client: () => fakeClient(() => answer([])).client, stream: () => fake.stream, endOfDay: () => true });
+    expect(await source.stream!.start()).toBe(false);
+    expect(await source.stream!.subscribe(["SBIN"])).toEqual([]);
+    expect(source.stream!.isConnected()).toBe(false);
+    expect(fake.state.started).toBe(0);
   });
 });

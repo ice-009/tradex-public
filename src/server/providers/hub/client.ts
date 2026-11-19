@@ -126,11 +126,26 @@ export interface HubRecovery {
   last?: { reason: string; startedAt: number; finishedAt: number | null; planned?: number; calls?: number; bars?: number; skipped?: number; failed?: number; pending?: number; error?: string | null } | null;
 }
 
+/** What the hub can serve (/v1/status `features`; hubs before market-data-hub#32 don't say). */
+export interface HubFeatures {
+  dailyCandles?: boolean;
+  indexCandles?: boolean;
+  intradayCandles?: boolean;
+  liveQuotes?: boolean;
+  stream?: boolean;
+  fo?: boolean;
+}
+
 export interface HubStatus {
   /** Health first: `problems` are worth an alert, `warnings` worth knowing. */
   healthy?: boolean;
   problems?: string[];
   warnings?: string[];
+  /** "end_of_day": no broker on the hub, NSE's daily files only (market-data-hub#32). "broker": the full hub. */
+  mode?: "broker" | "end_of_day" | string;
+  modeLabel?: string;
+  modeNote?: string | null;
+  features?: HubFeatures;
   service: string;
   version: string;
   /** The hub's clock when it answered (epoch ms). */
@@ -166,6 +181,16 @@ export interface HubStatus {
     streams?: number;
     recovery?: HubRecovery | null;
   };
+}
+
+/**
+ * True when the hub runs without a broker (end-of-day data only): it says so in
+ * `mode`, and an older hub without a broker shows it as `broker.configured: false`.
+ */
+export function isEndOfDay(status: Pick<HubStatus, "mode" | "broker"> | null | undefined): boolean {
+  if (!status) return false;
+  if (status.mode) return status.mode === "end_of_day";
+  return status.broker?.configured === false;
 }
 
 /** One symbol's series in a batch answer. */
@@ -342,6 +367,8 @@ export const HUB_MEMBER_DAYS = 400;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const RETRYABLE = new Set([429, 502, 503, 504]);
+/** 503 codes that asking again won't change: the hub has no broker for this request (end-of-day mode). */
+const FINAL_CODES = new Set(["not_configured"]);
 const MAX_BACKOFF_MS = 8_000;
 
 /** Retry-After as ms: delta-seconds or an HTTP date. */
@@ -431,7 +458,7 @@ export class HubClient {
         const detail = typeof info.error === "string" ? info.error : response.statusText || "request failed";
         const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
         error = new HubError(this.scrub(`Market Data Hub ${response.status} ${code}: ${detail}`), response.status, code, retryAfterMs, body);
-        retryable = RETRYABLE.has(response.status);
+        retryable = RETRYABLE.has(response.status) && !FINAL_CODES.has(code);
         waitMs = retryAfterMs ?? this.backoff(attempt);
       } catch (caught) {
         if (caught instanceof HubError) throw caught;

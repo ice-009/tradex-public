@@ -7,6 +7,7 @@ import { FAVORITE_INTERVALS, INTERVALS, INTERVAL_META } from "@/core/market/inte
 import { liveHub, type LiveStatus } from "@/client/marketData";
 import { useApiUsage } from "@/client/usageFeed";
 import type { ApiUsageResponse } from "@/contracts/api";
+import { END_OF_DAY_INTRADAY_HINT, END_OF_DAY_LABEL, END_OF_DAY_STATUS_HINT } from "./endOfDay";
 import { MarketDataDialog } from "./MarketDataDialog";
 import { LAYOUTS, setLayout, updateActiveCell, useTerminal } from "./store";
 import { Icons, LayoutIcon } from "./icons";
@@ -31,6 +32,9 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
 
   useEffect(() => liveHub.onStatus(setStatus), []);
 
+  // The hub has no broker: intraday intervals are off (with the reason in their tooltip).
+  const endOfDay = usage?.hub.endOfDay ?? false;
+  const off = (value: (typeof INTERVALS)[number]["value"]) => endOfDay && INTERVAL_META[value].intraday;
   const moreIntervals = INTERVALS.filter((meta) => !FAVORITE_INTERVALS.includes(meta.value));
   const intervalIsMore = !FAVORITE_INTERVALS.includes(cell.interval);
 
@@ -53,7 +57,8 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
             type="button"
             key={value}
             className={`tx-tb-btn tx-interval ${cell.interval === value ? "is-active" : ""}`}
-            title={INTERVAL_META[value].title}
+            title={off(value) ? `${INTERVAL_META[value].title}: ${END_OF_DAY_INTRADAY_HINT}` : INTERVAL_META[value].title}
+            disabled={off(value)}
             onClick={() => updateActiveCell({ interval: value })}
           >
             {INTERVAL_META[value].label}
@@ -75,6 +80,8 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
                 type="button"
                 key={meta.value}
                 className={`tx-menu-item ${cell.interval === meta.value ? "is-active" : ""}`}
+                disabled={off(meta.value)}
+                title={off(meta.value) ? END_OF_DAY_INTRADAY_HINT : undefined}
                 onClick={() => {
                   updateActiveCell({ interval: meta.value });
                   close();
@@ -162,16 +169,16 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
       <ApiUsageMeter usage={usage} />
 
       <span
-        className={`tx-status tx-status-${status}`}
+        className={`tx-status tx-status-${endOfDay ? "eod" : status}`}
         title={[
-          status === "delayed" ? "No live stream from the hub: prices are polled every ~15 s" : "Market data feed",
+          endOfDay ? `${END_OF_DAY_LABEL}. ${END_OF_DAY_STATUS_HINT}` : status === "delayed" ? "No live stream from the hub: prices are polled every ~15 s" : "Market data feed",
           usage ? hubSummary(usage.hub) : "",
         ]
           .filter(Boolean)
           .join("\n")}
       >
         <span className="tx-status-dot" />
-        {STATUS_LABEL[status]}
+        {endOfDay ? "End-of-day" : STATUS_LABEL[status]}
       </span>
 
       <Dropdown
@@ -199,6 +206,7 @@ const compact = (value: number) => (value >= 10_000 ? `${Math.round(value / 1000
 function hubSummary(hub: ApiUsageResponse["hub"]): string {
   if (!hub.configured) return "No Market Data Hub configured (HUB_URL, HUB_KEY): sample data only";
   if (!hub.reachable) return `Market Data Hub at ${hub.url} unreachable${hub.error ? `: ${hub.error}` : ""}`;
+  if (hub.endOfDay) return `${END_OF_DAY_LABEL}: Market Data Hub at ${hub.url}${hub.version ? `, v${hub.version}` : ""}${hub.healthy === false ? ` · ${hub.problems.length} problem${hub.problems.length === 1 ? "" : "s"}` : ""}`;
   const broker = hub.brokerConnected === null ? "" : hub.brokerConnected ? " · its broker is connected" : " · its broker is NOT connected";
   const feed = hub.feed ? ` · live feed ${hub.feed}` : "";
   const health = hub.healthy === false ? ` · ${hub.problems.length} problem${hub.problems.length === 1 ? "" : "s"}` : "";
@@ -210,11 +218,11 @@ function ApiUsageMeter({ usage }: { usage: ApiUsageResponse | null }) {
   const [open, setOpen] = useState(false);
   if (!usage) return null;
   const share = usage.dayCap ? usage.usedToday / usage.dayCap : 0;
-  const hubDown = !usage.hub.reachable || usage.hub.brokerConnected === false || usage.hub.healthy === false;
+  const hubDown = !usage.hub.reachable || (usage.hub.brokerConnected === false && !usage.hub.endOfDay) || usage.hub.healthy === false;
   const tone = usage.strikes > 0 || share >= 0.9 || hubDown ? "is-bad" : share >= 0.7 ? "is-warn" : "";
   const title = [
     hubSummary(usage.hub),
-    usage.hub.reachable
+    usage.hub.reachable && !usage.hub.endOfDay
       ? [
           `The hub's broker (${usage.plan === "prime" ? "Prime" : "Standard"} plan) · data API calls today: ${usage.usedToday.toLocaleString("en-IN")} of ${usage.dayCap.toLocaleString("en-IN")} (limit ${usage.limits.perDay.toLocaleString("en-IN")})`,
           `Last minute: ${usage.usedThisMinute} of ${usage.minuteCap} (limit ${usage.limits.perMinute})`,
@@ -233,7 +241,7 @@ function ApiUsageMeter({ usage }: { usage: ApiUsageResponse | null }) {
         <span className="tx-api-meter-bar" aria-hidden>
           <i style={{ width: `${Math.min(100, share * 100)}%` }} />
         </span>
-        {usage.hub.configured ? `Hub ${compact(usage.usedToday)}/${compact(usage.dayCap)}` : "No hub"}
+        {!usage.hub.configured ? "No hub" : usage.hub.endOfDay ? "Hub · EOD" : `Hub ${compact(usage.usedToday)}/${compact(usage.dayCap)}`}
       </button>
       {open && <MarketDataDialog onClose={() => setOpen(false)} />}
     </>

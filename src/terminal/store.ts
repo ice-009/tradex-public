@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { ChartInterval } from "@/core/market/intervals";
+import { INTERVAL_META, type ChartInterval } from "@/core/market/intervals";
 import type { ChartType, Drawing, ScaleMode, Tool } from "@/chart/types";
 import type { IndicatorConfig } from "@/core/types";
 import type { ChartEngine } from "@/chart/engine";
@@ -334,6 +334,16 @@ export function updateActiveCell(patch: Partial<CellState>) {
     const symbol = patch.symbol;
     setState((current) => ({ ...current, cells: current.cells.map((cell) => (cell.symbol === symbol ? cell : { ...cell, symbol })) }));
   }
+}
+
+/**
+ * The hub serves end-of-day data only (no broker): intraday charts can't be
+ * drawn, so cells on an intraday interval switch to daily. Returns how many changed.
+ */
+export function adaptToEndOfDay(): number {
+  const changed = getState().cells.filter((cell) => INTERVAL_META[cell.interval].intraday).length;
+  if (changed) setState((current) => ({ ...current, cells: current.cells.map((cell) => (INTERVAL_META[cell.interval].intraday ? { ...cell, interval: "1d" } : cell)) }));
+  return changed;
 }
 
 // ------------------------------------------------------------------ price alerts

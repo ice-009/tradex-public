@@ -583,6 +583,7 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 }
 .tx-tb-btn:hover, .tx-tb-btn.is-open { background: var(--surface-3); color: var(--text); }
 .tx-tb-btn.is-active { color: var(--accent-text); }
+.tx-tb-btn:disabled, .tx-menu-item:disabled { opacity: 0.4; cursor: not-allowed; background: none; }
 .tx-tb-btn svg { flex-shrink: 0; }
 .tx-symbol-btn { min-width: 128px; padding: 0 10px; color: var(--text); font-weight: var(--fw-semibold); letter-spacing: 0.01em; text-transform: uppercase; }
 .tx-symbol-btn svg { color: var(--text-subtle); }
@@ -622,6 +623,7 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 .tx-status-connecting .tx-status-dot { background: var(--warn); }
 .tx-status-delayed .tx-status-dot { background: var(--warn); }
 .tx-status-offline .tx-status-dot { background: var(--neg); }
+.tx-status-eod .tx-status-dot { background: var(--accent-text); }
 
 /* Broker API usage meter */
 .tx-api-meter { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; margin-right: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-subtle); font-size: var(--fs-xs); font-weight: var(--fw-medium); white-space: nowrap; cursor: default; }
@@ -2196,7 +2198,9 @@ button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 /* ---------- "Connect a Market Data Hub" banner (src/terminal/HubBanner.tsx) ---------- */
 .tx-hub-banner { display: flex; align-items: center; gap: var(--sp-3, 12px); flex-wrap: wrap; padding: 6px 16px; border-bottom: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-muted, var(--text-subtle)); font-size: var(--fs-sm, 12px); }
 .tx-hub-banner strong { color: var(--warn); }
+.tx-hub-banner.is-info strong { color: var(--accent-text); }
 .tx-hub-banner button { margin-left: auto; }
+.tx-hub-banner button + button { margin-left: 0; }
 @media (max-width: 640px) { .tx-mdata-facts { grid-template-columns: 1fr; } .tx-mdata-row.is-static { grid-template-columns: auto 1fr; } .tx-mdata-row .tx-mdata-count { grid-column: 2; } }
 .tx-mdata-foot { display: flex; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; }
 

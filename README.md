@@ -61,6 +61,23 @@
 
 ## Getting started
 
+### Try Tradex without a broker (start here)
+
+You don't need a broker account to try Tradex. With Docker installed:
+
+```bash
+git clone https://github.com/ice-009/tradex-public.git
+cd tradex-public
+docker compose up -d        # first run builds Tradex and its Market Data Hub (a few minutes)
+```
+
+Open http://localhost:3000, create a local account and sign in. With no `.env` and no broker keys, the [Market Data Hub](https://github.com/ice-009/market-data-hub) runs in **end-of-day mode** on NSE's free daily files, and Tradex says **End-of-day data (no broker connected)** in a banner and in the top bar.
+
+- **Works:** daily, weekly and monthly charts for every NSE stock (adjusted for splits and bonuses, with delivery %), the screener, backtests, F&O open interest, lot sizes, the ban list and the results calendar. Watchlist prices are the last daily close, marked delayed.
+- **Off, with an explanation:** live quotes and intraday intervals (1m … 4h are greyed out in the top bar). Index charts (NIFTY, BANKNIFTY) and the daily plan's market filter need NIFTY's history, which end-of-day mode gets once the hub imports NSE's index closes ([market-data-hub#23](https://github.com/ice-009/market-data-hub/issues/23)).
+- **History fills in by itself:** the hub has the last two weeks within a minute of starting, then downloads two years of NSE's archive in the background (about half an hour at NSE's pace, paused in market hours). Charts and screens get longer as it goes; backtests need a few months of it.
+- **Later, with a broker:** add the hub's `FYERS_*` settings to `.env` (see below) and `docker compose up -d` again. Nothing is lost; live prices and intraday charts switch on.
+
 ### With Docker (one command)
 
 **Requirements:** Docker Engine 25 or newer with Compose v2.24+ (Docker Desktop 4.27+).
@@ -74,7 +91,7 @@ docker compose up -d        # first run builds Tradex and the Market Data Hub (a
 Open http://localhost:3000, create a local account and sign in. Nothing has to be configured first: [`compose.yaml`](compose.yaml) runs Tradex with its own [Market Data Hub](https://github.com/ice-009/market-data-hub), built from the hub's repo. On first start a one-shot `hub-key` service creates Tradex's hub key (read-only scopes), and Tradex generates its `NEXTAUTH_SECRET`. Both stay in Docker volumes and are never printed.
 
 - **Data** lives in three named volumes: `hub-data` (the hub's database and broker token), `hub-key` (Tradex's key) and `tradex-data` (accounts, candle cache, session secret). `docker compose down` keeps them; `docker compose down -v` deletes them.
-- **Real prices** need the hub's broker login: copy `.env.example` to `.env`, fill in the `FYERS_*` lines in its *Docker Compose* section, and `docker compose up -d` again. Those values go to the hub container only. Without them the hub serves what it has stored plus NSE's daily files.
+- **Live prices and intraday charts** need the hub's broker login: copy `.env.example` to `.env`, fill in the `FYERS_*` lines in its *Docker Compose* section, and `docker compose up -d` again. Those values go to the hub container only. Without them the hub runs in end-of-day mode ([above](#try-tradex-without-a-broker-start-here)).
 - **Port and address:** Tradex listens on `127.0.0.1:3000`. Set `TRADEX_PORT`, `TRADEX_BIND=0.0.0.0` (to open it to your network) and `TRADEX_URL` in `.env` to change that. The hub is not published on the host; only Tradex reaches it.
 - **Updating:** `git pull && docker compose up -d --build` rebuilds Tradex and pulls the hub's latest `main` (`HUB_REF` pins a branch, tag or commit). The accounts database is brought up to the new schema on start.
 - **Hub admin:** `docker compose exec hub node dist/cli.js keys list` (or `data status`, `data backfill --tf 1d --years 5`, …). See the [hub's README](https://github.com/ice-009/market-data-hub#readme).
@@ -126,7 +143,7 @@ Tradex gets all its market data from a [Market Data Hub](https://github.com/ice-
    ```
 4. Restart Tradex. The top bar's meter reads **Hub** with the hub's broker budget; click it for the read-only **Market data** panel: the hub's health and how fresh each dataset is.
 
-Without `HUB_URL` and `HUB_KEY` (or while the hub is unreachable) Tradex shows a **Connect a Market Data Hub** banner, charts draw labelled sample data, and the screener, backtests and plan wait for real data.
+Without `HUB_URL` and `HUB_KEY` (or while the hub is unreachable) Tradex shows a **Connect a Market Data Hub** banner, charts draw labelled sample data, and the screener, backtests and plan wait for real data. A hub without a broker login works too: Tradex detects its end-of-day mode (`/v1/status` → `mode`) and behaves as described in [Try Tradex without a broker](#try-tradex-without-a-broker-start-here).
 
 **What comes from the hub:**
 
