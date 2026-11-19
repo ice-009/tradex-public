@@ -15,6 +15,7 @@ import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
 import type { RunStamp } from "@/core/repro/stamp";
+import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
 import type { TradeTrack } from "@/core/plan/tracker";
 import type { StockFacts } from "@/core/screener/score";
@@ -627,6 +628,16 @@ export interface HubStreamHealth {
   lastHeardAt: number | null;
 }
 
+/** The hub's data-quality findings (shapes in src/core/quality/findings.ts, where they're built). */
+export type { DataQualityFinding, DataQualityReport };
+
+/** GET /api/health/quality (signed in): the hub's data-quality findings, for the terminal's alerts. */
+export interface DataQualityResponse {
+  checkedAt: number;
+  /** Null without a hub, or with a hub too old to run the checks. */
+  quality: DataQualityReport | null;
+}
+
 /** GET /api/health/details (signed in): everything the /health page shows. */
 export interface HealthReport {
   checkedAt: number;
@@ -673,6 +684,8 @@ export interface HealthReport {
     sources: Array<{ id: string; label: string; lastError: string | null; restingUntil: number | null }>;
   };
   datasets: DatasetHealth[];
+  /** The hub's data-quality checks (null without a hub, or with one too old to run them). */
+  quality: DataQualityReport | null;
   jobs: JobHealth[];
   errors: HealthLogEntry[];
 }

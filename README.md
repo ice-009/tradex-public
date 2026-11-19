@@ -255,7 +255,7 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 | `METRICS_TOKEN` | Bearer token a Prometheus scraper uses for `/api/metrics` (otherwise a signed-in session is needed) |
 | `TRADEX_PORT`, `TRADEX_BIND`, `TRADEX_URL`, `HUB_REF`, `TRADEX_VERSION`, `FYERS_*` | Docker Compose only: where Tradex is published, which hub to build, which release image to run, and the hub's broker login |
 
-**Why is a number old?** Open **`/health`** (also linked from the top bar's hub meter → Market data panel). It shows the hub connection, how fresh each dataset is (the hub's NSE files and Tradex's own copies), the broker budget, every live socket between the broker and your browser, background jobs and the server's recent warnings and errors, with a plain-language list of what is stale and why.
+**Why is a number old?** Open **`/health`** (also linked from the top bar's hub meter → Market data panel). It shows the hub connection, how fresh each dataset is (the hub's NSE files and Tradex's own copies), the broker budget, every live socket between the broker and your browser, background jobs and the server's recent warnings and errors, with a plain-language list of what is stale and why. Its **Data quality** card lists what the hub's checks found after each evening import (missing sessions, files for the wrong date, price outliers, broker-vs-NSE closes, lot-size and F&O-list changes); new findings also flash in the terminal.
 
 In the Docker image, `DATABASE_URL` is `file:/data/tradex.db` and `.cache/` points into the `/data` volume.
 

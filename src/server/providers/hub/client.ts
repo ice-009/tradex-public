@@ -136,6 +136,34 @@ export interface HubFeatures {
   fo?: boolean;
 }
 
+/** One data-quality finding (market-data-hub GET /v1/quality; the newest in /v1/status `quality.recent`). */
+export interface HubQualityFinding {
+  check: string;
+  /** Trade date it's about (YYYY-MM-DD). */
+  date: string;
+  day: number;
+  /** A symbol, a dataset (cash_bhav, fo_bhav, index_close, pr), "fo", "lots" or "calendar". */
+  subject: string;
+  severity: "problem" | "warning" | "info" | string;
+  message: string;
+  detail?: Record<string, unknown> | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  resolvedAt: number | null;
+}
+
+/** The hub's data-quality checks (/v1/status `quality`; hubs before ice-009/tradex-public#21 don't say). */
+export interface HubQuality {
+  lastRunAt: number | null;
+  /** Stored days not checked yet; of those, days waiting for earlier sessions (an archive download). */
+  pendingDays: number;
+  waitingDays: number;
+  open: { problem: number; warning: number; info: number };
+  checks: Array<{ check: string; severity: string; count: number; newestDate: string }>;
+  /** Open findings about the last 30 days' trade dates, newest first. */
+  recent: HubQualityFinding[];
+}
+
 export interface HubStatus {
   /** Health first: `problems` are worth an alert, `warnings` worth knowing. */
   healthy?: boolean;
@@ -171,6 +199,7 @@ export interface HubStatus {
     resultsCalendar?: HubDataset;
     candles?: Array<{ tf: string; series: number; candles: number; lastSession?: string | null }>;
   };
+  quality?: HubQuality;
   jobs?: HubJob[];
   live?: {
     enabled: boolean;

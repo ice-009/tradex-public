@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
+import { QualityWatch, qualityReport } from "@/core/quality/findings";
+import { log } from "@/server/log";
 import { HubClient, isEndOfDay, type HubStatus } from "./client";
 import { hubConfig } from "./config";
 import { HubStream } from "./stream";
@@ -15,6 +17,7 @@ export type { HubCandle, HubCandles, HubCandlesBatch, HubContracts, HubIndices, 
 const globalForHub = globalThis as unknown as {
   hub?: { signature: string; client: HubClient; stream: HubStream | null };
   hubStatus?: { at: number; status: HubStatus | null; error: string | null; pending: Promise<void> | null };
+  qualityWatch?: QualityWatch;
 };
 
 function current() {
@@ -46,6 +49,26 @@ const STATUS_FRESH_MS = 30_000;
 const status = (globalForHub.hubStatus ??= { at: 0, status: null, error: null, pending: null });
 
 /**
+ * The hub's data-quality findings in the server log: a tally the first time
+ * (on start), then each new problem, warning or lot / F&O change as the hub
+ * reports it after its evening import (src/core/quality/findings.ts).
+ */
+const qualityWatch = (globalForHub.qualityWatch ??= new QualityWatch());
+function logQuality(value: HubStatus) {
+  const report = qualityReport(value.quality);
+  const { first, fresh } = qualityWatch.observe(report);
+  if (first && report && (report.open.problem || report.open.warning)) {
+    log.info("hub data quality", { problems: report.open.problem, warnings: report.open.warning, info: report.open.info, recent: report.recent.length });
+  }
+  for (const finding of fresh.slice(0, 10)) {
+    const fields = { check: finding.check, date: finding.date, subject: finding.subject, finding: finding.message };
+    if (finding.severity === "info") log.info("hub data-quality finding", fields);
+    else log.warn("hub data-quality finding", fields);
+  }
+  if (fresh.length > 10) log.warn("more hub data-quality findings", { count: fresh.length - 10 });
+}
+
+/**
  * The hub's last known status (never throws). Refreshes in the background when
  * older than 30 s; `wait` waits for that refresh.
  */
@@ -58,6 +81,7 @@ export async function hubHealth(options: { wait?: boolean } = {}): Promise<{ sta
       .then((value) => {
         status.status = value;
         status.error = null;
+        logQuality(value);
       })
       .catch((error: Error) => {
         status.error = client.scrub(error.message);
