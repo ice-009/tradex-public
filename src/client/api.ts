@@ -92,7 +92,9 @@ async function postStatusJson<T extends { status: string }>(path: string, body: 
 const csv = (symbols: string[]) => symbols.join(",");
 
 export const api = {
-  chart: (symbol: string, interval: string, range: string, signal?: AbortSignal) => getJson<ChartResponse>("/api/chart", { symbol, interval, range }, signal),
+  /** Candles for a chart; `older` asks daily-based intervals for the bars from `from` up to (not including) `to`, epoch ms. */
+  chart: (symbol: string, interval: string, range: string, signal?: AbortSignal, older?: { from: number; to: number }) =>
+    getJson<ChartResponse>("/api/chart", { symbol, interval, range, from: older?.from, to: older?.to }, signal),
 
   /** `fresh`: a just-now price (costs an API call); otherwise a recent cached one is fine. */
   quotes: (symbols: string[], fresh = false) => getJson<QuotesResponse>("/api/quotes", { symbols: csv(symbols), fresh: fresh ? 1 : undefined }),
@@ -107,7 +109,8 @@ export const api = {
   liveRecord: () => getJson<LiveRecordResponse>("/api/screener/live-record"),
 
   /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
-  evidence: () => getStatusJson<EvidenceResponse>("/api/plan/evidence", {}),
+  evidence: (period?: { from: number; to: number | null }) =>
+    getStatusJson<EvidenceResponse>("/api/plan/evidence", period ? { from: String(period.from), ...(period.to === null ? {} : { to: String(period.to) }) } : {}),
 
   /** "Re-run this": compute a stamped evidence table again from scratch (~10 s). */
   replayEvidence: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<EvidenceReplayResponse>("/api/plan/evidence/replay", body, signal),

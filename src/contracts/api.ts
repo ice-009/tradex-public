@@ -62,6 +62,11 @@ export interface ChartResponse {
   adjust?: "split" | null;
   /** Splits, bonuses, demergers… inside the range (daily and longer charts, from the hub): where a price series was adjusted. */
   corporateActions?: Array<{ time: number; label: string; title: string }>;
+  /**
+   * Daily, weekly and monthly charts from the hub: older bars may exist (back to NSE's first session, 1994).
+   * Ask with &from&to for the bars before the oldest one shown (src/core/market/olderBars.ts).
+   */
+  hasOlder?: boolean;
 }
 
 // ------------------------------------------------------------------ GET /api/quotes?symbols=A,B

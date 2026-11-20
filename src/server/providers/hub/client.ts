@@ -52,6 +52,22 @@ export interface HubCandles {
   adjust?: HubAdjust;
   /** Set by this client: the hub answered 503 with what it has stored (broker unavailable, or still fetching). */
   partial?: { code: string; reason: string | null; message: string };
+  /** Daily and weekly answers from hubs with market-data-hub#22: where each stretch of bars came from. */
+  sources?: HubSource[];
+}
+
+/**
+ * A stretch of a daily series and where it came from (market-data-hub#22):
+ * NSE's archive before the broker's ~5-year window (renamed tickers joined in
+ * `names`, `scale` when lined up with the broker's level), the broker inside
+ * it, NSE's index file, or a synthetic basket. `from`/`to` are bar times.
+ */
+export interface HubSource {
+  source: "archive" | "broker" | "index_file" | "basket" | string;
+  from: number;
+  to: number;
+  names?: string[];
+  scale?: number;
 }
 
 /** A live quote (a tick) as the hub serves it. */
@@ -243,6 +259,8 @@ export interface HubBatchSeries {
   candles: HubCandle[];
   /** Indices and baskets only: true for a synthetic equal-weight basket (EW-IT…), false for an NSE index. */
   synthetic?: boolean;
+  /** Where each stretch of bars came from (hubs with market-data-hub#22). */
+  sources?: HubSource[];
 }
 
 /** GET /v1/candles/batch: many symbols' daily or weekly bars in one request. */
@@ -620,10 +638,10 @@ export class HubClient {
    * (broker unavailable, or a fetch still running) comes back with `partial` set
    * instead of failing, without waiting out its Retry-After.
    */
-  async candles(symbol: string, tf: HubTimeframe, from: number, options: { signal?: AbortSignal; adjust?: HubAdjust } = {}): Promise<HubCandles> {
+  async candles(symbol: string, tf: HubTimeframe, from: number, options: { signal?: AbortSignal; adjust?: HubAdjust; to?: number } = {}): Promise<HubCandles> {
     const body = await this.get<HubCandles & { error?: string; code?: string; reason?: string | null }>(
       "/v1/candles",
-      { symbol, tf, from: Math.floor(from), adjust: options.adjust ?? DEFAULT_ADJUST },
+      { symbol, tf, from: Math.floor(from), to: options.to === undefined ? undefined : Math.floor(options.to), adjust: options.adjust ?? DEFAULT_ADJUST },
       { signal: options.signal, acceptPartial: (status, answer) => status === 503 && Array.isArray((answer as { candles?: unknown } | null)?.candles) },
     );
     if (body.code) {

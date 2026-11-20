@@ -1,6 +1,7 @@
 import "server-only";
 
 import { aggregateDaily } from "@/core/market/aggregate";
+import { hasOlderBars, olderWindow } from "@/core/market/olderBars";
 import { CHART_INTERVAL_CONFIG, CHART_RANGE_DAYS, clampRangeForInterval, isChartInterval, isChartRange, type ChartInterval, type ChartRange } from "@/core/market/intervals";
 import type { ChartResponse } from "@/contracts/api";
 import { dataEngine } from "@/server/data";
@@ -21,7 +22,7 @@ import { corporateActionMarkers } from "@/server/services/corporateActions";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export async function getChart(email: string, params: { symbol?: string | null; interval?: string | null; range?: string | null }): Promise<ChartResponse> {
+export async function getChart(email: string, params: { symbol?: string | null; interval?: string | null; range?: string | null; from?: string | null; to?: string | null }): Promise<ChartResponse> {
   const symbol = String(params.symbol ?? "TCS").trim().toUpperCase();
   const interval: ChartInterval = isChartInterval(params.interval ?? "") ? (params.interval as ChartInterval) : "15m";
   const range = clampRangeForInterval(interval, isChartRange(params.range ?? "") ? (params.range as ChartRange) : "5d");
@@ -30,7 +31,9 @@ export async function getChart(email: string, params: { symbol?: string | null; 
   const unit = CHART_INTERVAL_CONFIG[interval].unit;
   const aggregate = unit === "weeks" || unit === "months" ? unit : null;
   const base: BaseInterval = aggregate ? "1d" : (interval as BaseInterval);
-  const from = Date.now() - CHART_RANGE_DAYS[range] * DAY_MS;
+  // Older bars for a daily-based chart scrolled to its left edge: from..to (epoch ms), back to NSE's first session.
+  const older = base === "1d" ? olderWindow(params.from, params.to) : null;
+  const from = older?.from ?? Date.now() - CHART_RANGE_DAYS[range] * DAY_MS;
 
   const engine = dataEngine();
   const hubs = engine.sources.filter((source) => source.kind === "broker" && source.history);
@@ -50,10 +53,13 @@ export async function getChart(email: string, params: { symbol?: string | null; 
     answer = await engine.history({ symbol, interval: base, from, email });
     answer = { ...answer, skipped: [...skipped, ...answer.skipped] };
   }
-  const candles = aggregate ? aggregateDaily(answer.candles, aggregate) : answer.candles;
+  const all = aggregate ? aggregateDaily(answer.candles, aggregate) : answer.candles;
+  // An older chunk is only the bars before what the chart already has.
+  const candles = older ? all.filter((candle) => Date.parse(candle.date) < older.to) : all;
   const first = engine.sources.find((source) => source.history?.supports(base));
   const fromHub = answer.source?.id === "hub";
-  const corporateActions = fromHub && base === "1d" ? await corporateActionMarkers(symbol, Math.min(from, candles[0] ? Date.parse(candles[0].date) : from)) : [];
+  const markers = fromHub && base === "1d" ? await corporateActionMarkers(symbol, Math.min(from, candles[0] ? Date.parse(candles[0].date) : from)) : [];
+  const corporateActions = older ? markers.filter((marker) => marker.time < older.to) : markers;
   return {
     symbol,
     interval,
@@ -72,5 +78,7 @@ export async function getChart(email: string, params: { symbol?: string | null; 
     priceSeries: candles,
     adjust: fromHub ? "split" : null,
     corporateActions,
+    // Daily-based hub charts: older bars may exist when these reach back to (about) where they were asked from.
+    hasOlder: fromHub && base === "1d" && hasOlderBars(all, from),
   };
 }

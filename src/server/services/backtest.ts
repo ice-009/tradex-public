@@ -5,7 +5,9 @@ import { COST_PRESETS, type CostModel, type CostPresetId } from "@/core/backtest
 import { lotHistoryPart, pointInTimeLots } from "@/core/backtest/lots";
 import { BacktestInputError, runPortfolio, type BacktestResult } from "@/core/backtest/portfolio";
 import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/signals";
+import { ARCHIVE_START, WARMUP_DAYS, clampToArchive, isLongRange } from "@/core/backtest/phases";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
+import { spliceBenchmark } from "@/core/market/longHistory";
 import { DAY_MS, istParts } from "@/core/market/session";
 import { hashDataset, lotsOf, makeStamp, withDataPart, type DataStamp, type RunStamp } from "@/core/repro/stamp";
 import { SCREENS } from "@/core/screener/screens";
@@ -13,16 +15,28 @@ import type { DailyBar } from "@/core/types";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { screenerStore } from "@/server/providers/dailyStore";
 import { asOfSpan, orElse, type ReferenceTimeline } from "@/server/providers/asOf";
+import { BENCHMARK_STAND_IN, longWarnings, type LongNotes } from "@/server/providers/longBars";
+import { longBars } from "@/server/providers/longStore";
 import { UNIVERSES } from "@/server/providers/universe";
 import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { BENCHMARK, parseUniverse } from "./screener";
 import { log } from "@/server/log";
 
-// Strategy backtests: replay the screens over a universe's daily history (up to
-// the 5 years the Market Data Hub serves; src/core/backtest/signals.ts), then
-// trade the signals as one account (portfolio.ts). The bars come from the
-// screener's store (dailyStore), which reads them from the hub's batch candles;
+// Strategy backtests: replay the screens over a universe's daily history
+// (src/core/backtest/signals.ts), then trade the signals as one account
+// (portfolio.ts). The bars come from the screener's store (dailyStore: the 5
+// years the broker serves), which reads them from the hub's batch candles;
 // opening the backtest asks the hub for any symbol not held yet.
+//
+// A period starting before the store (a market phase such as the 2008 crash,
+// or any date back to NSE's first session in 1994) is a "long" run: its bars
+// are read from the hub for that run (providers/longBars.ts: NSE's archive
+// before the broker's window, one series per company across ticker renames),
+// from WARMUP_DAYS before the period to its end, and only that stretch is
+// scanned — so a long run costs time in proportion to its length, and the
+// default run is untouched. Before 2012 NIFTY's history isn't in NSE's files:
+// the hub's equal-weight NIFTY 50 basket stands in for it (spliceBenchmark),
+// and the result says so.
 //
 // Two caches, both keyed by the last stored session so a new session
 // invalidates them:
@@ -236,10 +250,72 @@ async function scanFor(universe: string, pin: ReplayPin | null): Promise<ScanRun
 
 class BacktestError extends Error {}
 
+/** Long scans kept at once: each holds its own bars and signals (30 years of the F&O list: ~0.8 GB while it runs). */
+const MAX_LONG_SCANS = 1;
+
+const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
+
+/**
+ * A long run's scan: bars from the hub from WARMUP_DAYS before the period to
+ * its end (a replay: to the stamped last session, for the stamped symbols).
+ * The F&O list is point-in-time over the same stretch, through asOf.
+ */
+async function longScanFor(request: BacktestRequest, pin: ReplayPin | null): Promise<ScanRun & { notes: LongNotes }> {
+  const id = parseUniverse(request.universe);
+  const today = istParts().day;
+  const to = Math.min(pin?.to ?? request.to ?? today, today);
+  const from = clampToArchive(request.from ?? ARCHIVE_START);
+  const readFrom = clampToArchive(from - WARMUP_DAYS * DAY_MS);
+  if (readFrom >= to) throw new BacktestError("The period ends before it starts.");
+  const window = pin?.membership ?? { from: readFrom, to };
+  const timeline = await asOfSpan(window.from, window.to, { results: false, factors: false });
+  const symbols = orElse(timeline.at(today).universe(id), []).map((member) => member.symbol);
+  const byDay = id === "fno" ? timeline.history.fo.byDay : new Map<number, Set<string>>();
+  const listOn = listOnOf(timeline);
+  const pit = byDay.size ? pointInTimeUniverse({ byDay, today: symbols, listOn }) : null;
+  let wanted = pit ? pit.symbols : symbols;
+  if (pin) {
+    const allowed = new Set(pin.symbols);
+    wanted = wanted.filter((symbol) => allowed.has(symbol));
+  }
+  const started = Date.now();
+  const set = await longBars.load([...wanted, BENCHMARK, BENCHMARK_STAND_IN], readFrom, to);
+  const benchmark = spliceBenchmark(set.bars.get(BENCHMARK) ?? [], set.bars.get(BENCHMARK_STAND_IN) ?? []);
+  const scanned = wanted.filter((symbol) => set.bars.has(symbol)).sort();
+  if (!scanned.length) throw new BacktestError(`The Market Data Hub has no daily history for this universe between ${isoDay(readFrom)} and ${isoDay(to)}: its NSE archive may not be downloaded yet ("hub data nse-history").`);
+  const bars = new Map<string, DailyBar[]>(scanned.map((symbol) => [symbol, set.bars.get(symbol)!.filter((bar) => bar.t <= to)]));
+  bars.set(BENCHMARK, benchmark.bars.filter((bar) => bar.t <= to));
+  const current = new Set(symbols);
+  const membership: Membership | null = pit
+    ? { byDay, listOn, isMember: pit.isMember, noHistory: pit.symbols.filter((symbol) => !current.has(symbol) && !set.bars.has(symbol)), key: `pit${byDay.size}-${Math.max(...byDay.keys())}`, window }
+    : null;
+  const notes: LongNotes = { from: readFrom, to, set, standInUntil: benchmark.standInUntil };
+  if (pin) {
+    const result = await scanAndHash({ symbols: scanned, bars, membership, universe: symbols });
+    return { ...result, key: "replay", cached: false, ms: Date.now() - started, membership, notes };
+  }
+  const lastSession = Math.max(...scanned.map((symbol) => bars.get(symbol)!.at(-1)?.t ?? 0));
+  const key = `long:${id}:${readFrom}:${to}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
+  let pending = scans.get(key);
+  const cached = Boolean(pending);
+  if (!pending) {
+    pending = scanAndHash({ symbols: scanned, bars, membership, universe: symbols });
+    const older = [...scans.keys()].filter((entry) => entry.startsWith("long:"));
+    for (const stale of older.slice(0, Math.max(0, older.length - MAX_LONG_SCANS + 1))) scans.delete(stale);
+    scans.set(key, pending);
+    pending.catch(() => scans.delete(key));
+  }
+  const { scan, data } = await pending;
+  const ms = Date.now() - started;
+  if (!cached) log.info("Backtest scan (long period)", { universe: id, from: isoDay(readFrom), to: isoDay(to), stocks: scan.symbols, sessions: scan.dates.length, signals: scan.signals, ms });
+  return { scan, data, key, cached, ms, membership, notes };
+}
+
 async function execute(request: BacktestRequest, pin: ReplayPin | null): Promise<BacktestResponse> {
   if (!request.screenIds.length) return { status: "error", error: "Pick at least one strategy." };
   try {
-    const { scan, data: scanData, key: scanKey, cached: scanCached, ms: scanMs, membership } = await scanFor(request.universe, pin);
+    const long = isLongRange(request.from, istParts().day) ? await longScanFor(request, pin) : null;
+    const { scan, data: scanData, key: scanKey, cached: scanCached, ms: scanMs, membership } = long ?? (await scanFor(request.universe, pin));
     const preset = COST_PRESETS[request.costPreset].model;
     const costs: CostModel = request.slippage ? { ...preset, slippage: request.slippage } : preset;
 
@@ -282,6 +358,7 @@ async function execute(request: BacktestRequest, pin: ReplayPin | null): Promise
       oosFraction: request.oosFraction,
     });
     if (lotNote) result.warnings.unshift(lotNote);
+    if (long) result.warnings.unshift(...longWarnings(long.notes, scan.symbols));
     if (pitLots) {
       const { from, to } = result.period;
       result.warnings.push(pitLots.note(scan.dates.filter((day) => day >= from && day <= to)));
