@@ -26,6 +26,7 @@
 - A fast canvas chart engine: candles, hollow candles, Heikin-Ashi, OHLC bars, line and area.
 - Indicators, including Smart Money Concepts, plus automatic chart patterns (triangles, rectangles, bull flags, double bottoms, VCP, cup-and-handle) with support/resistance zones.
 - Drawing tools, and multi-chart layouts with linked symbols and crosshairs.
+- Prices adjusted for splits, bonuses and demergers (the hub's), so a 1:10 split isn't a 90% crash; daily, weekly and monthly charts mark each ex-date ("Split 10:1", "Bonus 2:1").
 - Designed for iPad and 13–14" laptops; installable as a home-screen app.
 
 **Daily trade plan** (the bottom panel's first tab)

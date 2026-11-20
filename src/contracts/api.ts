@@ -57,6 +57,10 @@ export interface ChartResponse {
   /** Set when the hub is reachable but couldn't serve this chart: show this instead of a chart (never sample candles that look real). */
   error?: string | null;
   priceSeries: PricePoint[];
+  /** "split": stock prices adjusted for splits, bonuses and the like (the hub's); null: sample data. */
+  adjust?: "split" | null;
+  /** Splits, bonuses, demergers… inside the range (daily and longer charts, from the hub): where a price series was adjusted. */
+  corporateActions?: Array<{ time: number; label: string; title: string }>;
 }
 
 // ------------------------------------------------------------------ GET /api/quotes?symbols=A,B
