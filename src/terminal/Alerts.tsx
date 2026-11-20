@@ -69,11 +69,14 @@ export function requestAlertPermission() {
 // Toast queue (module-level so the watchers can push without React plumbing).
 interface Toast {
   id: string;
+  /** Charted on click (unless `href`). */
   symbol: string;
   title: string;
   detail: string;
-  /** Accent: a price crossing up or down, or a screener setup. */
-  tone: "above" | "below" | "setup";
+  /** Accent: a price crossing up or down, a screener setup, or a data-quality problem or note. */
+  tone: "above" | "below" | "setup" | "problem" | "note";
+  /** Open this page on click instead of charting `symbol` (e.g. /health). */
+  href?: string;
 }
 let toasts: Toast[] = [];
 const toastListeners = new Set<() => void>();
@@ -173,8 +176,9 @@ function AlertToasts() {
             type="button"
             className="tx-alert-toast-body"
             onClick={() => {
-              updateActiveCell({ symbol: toast.symbol });
               dismissToast(toast.id);
+              if (toast.href) window.location.assign(toast.href);
+              else updateActiveCell({ symbol: toast.symbol });
             }}
           >
             <strong>{toast.title}</strong>
