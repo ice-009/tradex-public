@@ -2,7 +2,7 @@ import { resampleIntraday } from "@/core/market/aggregate";
 import type { PricePoint } from "@/contracts/api";
 import { INDEX_INSTRUMENTS, historySeriesKey } from "@/server/data/seriesKey";
 import { SourceSkip, type BaseInterval, type DataSource, type SourceQuote, type SourceTick, type StreamCapability } from "@/server/data/types";
-import { HUB_MAX_SYMBOLS, type HubCandle, type HubCandles, type HubClient, type HubQuote, type HubTimeframe } from "@/server/providers/hub/client";
+import { DEFAULT_ADJUST, HUB_MAX_SYMBOLS, type HubCandle, type HubCandles, type HubClient, type HubQuote, type HubTimeframe } from "@/server/providers/hub/client";
 import type { HubStream } from "@/server/providers/hub/stream";
 
 // Market Data Hub (github.com/ice-009/market-data-hub): Tradex's market data —
@@ -17,6 +17,12 @@ import type { HubStream } from "@/server/providers/hub/stream";
 // Symbols: the app's "SBIN" / "NIFTY" / "SBIN26NOVFUT" (a stock future) are the
 // hub's tickers; "NSE:SBIN-EQ", "NSE:NIFTY50-INDEX" and "NSE:SBIN26NOVFUT" (the
 // names older layouts saved) are mapped to them. BSE symbols aren't served.
+//
+// Prices are the hub's adjusted ones (DEFAULT_ADJUST: splits, bonuses,
+// demergers — market-data-hub#20), asked for explicitly: charts, indicators
+// and backtests all read them, and the local cache holds nothing else. When
+// the hub's history changes for a new ex-date, the cache notices the moved
+// overlap candle and reads the series again (src/core/market/history.ts).
 //
 // A hub without a broker (end-of-day mode, market-data-hub#32) serves daily
 // candles from NSE's files and nothing live: then this source offers only
@@ -216,7 +222,7 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
     const at = now();
     const stale = [...groups.keys()].filter((hub) => !((eodQuotes.get(hub)?.at ?? -Infinity) > at - EOD_QUOTE_MS));
     if (stale.length) {
-      const answer = await deps.client().candlesBatch(stale, "1d", at - 10 * 24 * 60 * 60 * 1000);
+      const answer = await deps.client().candlesBatch(stale, "1d", at - 10 * 24 * 60 * 60 * 1000, undefined, { adjust: DEFAULT_ADJUST });
       for (const hub of stale) eodQuotes.set(hub, { at, quote: quoteFromDaily(hub, answer.series[hub]?.candles ?? []) });
     }
     return [...groups].flatMap(([hub, symbols]) => {
@@ -244,7 +250,7 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
         const symbol = toHubSymbol(request.symbol);
         if (!symbol) throw new SourceSkip(`the hub doesn't serve ${request.symbol}`);
         if (request.interval !== "1d" && endOfDay()) throw new SourceSkip(END_OF_DAY_INTRADAY);
-        const answer = await deps.client().candles(symbol, hubTimeframe(request.interval)!.tf, request.from);
+        const answer = await deps.client().candles(symbol, hubTimeframe(request.interval)!.tf, request.from, { adjust: DEFAULT_ADJUST });
         const candles = toPricePoints(answer, request.interval);
         if (answer.partial) {
           // 503 with what the hub has stored: show it, but don't record it as complete.

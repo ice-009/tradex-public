@@ -8,7 +8,7 @@ import type { DailyBar } from "@/core/types";
 import { dataEngine, marketStream } from "@/server/data";
 import { toHubSymbol } from "@/server/data/sources/hub";
 import { DailyBarStore, type StoredSeries } from "@/server/providers/dailyBars";
-import { hubClient, type HubCandlesBatch } from "@/server/providers/hub";
+import { DEFAULT_ADJUST, hubClient, type HubCandlesBatch } from "@/server/providers/hub";
 import { budgetFor, planLimits } from "@/server/providers/hub/budget";
 import { warnLine } from "@/server/log";
 
@@ -139,7 +139,8 @@ async function batch(symbols: string[], from: number): Promise<HubCandlesBatch> 
     if (ticker) appSymbols.set(ticker, [...(appSymbols.get(ticker) ?? []), symbol]);
     else unsupported.push(symbol);
   }
-  const answer = await hub.candlesBatch([...appSymbols.keys()], "1d", from);
+  // Screens and backtests read adjusted prices (a split isn't a crash): asked for explicitly.
+  const answer = await hub.candlesBatch([...appSymbols.keys()], "1d", from, undefined, { adjust: DEFAULT_ADJUST });
   const back = (tickers: string[]) => tickers.flatMap((ticker) => appSymbols.get(ticker.toUpperCase()) ?? []);
   const series: HubCandlesBatch["series"] = {};
   for (const [ticker, entry] of Object.entries(answer.series)) for (const symbol of appSymbols.get(ticker.toUpperCase()) ?? []) series[symbol] = entry;

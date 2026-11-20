@@ -28,6 +28,17 @@ export interface HubCandle {
 
 export type HubTimeframe = "1d" | "1w" | "1h" | "15m" | "5m" | "1m";
 
+/**
+ * Which stock prices the hub serves (market-data-hub#20): `split` — adjusted for
+ * splits, bonuses, demergers and rights issues, so a 1:10 split isn't a 90%
+ * crash; `none` — as traded (NSE's bhavcopies; daily and weekly only). Index and
+ * futures prices are never adjusted. Every request says which it wants.
+ */
+export type HubAdjust = "split" | "none";
+
+/** What charts, indicators, screeners and backtests read: adjusted prices (and all the local candle cache holds). */
+export const DEFAULT_ADJUST: HubAdjust = "split";
+
 export interface HubCandles {
   symbol: string;
   tf: HubTimeframe;
@@ -37,6 +48,8 @@ export interface HubCandles {
   coverage: { from: number; to: number } | null;
   liveThrough?: number | null;
   candles: HubCandle[];
+  /** Which prices these are (absent from hubs before market-data-hub#20, whose stock prices are adjusted). */
+  adjust?: HubAdjust;
   /** Set by this client: the hub answered 503 with what it has stored (broker unavailable, or still fetching). */
   partial?: { code: string; reason: string | null; message: string };
 }
@@ -206,6 +219,7 @@ export interface HubBatchSeries {
 /** GET /v1/candles/batch: many symbols' daily or weekly bars in one request. */
 export interface HubCandlesBatch {
   tf: "1d" | "1w";
+  adjust?: HubAdjust;
   from: number;
   to: number;
   series: Record<string, HubBatchSeries>;
@@ -312,6 +326,36 @@ export interface HubIndices {
   /** NIFTY 500 industries: their NSE sector indices (best first) and synthetic basket. */
   sectors: Array<{ industry: string; indices: string[]; basket: string }>;
   basketMethod: string;
+}
+
+/** One ex-date: prices before `date` × `factor` are comparable with prices from it on. */
+export interface HubAdjustment {
+  date: string;
+  day: number;
+  /** The ticker that day (a renamed company's older name, say). */
+  symbol: string;
+  factor: number;
+  /** What a bar on the session before is multiplied by: this factor and every later one. */
+  cumulative: number;
+  /** prev_close: NSE adjusted its PREV_CLOSE; corporate_action: NSE's corporate-actions file; price_gap: a standard-ratio gap (no file for those days). */
+  source: "prev_close" | "corporate_action" | "price_gap";
+  prevDate: string;
+  prevClose: number;
+  filePrevClose: number;
+  open: number;
+  close: number;
+  /** NSE's purpose ("BONUS 1:1", "FV SPLIT RS.10 TO RE.1", "DEMERGER"), when its file lists one. */
+  action: string | null;
+  renamedFrom: string | null;
+}
+
+/** GET /v1/adjustments: a company's split/bonus factors across its renames. */
+export interface HubAdjustments {
+  symbol: string;
+  current: string;
+  names: Array<{ symbol: string; from: string | null; until: string | null }>;
+  derivedAt: number | null;
+  factors: HubAdjustment[];
 }
 
 export interface HubResultsCalendar {
@@ -515,10 +559,10 @@ export class HubClient {
    * (broker unavailable, or a fetch still running) comes back with `partial` set
    * instead of failing, without waiting out its Retry-After.
    */
-  async candles(symbol: string, tf: HubTimeframe, from: number, options: { signal?: AbortSignal } = {}): Promise<HubCandles> {
+  async candles(symbol: string, tf: HubTimeframe, from: number, options: { signal?: AbortSignal; adjust?: HubAdjust } = {}): Promise<HubCandles> {
     const body = await this.get<HubCandles & { error?: string; code?: string; reason?: string | null }>(
       "/v1/candles",
-      { symbol, tf, from: Math.floor(from) },
+      { symbol, tf, from: Math.floor(from), adjust: options.adjust ?? DEFAULT_ADJUST },
       { signal: options.signal, acceptPartial: (status, answer) => status === 503 && Array.isArray((answer as { candles?: unknown } | null)?.candles) },
     );
     if (body.code) {
@@ -548,15 +592,17 @@ export class HubClient {
    * full come back in `queued` (it fetches them in the background: ask again
    * later) with whatever it has stored so far. Series are keyed by hub ticker.
    */
-  async candlesBatch(symbols: string[], tf: "1d" | "1w", from: number, to?: number): Promise<HubCandlesBatch> {
+  async candlesBatch(symbols: string[], tf: "1d" | "1w", from: number, to?: number, options: { adjust?: HubAdjust } = {}): Promise<HubCandlesBatch> {
     const unique = [...new Set(symbols)];
-    const answer: HubCandlesBatch = { tf, from: Math.floor(from), to: to ?? Date.now(), series: {}, queued: [], unknown: [] };
+    const adjust = options.adjust ?? DEFAULT_ADJUST;
+    const answer: HubCandlesBatch = { tf, adjust, from: Math.floor(from), to: to ?? Date.now(), series: {}, queued: [], unknown: [] };
     for (let start = 0; start < unique.length; start += HUB_BATCH_SYMBOLS) {
       const part = await this.get<HubCandlesBatch>("/v1/candles/batch", {
         symbols: unique.slice(start, start + HUB_BATCH_SYMBOLS).join(","),
         tf,
         from: Math.floor(from),
         to: to === undefined ? undefined : Math.floor(to),
+        adjust,
       });
       Object.assign(answer.series, part.series ?? {});
       answer.queued.push(...(part.queued ?? []));
@@ -608,6 +654,11 @@ export class HubClient {
   /** Indices and synthetic baskets with daily history, and the industry → sector-index map. */
   indices(): Promise<HubIndices> {
     return this.get<HubIndices>("/v1/indices");
+  }
+
+  /** A company's split/bonus adjustment factors (ex-dates), across its renames. A hub before market-data-hub#20 answers 404. */
+  adjustments(symbol: string): Promise<HubAdjustments> {
+    return this.get<HubAdjustments>("/v1/adjustments", { symbol }, { retries: 0 });
   }
 
   /** Results dates between two IST dates (YYYY-MM-DD). */

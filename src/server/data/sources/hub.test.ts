@@ -15,12 +15,13 @@ function fakeClient(
   quotes: (symbols: string[]) => HubQuotes = () => ({ quotes: [], missing: [] }),
   batch: (symbols: string[]) => HubCandlesBatch["series"] = () => ({}),
 ) {
-  const calls = { candles: [] as Array<[string, string, number]>, quotes: [] as string[][], batch: [] as string[][] };
+  const calls = { candles: [] as Array<[string, string, number]>, quotes: [] as string[][], batch: [] as string[][], adjust: [] as Array<string | undefined> };
   return {
     calls,
     client: {
-      candles: async (symbol: string, tf: string, from: number) => {
+      candles: async (symbol: string, tf: string, from: number, options: { adjust?: string } = {}) => {
         calls.candles.push([symbol, tf, from]);
+        calls.adjust.push(options.adjust);
         return candles(symbol, tf, from);
       },
       quotes: async (symbols: string[]) => {
@@ -88,6 +89,7 @@ describe("hub source history", () => {
     const source = createHubSource({ client: () => client, stream });
     const result = await source.history!.fetch({ symbol: "NSE:SBIN-EQ", interval: "1d", from: 123 });
     expect(calls.candles).toEqual([["SBIN", "1d", 123]]);
+    expect(calls.adjust).toEqual(["split"]); // charts, indicators and backtests read adjusted prices, asked for explicitly
     expect(result).toEqual({ candles: [{ date: "2026-11-06T00:00:00.000Z", open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 }], complete: true });
     expect(source.kind).toBe("broker");
     expect(source.history!.cacheable).toBe(true);
