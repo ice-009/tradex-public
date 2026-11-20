@@ -1,5 +1,6 @@
 import { DAY_MS, SESSION_CLOSE_MIN, SESSION_OPEN_MIN, isWeekday, istParts } from "@/core/market/session";
-import type { DatasetHealth, HealthIssue, HealthReport, JobHealth } from "@/contracts/api";
+import type { DataQualityReport, DatasetHealth, HealthIssue, HealthReport, JobHealth } from "@/contracts/api";
+import { qualityIssues } from "@/core/quality/findings";
 import type { HubDataset, HubJob, HubRecovery } from "@/server/providers/hub/client";
 
 // The /health page's judgement: is each dataset fresh, what background work
@@ -104,7 +105,7 @@ function failedAttempt(entry: HubDataset | undefined): string | null {
 export function hubDatasetHealth(meta: HubDatasetMeta, entry: HubDataset | undefined, context: { now: number; problems: string[]; warnings: string[] }): DatasetHealth {
   const asOf = entry?.lastSession ?? entry?.tradeDate ?? null;
   const updatedAt = entry?.lastSuccessAt ?? null;
-  const detail = meta.id === "lots" && entry?.count ? `${thousands(entry.count)} lot sizes` : meta.id === "resultsCalendar" && entry?.events ? `${thousands(entry.events)} events` : null;
+  const detail = meta.id === "lots" && entry?.count ? `${thousands(entry.count)} lot sizes` : meta.id === "resultsCalendar" && entry?.upcoming != null ? `${thousands(entry.upcoming)} upcoming` : meta.id === "resultsCalendar" && entry?.events ? `${thousands(entry.events)} events` : null;
   const error = failedAttempt(entry);
   const problem = mentions(context.problems, meta.hubLabel);
   const warning = mentions(context.warnings, meta.hubLabel);
@@ -277,6 +278,8 @@ export interface AssessInput {
   live: HealthReport["live"];
   datasets: DatasetHealth[];
   jobs: JobHealth[];
+  /** The hub's data-quality findings (src/core/quality/findings.ts), when it reports them. */
+  quality?: DataQualityReport | null;
 }
 
 /** Share of the hub's daily broker budget after which Tradex's paced refreshes slow down noticeably. */
@@ -300,8 +303,10 @@ export function assessHealth(input: AssessInput): { verdict: HealthReport["verdi
     add("problem", "hub", `Tradex can't reach the hub at ${hub.url}${hub.error ? ` (${hub.error})` : ""}. Charts fall back to sample data; the screener and plan keep the bars they already hold.`);
   }
 
+  if (hub.endOfDay) add("info", "hub", `End-of-day data (no broker connected). ${hub.modeNote ?? "Live quotes and intraday charts need a broker on the hub."}`);
   for (const problem of hub.problems) add("problem", "hub", `Hub: ${problem}`);
-  for (const warning of hub.warnings) add("warning", "hub", `Hub: ${warning}`);
+  // With the findings themselves at hand, the hub's one-line data-quality summary would repeat them.
+  for (const warning of hub.warnings) if (!(input.quality && warning.startsWith("Data quality:"))) add("warning", "hub", `Hub: ${warning}`);
 
   for (const source of live.sources) {
     if (source.restingUntil && source.restingUntil > now) {
@@ -329,6 +334,8 @@ export function assessHealth(input: AssessInput): { verdict: HealthReport["verdi
     else if (dataset.state === "error") add("warning", "data", `${dataset.label}: ${dataset.message}${dataset.error ? ` (${dataset.error})` : ""}`);
     else if (dataset.state === "waiting" && dataset.owner === "tradex") add("info", "data", `${dataset.label}: ${dataset.message}`);
   }
+
+  for (const issue of qualityIssues(input.quality ?? null, now)) add(issue.severity, issue.area, issue.text);
 
   for (const job of input.jobs) if (job.state === "failed") add("warning", "jobs", `${job.label} failed${job.message ? `: ${job.message}` : ""}.`);
 

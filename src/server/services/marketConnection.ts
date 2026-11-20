@@ -4,7 +4,7 @@ import { istDayKey } from "@/core/market/session";
 import { BROKER_PLANS, freshCaps } from "@/core/ratelimit/budget";
 import type { ApiUsageResponse, BrokerStatusResponse, HubDatasetStatus, HubHealth, MarketDataStatus } from "@/contracts/api";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { hubClient, hubHealth, hubStream, type HubStatus } from "@/server/providers/hub";
+import { hubClient, hubHealth, hubStream, isEndOfDay, type HubStatus } from "@/server/providers/hub";
 
 // How Tradex reaches the market: through a Market Data Hub, always. Its health
 // (GET /v1/status, cached 30 s), its broker budget for the top bar's meter, and
@@ -12,6 +12,10 @@ import { hubClient, hubHealth, hubStream, type HubStatus } from "@/server/provid
 // look but never start a download or change anything on the hub.
 
 export const HUB_LABEL = "Connected via Market Data Hub";
+/** What Tradex says when the hub has no broker (market-data-hub#32). */
+export const END_OF_DAY_LABEL = "End-of-day data (no broker connected)";
+export const END_OF_DAY_NOTE =
+  "The Market Data Hub has no broker connected, so Tradex runs on NSE's end-of-day files: daily and weekly charts, screens, backtests and the plan work; live quotes and intraday charts need a broker on the hub.";
 export const HUB_MISSING = "Connect a Market Data Hub";
 export const HUB_DOCS = "https://github.com/ice-009/market-data-hub";
 
@@ -25,6 +29,8 @@ const NOT_CONFIGURED: HubHealth = {
   problems: [],
   warnings: [],
   brokerConnected: null,
+  endOfDay: false,
+  modeNote: null,
   feed: null,
   streamOpen: false,
   checkedAt: 0,
@@ -45,6 +51,8 @@ export async function hubHealthSummary(): Promise<HubHealth> {
     problems: status?.problems ?? [],
     warnings: status?.warnings ?? [],
     brokerConnected: status ? Boolean(status.broker?.connected) : null,
+    endOfDay: isEndOfDay(status),
+    modeNote: isEndOfDay(status) ? END_OF_DAY_NOTE : null,
     feed: status?.live?.feed?.mode ?? null,
     streamOpen: hubStream()?.isOpen() ?? false,
     checkedAt: at,
@@ -54,7 +62,7 @@ export async function hubHealthSummary(): Promise<HubHealth> {
 export async function hubBrokerStatus(): Promise<BrokerStatusResponse> {
   const hub = await hubHealthSummary();
   if (!hub.configured) return { connected: false, mode: "hub", label: HUB_MISSING, hub, error: hub.error ?? undefined };
-  return { connected: hub.reachable, mode: "hub", label: hub.reachable ? HUB_LABEL : "Market Data Hub unreachable", hub, ...(hub.error ? { error: `Market Data Hub unreachable: ${hub.error}` } : {}) };
+  return { connected: hub.reachable, mode: "hub", label: hub.reachable ? (hub.endOfDay ? END_OF_DAY_LABEL : HUB_LABEL) : "Market Data Hub unreachable", hub, ...(hub.error ? { error: `Market Data Hub unreachable: ${hub.error}` } : {}) };
 }
 
 function usageFrom(status: HubStatus | null, hub: HubHealth): ApiUsageResponse {
@@ -103,7 +111,7 @@ export async function marketDataStatus(): Promise<MarketDataStatus> {
   const data = status?.data;
   const datasets: HubDatasetStatus[] = DATASETS.map(({ id, label }) => {
     const entry = data?.[id];
-    const detail = id === "lots" && entry?.count ? `${entry.count} lot sizes` : id === "resultsCalendar" && entry?.events ? `${entry.events} events` : null;
+    const detail = id === "lots" && entry?.count ? `${entry.count} lot sizes` : id === "resultsCalendar" && entry?.upcoming != null ? `${entry.upcoming} upcoming` : id === "resultsCalendar" && entry?.events ? `${entry.events} events` : null;
     return { id, label, session: entry?.lastSession ?? entry?.tradeDate ?? null, updatedAt: entry?.lastSuccessAt ?? null, detail, error: entry?.lastError ?? null };
   });
   for (const candles of data?.candles ?? []) {

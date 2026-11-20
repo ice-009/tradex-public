@@ -9,12 +9,13 @@ import { hubHealth, hubStream, type HubStatus } from "@/server/providers/hub";
 import { evidenceHealth } from "@/server/services/evidence";
 import { highLowHealth } from "@/server/services/highLowScanner";
 import { hubHealthSummary } from "@/server/services/marketConnection";
+import { qualityReport } from "@/core/quality/findings";
 import { BENCHMARK } from "@/server/services/screener";
 import { HUB_DATASETS, assessHealth, candleDatasets, evidenceDataset, hubDatasetHealth, hubJobs, marketState, oiTagHealth, storeHealth, tradexJobs } from "./healthRules";
 import packageJson from "../../../package.json";
 
 // The /health page (GET /api/health/details): the hub connection, data freshness per
-// dataset, the broker budget, every socket between the broker and the browser,
+// dataset, the hub's data-quality findings, the broker budget, every socket between the broker and the browser,
 // background jobs and the server's recent warnings and errors — gathered from
 // what's already in memory (plus the hub's /v1/status, cached 30 s), then
 // judged by ./healthRules.ts. Asking for it never starts a download.
@@ -72,6 +73,7 @@ export async function healthReport(now = Date.now()): Promise<HealthReport> {
         : null,
     live: liveState(status?.live?.feed ?? null, summary.configured),
     datasets: datasets(status, now),
+    quality: qualityReport(status?.quality),
     jobs: [
       ...hubJobs(status?.jobs ?? [], status?.live?.recovery),
       ...tradexJobs({ store: storeState(), evidence: evidenceHealth(), highLow: highLowHealth() }),
@@ -83,7 +85,7 @@ export async function healthReport(now = Date.now()): Promise<HealthReport> {
       .map((entry) => ({ ...entry, level: entry.level as "warn" | "error" })),
   };
 
-  const { verdict, issues } = assessHealth({ now, market, hub, budget: report.budget, live: report.live, datasets: report.datasets, jobs: report.jobs });
+  const { verdict, issues } = assessHealth({ now, market, hub, budget: report.budget, live: report.live, datasets: report.datasets, jobs: report.jobs, quality: report.quality });
   return { ...report, verdict, issues };
 }
 

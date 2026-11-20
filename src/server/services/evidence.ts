@@ -17,6 +17,7 @@ import { getLotSizes } from "@/server/providers/reference";
 import { getUniverse } from "@/server/providers/universe";
 import { liveRecord } from "@/server/services/btstRecord";
 import { BENCHMARK } from "@/server/services/screener";
+import { hubEndOfDay } from "@/server/providers/hub";
 import { log } from "@/server/log";
 import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 
@@ -148,6 +149,9 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   const pit = info.byDay.size ? pointInTimeUniverse({ byDay: info.byDay, today: info.today }) : null;
   const benchmark = bars.get(BENCHMARK) ?? [];
   const symbols = info.symbols.filter((symbol) => (bars.get(symbol)?.length ?? 0) > 0);
+  if (symbols.length && benchmark.length < 200 && hubEndOfDay()) {
+    throw new Error("The daily plan needs NIFTY's daily history to tell the market state. The Market Data Hub has no broker connected (end-of-day data), and NSE's index closes aren't in it yet (market-data-hub#23); screens and backtests work meanwhile.");
+  }
   if (!symbols.length || benchmark.length < 200) throw new Error(`Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim());
 
   progress.total = new Set(symbols.flatMap((symbol) => bars.get(symbol)!.map((bar) => bar.t))).size;

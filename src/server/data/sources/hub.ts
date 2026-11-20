@@ -2,7 +2,7 @@ import { resampleIntraday } from "@/core/market/aggregate";
 import type { PricePoint } from "@/contracts/api";
 import { INDEX_INSTRUMENTS, historySeriesKey } from "@/server/data/seriesKey";
 import { SourceSkip, type BaseInterval, type DataSource, type SourceQuote, type SourceTick, type StreamCapability } from "@/server/data/types";
-import { HUB_MAX_SYMBOLS, type HubCandles, type HubClient, type HubQuote, type HubTimeframe } from "@/server/providers/hub/client";
+import { DEFAULT_ADJUST, HUB_MAX_SYMBOLS, type HubCandle, type HubCandles, type HubClient, type HubQuote, type HubTimeframe } from "@/server/providers/hub/client";
 import type { HubStream } from "@/server/providers/hub/stream";
 
 // Market Data Hub (github.com/ice-009/market-data-hub): Tradex's market data —
@@ -17,6 +17,17 @@ import type { HubStream } from "@/server/providers/hub/stream";
 // Symbols: the app's "SBIN" / "NIFTY" / "SBIN26NOVFUT" (a stock future) are the
 // hub's tickers; "NSE:SBIN-EQ", "NSE:NIFTY50-INDEX" and "NSE:SBIN26NOVFUT" (the
 // names older layouts saved) are mapped to them. BSE symbols aren't served.
+//
+// Prices are the hub's adjusted ones (DEFAULT_ADJUST: splits, bonuses,
+// demergers — market-data-hub#20), asked for explicitly: charts, indicators
+// and backtests all read them, and the local cache holds nothing else. When
+// the hub's history changes for a new ex-date, the cache notices the moved
+// overlap candle and reads the series again (src/core/market/history.ts).
+//
+// A hub without a broker (end-of-day mode, market-data-hub#32) serves daily
+// candles from NSE's files and nothing live: then this source offers only
+// daily history, quotes are the last two daily closes (marked delayed), and the
+// stream stays closed — the market stream's slow polling covers the rest.
 //
 // No server-only import: built from injected parts so it can be unit-tested.
 
@@ -72,6 +83,21 @@ export function hubWindowDays(interval: BaseInterval): number {
   return 365;
 }
 
+/** Why the hub source offers no intraday charts in end-of-day mode. */
+export const END_OF_DAY_INTRADAY = "Intraday charts need a broker: the Market Data Hub serves end-of-day data only (no broker connected).";
+
+/** How long end-of-day quotes (built from daily closes) are reused. */
+const EOD_QUOTE_MS = 60_000;
+
+/** A quote from the last two daily bars: the close as the price, the bar before as the previous close. */
+export function quoteFromDaily(symbol: string, candles: HubCandle[]): SourceQuote | null {
+  const last = candles.at(-1);
+  if (!last) return null;
+  const prevClose = candles.at(-2)?.c ?? last.o;
+  const ch = last.c - prevClose;
+  return { symbol, ltp: last.c, ch: Math.round(ch * 100) / 100, chp: prevClose ? Math.round((ch / prevClose) * 10_000) / 100 : 0, open: last.o, high: last.h, low: last.l, prevClose, volume: last.v, delayed: true };
+}
+
 /** Hub candles → the app's candles at `interval`. */
 export function toPricePoints(answer: Pick<HubCandles, "candles">, interval: BaseInterval): PricePoint[] {
   const points = answer.candles.map((candle) => ({ date: new Date(candle.t).toISOString(), open: candle.o, high: candle.h, low: candle.l, close: candle.c, volume: candle.v }));
@@ -113,19 +139,26 @@ export class HubLiveFeed implements StreamCapability {
   /** Consumers per app symbol. */
   private readonly counts = new Map<string, number>();
 
-  constructor(private readonly stream: () => HubStream) {}
+  constructor(
+    private readonly stream: () => HubStream,
+    /** The hub has no broker: there is no stream to open. */
+    private readonly endOfDay: () => boolean = () => false,
+  ) {}
 
   async start(): Promise<boolean> {
+    if (this.endOfDay()) return false;
     const stream = this.stream();
     stream.start();
     return stream.healthy();
   }
 
   isConnected(): boolean {
-    return this.stream().healthy();
+    return !this.endOfDay() && this.stream().healthy();
   }
 
   async subscribe(symbols: string[]): Promise<string[]> {
+    // End-of-day mode: nothing goes on the stream; the market stream polls (delayed) quotes instead.
+    if (this.endOfDay()) return [];
     const accepted: string[] = [];
     for (const raw of symbols) {
       const symbol = raw.trim().toUpperCase();
@@ -172,11 +205,32 @@ export class HubLiveFeed implements StreamCapability {
 }
 
 export interface HubSourceDeps {
-  client: () => Pick<HubClient, "candles" | "quotes">;
+  client: () => Pick<HubClient, "candles" | "quotes" | "candlesBatch">;
   stream: () => HubStream;
+  /** The hub serves end-of-day data only (no broker): see the file comment. Default: never. */
+  endOfDay?: () => boolean;
+  now?: () => number;
 }
 
 export function createHubSource(deps: HubSourceDeps): DataSource {
+  const endOfDay = deps.endOfDay ?? (() => false);
+  const now = deps.now ?? Date.now;
+  const eodQuotes = new Map<string, { at: number; quote: SourceQuote | null }>();
+
+  /** End-of-day mode: quotes from the last daily bars (one batch call), reused for a minute. */
+  async function dailyQuotes(groups: Map<string, string[]>): Promise<SourceQuote[]> {
+    const at = now();
+    const stale = [...groups.keys()].filter((hub) => !((eodQuotes.get(hub)?.at ?? -Infinity) > at - EOD_QUOTE_MS));
+    if (stale.length) {
+      const answer = await deps.client().candlesBatch(stale, "1d", at - 10 * 24 * 60 * 60 * 1000, undefined, { adjust: DEFAULT_ADJUST });
+      for (const hub of stale) eodQuotes.set(hub, { at, quote: quoteFromDaily(hub, answer.series[hub]?.candles ?? []) });
+    }
+    return [...groups].flatMap(([hub, symbols]) => {
+      const quote = eodQuotes.get(hub)?.quote;
+      return quote ? symbols.map((symbol) => ({ ...quote, symbol })) : [];
+    });
+  }
+
   return {
     id: "hub",
     label: "Market Data Hub",
@@ -187,7 +241,7 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
     unavailable: async () => null,
 
     history: {
-      supports: (interval) => hubTimeframe(interval) !== null,
+      supports: (interval) => hubTimeframe(interval) !== null && (interval === "1d" || !endOfDay()),
       windowDays: hubWindowDays,
       // Kept in the local database, so a chart opened before asks the hub only for the newest candles.
       cacheable: true,
@@ -195,14 +249,16 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
       async fetch(request) {
         const symbol = toHubSymbol(request.symbol);
         if (!symbol) throw new SourceSkip(`the hub doesn't serve ${request.symbol}`);
-        const answer = await deps.client().candles(symbol, hubTimeframe(request.interval)!.tf, request.from);
+        if (request.interval !== "1d" && endOfDay()) throw new SourceSkip(END_OF_DAY_INTRADAY);
+        const answer = await deps.client().candles(symbol, hubTimeframe(request.interval)!.tf, request.from, { adjust: DEFAULT_ADJUST });
         const candles = toPricePoints(answer, request.interval);
         if (answer.partial) {
           // 503 with what the hub has stored: show it, but don't record it as complete.
           if (!candles.length) throw new SourceSkip(`hub: ${answer.partial.message}`);
           return { candles, complete: false };
         }
-        return { candles, complete: true };
+        // End-of-day mode: the hub may still be downloading NSE's archive, so a short answer is fetched again later.
+        return { candles, complete: !endOfDay() || answer.complete !== false };
       },
     },
 
@@ -211,6 +267,7 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
       async fetch(symbols) {
         const groups = byHubSymbol(symbols);
         if (!groups.size) return [];
+        if (endOfDay()) return dailyQuotes(groups);
         const answer = await deps.client().quotes([...groups.keys()]);
         // A stale quote is the hub's last stored price (its broker couldn't answer, or
         // the market is closed): passed on marked delayed, so it's shown but never
@@ -219,6 +276,6 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
       },
     },
 
-    stream: new HubLiveFeed(deps.stream),
+    stream: new HubLiveFeed(deps.stream, endOfDay),
   };
 }

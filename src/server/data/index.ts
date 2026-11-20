@@ -7,7 +7,7 @@ import { MarketStream } from "@/server/data/stream";
 import { createHubSource } from "@/server/data/sources/hub";
 import { sampleSource } from "@/server/data/sources/sample";
 import type { DataSource } from "@/server/data/types";
-import { hubClient, hubMode, hubStream } from "@/server/providers/hub";
+import { hubClient, hubEndOfDay, hubMode, hubStream } from "@/server/providers/hub";
 
 // Wiring for the data engine: the Market Data Hub (HUB_URL + HUB_KEY), then
 // labelled sample data (./selectSources.ts). Without a hub only sample data
@@ -16,7 +16,7 @@ import { hubClient, hubMode, hubStream } from "@/server/providers/hub";
 // Sources are built from factories, so one that isn't chosen is never constructed.
 
 const FACTORIES: Record<string, () => DataSource> = {
-  hub: () => createHubSource({ client: () => hubClient()!, stream: () => hubStream()! }),
+  hub: () => createHubSource({ client: () => hubClient()!, stream: () => hubStream()!, endOfDay: hubEndOfDay }),
   sample: () => sampleSource,
 };
 

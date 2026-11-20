@@ -99,6 +99,7 @@ const ALERT_COLOR = "#f7a600";
 const TOUCH_SLOP = 8;
 const VOLUME_PANE_RATIO = 0.2;
 const SESSION_BREAK_COLOR = "rgba(41, 98, 255, 0.28)";
+const CORPORATE_ACTION_COLOR = "#b39ddb";
 
 function newDrawingId() {
   return `d-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -143,6 +144,8 @@ export class ChartEngine {
   private tradePlan: TradePlanOverlay | null = null;
   /** Armed price alerts for this symbol: dashed lines with a bell label. */
   private alertLines: Array<{ price: number; label: string }> = [];
+  /** Split/bonus ex-dates: small tags under the bar where prices before were adjusted. */
+  private corporateActions: Array<{ time: number; label: string; title: string }> = [];
   /** Size of the DOM legend over the top-left of the price pane; chart labels keep out of it. */
   private legendBox = { width: 0, height: 0 };
   /** Size of the chart's top-right toolbar (plan / patterns / link / snapshot buttons). */
@@ -289,6 +292,14 @@ export class ChartEngine {
     const same = lines.length === this.alertLines.length && lines.every((line, i) => line.price === this.alertLines[i].price && line.label === this.alertLines[i].label);
     if (same) return;
     this.alertLines = lines;
+    this.invalidate();
+  }
+
+  /** Splits, bonuses and the like to mark (ex-date bar times); [] for none. */
+  setCorporateActions(events: Array<{ time: number; label: string; title: string }>) {
+    const same = events.length === this.corporateActions.length && events.every((event, i) => event.time === this.corporateActions[i].time && event.label === this.corporateActions[i].label);
+    if (same) return;
+    this.corporateActions = events;
     this.invalidate();
   }
 
@@ -993,6 +1004,7 @@ export class ChartEngine {
     // The plan's labels claim space first; pattern / S/R labels then skip anything they'd overlap.
     this.drawTradePlan(pane, annotationCoords.placed);
     this.drawAlertLines(pane, annotationCoords.placed);
+    this.drawCorporateActions(pane, from, to);
     for (const ann of visibleAnnotations) renderAnnotationMarks(this.ctx, ann, annotationCoords);
     this.drawLastPriceLine(pane);
     this.drawDrawings();
@@ -1027,6 +1039,45 @@ export class ChartEngine {
       ctx.fillStyle = ALERT_COLOR;
       ctx.textAlign = "left";
       ctx.fillText(text, rect[0] + 5, y - 9.5);
+    }
+    ctx.restore();
+  }
+
+  /** A tag at the bottom of the price pane under each ex-date's bar (the bar containing it, on weekly/monthly charts). */
+  private drawCorporateActions(pane: Pane, from: number, to: number) {
+    if (!this.corporateActions.length || !this.bars.length) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.font = this.theme.font.replace(/\d+px/, "10px");
+    ctx.textBaseline = "middle";
+    const bottom = pane.top + pane.height - 4;
+    let lastRight = -Infinity;
+    for (const event of this.corporateActions) {
+      if (event.time < this.bars[0].time) continue;
+      const index = Math.floor(this.timeToIndex(event.time) + 1e-9);
+      if (index < from || index > to || index >= this.bars.length) continue;
+      const x = Math.round(this.indexToX(index)) + 0.5;
+      ctx.strokeStyle = withAlpha(CORPORATE_ACTION_COLOR, 0.5);
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, pane.top);
+      ctx.lineTo(x, bottom - 16);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const width = ctx.measureText(event.label).width + 8;
+      const left = Math.min(Math.max(2, x - width / 2), this.plotWidth - width - 2);
+      if (left < lastRight + 2) continue; // crowded: the dotted line still marks it
+      lastRight = left + width;
+      ctx.fillStyle = withAlpha(this.theme.background, 0.9);
+      ctx.strokeStyle = CORPORATE_ACTION_COLOR;
+      ctx.beginPath();
+      ctx.roundRect(left, bottom - 15, width, 14, 3);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = CORPORATE_ACTION_COLOR;
+      ctx.textAlign = "left";
+      ctx.fillText(event.label, left + 4, bottom - 8);
     }
     ctx.restore();
   }

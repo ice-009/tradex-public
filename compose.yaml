@@ -49,8 +49,8 @@ services:
       hub-key:
         condition: service_completed_successfully
     environment:
-      # Optional, from .env. Without a broker account the hub serves what it has
-      # stored plus NSE's daily files. Full list: market-data-hub's .env.example.
+      # Optional, from .env. Without a broker account the hub runs in end-of-day
+      # mode on NSE's daily files. Full list: market-data-hub's .env.example.
       FYERS_CLIENT_ID: ${FYERS_CLIENT_ID:-}
       FYERS_SECRET_KEY: ${FYERS_SECRET_KEY:-}
       FYERS_FY_ID: ${FYERS_FY_ID:-}

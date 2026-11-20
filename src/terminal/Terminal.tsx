@@ -14,6 +14,7 @@ import { HubBanner } from "./HubBanner";
 import { ScreenerPanel } from "./ScreenerPanel";
 import { ComparePanel } from "./ComparePanel";
 import { AlertWatcher } from "./Alerts";
+import { QualityAlertWatcher } from "./QualityAlerts";
 import { BtstAlertWatcher } from "./ScreenerAlerts";
 import { HighLowPanel } from "./HighLowPanel";
 import { BacktestPanel } from "./BacktestPanel";
@@ -189,6 +190,7 @@ function Workspace() {
       <LayoutToast />
       <AlertWatcher />
       <BtstAlertWatcher />
+      <QualityAlertWatcher />
     </TerminalUIContext.Provider>
   );
 }

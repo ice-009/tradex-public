@@ -19,8 +19,8 @@
     "postinstall": "prisma generate"
   },
   "dependencies": {
-    "@prisma/adapter-better-sqlite3": "^7.8.0",
-    "@prisma/client": "^7.8.0",
+    "@prisma/adapter-better-sqlite3": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.9.0",
@@ -46,5 +46,8 @@
     "vitest": "^3.2.7"
   },
   "description": "Open-source trading terminal for Indian (NSE) stock futures: charts, screeners, setup scores, backtests and a source-independent market-data engine.",
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "effect": "^3.22.5"
+  }
 }

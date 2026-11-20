@@ -583,6 +583,7 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 }
 .tx-tb-btn:hover, .tx-tb-btn.is-open { background: var(--surface-3); color: var(--text); }
 .tx-tb-btn.is-active { color: var(--accent-text); }
+.tx-tb-btn:disabled, .tx-menu-item:disabled { opacity: 0.4; cursor: not-allowed; background: none; }
 .tx-tb-btn svg { flex-shrink: 0; }
 .tx-symbol-btn { min-width: 128px; padding: 0 10px; color: var(--text); font-weight: var(--fw-semibold); letter-spacing: 0.01em; text-transform: uppercase; }
 .tx-symbol-btn svg { color: var(--text-subtle); }
@@ -622,6 +623,7 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 .tx-status-connecting .tx-status-dot { background: var(--warn); }
 .tx-status-delayed .tx-status-dot { background: var(--warn); }
 .tx-status-offline .tx-status-dot { background: var(--neg); }
+.tx-status-eod .tx-status-dot { background: var(--accent-text); }
 
 /* Broker API usage meter */
 .tx-api-meter { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; margin-right: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-subtle); font-size: var(--fs-xs); font-weight: var(--fw-medium); white-space: nowrap; cursor: default; }
@@ -1385,6 +1387,10 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 .tx-sector-bar i.is-up { background: var(--pos); }
 .tx-sector-bar i.is-down { background: var(--neg); }
 .tx-sector-meta { display: flex; align-items: center; gap: var(--sp-2); padding: 2px var(--sp-3) 10px; color: var(--text-subtle); font-size: var(--fs-xs); }
+.tx-sector-index { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-3) 10px; margin-top: -6px; color: var(--text-subtle); font-size: var(--fs-xs); }
+.tx-sector-index-name { padding: 0; border: 0; background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.tx-sector-index-name:hover { color: var(--text); text-decoration: underline; }
+.tx-tag-synthetic { height: 16px; background: transparent; color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn-border); cursor: help; }
 .tx-breadth { flex: 0 0 60px; height: 3px; border-radius: var(--r-full); background: var(--neg-soft); overflow: hidden; }
 .tx-breadth i { display: block; height: 100%; background: var(--pos); }
 .tx-sector-body { padding: 0 var(--sp-3) 10px; }
@@ -1439,6 +1445,8 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 .tx-alert-toast.is-above { box-shadow: var(--shadow-2), inset 3px 0 0 var(--pos); }
 .tx-alert-toast.is-below { box-shadow: var(--shadow-2), inset 3px 0 0 var(--neg); }
 .tx-alert-toast.is-setup { box-shadow: var(--shadow-2), inset 3px 0 0 var(--accent); }
+.tx-alert-toast.is-problem { box-shadow: var(--shadow-2), inset 3px 0 0 var(--neg); }
+.tx-alert-toast.is-note { box-shadow: var(--shadow-2), inset 3px 0 0 var(--warn); }
 .tx-alert-toast > svg { flex-shrink: 0; margin-top: 2px; color: var(--warn); }
 .tx-alert-toast-body { display: flex; flex: 1; flex-direction: column; gap: 2px; padding: 0; border: 0; background: none; color: var(--text); font: var(--fw-medium) var(--fs-md) var(--font-ui); text-align: left; cursor: pointer; }
 .tx-alert-toast-body span { color: var(--text-muted); font-size: var(--fs-sm); font-weight: var(--fw-regular); }
@@ -2192,7 +2200,9 @@ button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 /* ---------- "Connect a Market Data Hub" banner (src/terminal/HubBanner.tsx) ---------- */
 .tx-hub-banner { display: flex; align-items: center; gap: var(--sp-3, 12px); flex-wrap: wrap; padding: 6px 16px; border-bottom: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-muted, var(--text-subtle)); font-size: var(--fs-sm, 12px); }
 .tx-hub-banner strong { color: var(--warn); }
+.tx-hub-banner.is-info strong { color: var(--accent-text); }
 .tx-hub-banner button { margin-left: auto; }
+.tx-hub-banner button + button { margin-left: 0; }
 @media (max-width: 640px) { .tx-mdata-facts { grid-template-columns: 1fr; } .tx-mdata-row.is-static { grid-template-columns: auto 1fr; } .tx-mdata-row .tx-mdata-count { grid-column: 2; } }
 .tx-mdata-foot { display: flex; justify-content: space-between; gap: var(--sp-2); flex-wrap: wrap; }
 
@@ -2269,6 +2279,11 @@ button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 .tx-health-item-head { display: grid; grid-template-columns: 92px 1fr auto; gap: var(--sp-2); align-items: baseline; font-size: var(--fs-sm); }
 .tx-health-item-head strong { font-weight: var(--fw-medium); color: var(--text); }
 .tx-health-item .tx-health-small { padding-left: calc(92px + var(--sp-2)); }
+.tx-health-chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.tx-health-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: var(--r-full); background: var(--surface-2); color: var(--text-muted); font-size: var(--fs-sm); }
+.tx-health-chip.is-warn .tx-health-dot { background: var(--warn); }
+.tx-health-chip.is-bad .tx-health-dot { background: var(--neg); }
+.tx-health .tx-health-more { align-self: flex-start; }
 
 .tx-health-log { display: flex; flex-direction: column; font-size: var(--fs-sm); }
 .tx-health-logline { display: grid; grid-template-columns: 90px 44px 1fr auto; gap: var(--sp-2); align-items: baseline; padding: 5px 0; border-top: 1px solid var(--border-subtle); }

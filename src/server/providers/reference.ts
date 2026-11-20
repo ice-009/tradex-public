@@ -3,6 +3,7 @@ import "server-only";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { LotsResponse } from "@/contracts/api";
+import type { IndexCatalog } from "@/core/screener/sectorIndex";
 import { dedupeEvents, type ResultsEvent } from "@/core/market/results";
 import { DAY_MS, istDayKey } from "@/core/market/session";
 import { hubClient } from "@/server/providers/hub";
@@ -13,6 +14,7 @@ import { log } from "@/server/log";
 //   lot sizes        GET /v1/lots              (NSE fo_mktlots.csv)       cached 12 h, and on disk
 //   F&O ban list     GET /v1/fo/ban            (NSE fo_secban.csv)        cached 30 min
 //   results dates    GET /v1/results-calendar  (NSE event calendar)       cached 6 h
+//   index catalogue  GET /v1/indices           (NSE index file, baskets)  cached 6 h
 //
 // Each is best-effort: when the hub can't answer, the last good copy is kept
 // (lot sizes survive a restart through .cache/lots.json) and the feature that
@@ -23,6 +25,7 @@ export type LotSizes = LotsResponse;
 const LOTS_TTL_MS = 12 * 60 * 60 * 1000;
 const BAN_TTL_MS = 30 * 60 * 1000;
 const RESULTS_TTL_MS = 6 * 60 * 60 * 1000;
+const INDICES_TTL_MS = 6 * 60 * 60 * 1000;
 const RETRY_MS = 10 * 60 * 1000;
 const LOTS_FILE = path.join(process.cwd(), ".cache", "lots.json");
 const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
@@ -38,6 +41,7 @@ const globalForReference = globalThis as unknown as {
   hubLots?: Cached<LotSizes>;
   hubBan?: Cached<FnoBanState>;
   hubResults?: Cached<ResultsCalendar>;
+  hubIndices?: Cached<IndexCatalog>;
 };
 
 /**
@@ -148,5 +152,32 @@ export function getResultsCalendar(): Promise<ResultsCalendar> {
       }),
     );
     return { available: true, events, fetchedAt: answer.fetchedAt || Date.now() };
+  });
+}
+
+// ------------------------------------------------------------------ index catalogue
+
+const indicesState = (globalForReference.hubIndices ??= { value: { available: false, indices: [], sectors: [] }, ok: false, at: 0, pending: null });
+
+/**
+ * The hub's indices and synthetic baskets with how far back each one's daily
+ * history reaches, and the industry → sector-index map. `available` stays false
+ * with a hub that predates GET /v1/indices: sector strength then falls back to
+ * the median of the universe's own stocks.
+ */
+export function getIndexCatalog(): Promise<IndexCatalog> {
+  return cached(indicesState, INDICES_TTL_MS, async () => {
+    const hub = hubClient();
+    if (!hub) return null;
+    const answer = await hub.indices();
+    const day = (iso: string | null) => (iso ? Date.parse(`${iso}T00:00:00Z`) : null);
+    return {
+      available: true,
+      indices: [
+        ...(answer.indices ?? []).map((entry) => ({ symbol: entry.symbol, name: entry.name, synthetic: false, firstDay: day(entry.firstSession), lastDay: day(entry.lastSession) })),
+        ...(answer.baskets ?? []).map((entry) => ({ symbol: entry.symbol, name: entry.name, synthetic: true, firstDay: day(entry.firstSession), lastDay: day(entry.lastSession) })),
+      ],
+      sectors: (answer.sectors ?? []).map((sector) => ({ industry: sector.industry, indices: sector.indices ?? [], basket: sector.basket })),
+    };
   });
 }

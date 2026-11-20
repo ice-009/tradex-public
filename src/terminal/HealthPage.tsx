@@ -4,14 +4,16 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { DatasetHealth, FreshnessState, HealthReport, JobHealth } from "@/contracts/api";
+import type { DataQualityFinding, DatasetHealth, FreshnessState, HealthReport, JobHealth } from "@/contracts/api";
 import { api } from "@/client/api";
+import { groupFindings } from "@/core/quality/findings";
 import { HUB_DOCS_URL } from "./MarketDataDialog";
 
 // /health: answers "why is this number old?" — the hub connection, how fresh
 // each dataset is (the hub's and Tradex's own copies), the broker budget, every
 // socket between the broker and this browser, background jobs and the
-// server's recent warnings and errors. Read-only; refreshes every 15 s.
+// server's recent warnings and errors, and the hub's data-quality findings.
+// Read-only; refreshes every 15 s.
 
 const EVERY_MS = 15_000;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -120,6 +122,7 @@ export function HealthPage() {
             <LiveCard report={report} now={now} />
           </div>
           <Datasets datasets={report.datasets} now={now} />
+          <Quality report={report} now={now} />
           <div className="tx-health-grid is-two">
             <Jobs jobs={report.jobs} now={now} />
             <ServerCard report={report} now={now} />
@@ -195,7 +198,8 @@ function HubCard({ report, now }: { report: HealthReport; now: number }) {
           ["Hub health", hub.healthy === null ? "—" : hub.healthy ? "Healthy" : `${hub.problems.length} problem${hub.problems.length === 1 ? "" : "s"}`, hub.healthy === false ? "is-bad" : hub.healthy ? "is-ok" : ""],
           ["Version · uptime", `${hub.version ? `v${hub.version}` : "—"}${hub.uptimeSec !== null ? ` · ${span(hub.uptimeSec * 1000)}` : ""}`],
           ["Status read", ago(hub.checkedAt, now)],
-          ["Broker login", broker.configured === false ? "Not configured" : yesNo(broker.connected, "Connected", "Not connected"), broker.connected ? "is-ok" : broker.connected === false ? "is-bad" : ""],
+          ["Mode", hub.endOfDay ? "End-of-day data (no broker connected)" : "Full (broker configured)"],
+          ["Broker login", broker.configured === false ? "Not configured" : yesNo(broker.connected, "Connected", "Not connected"), broker.connected ? "is-ok" : broker.connected === false && !hub.endOfDay ? "is-bad" : ""],
           ["Owns broker connection", yesNo(broker.ownsConnection, "Yes", "No (serves stored data only)"), broker.ownsConnection === false ? "is-warn" : ""],
         ]}
       />
@@ -354,6 +358,80 @@ function Datasets({ datasets, now }: { datasets: DatasetHealth[]; now: number })
           ))}
         </div>
       )}
+    </Card>
+  );
+}
+
+const SEVERITY_TONE: Record<DataQualityFinding["severity"], string> = { problem: "is-bad", warning: "is-warn", info: "" };
+const SEVERITY_LABEL: Record<DataQualityFinding["severity"], string> = { problem: "Problem", warning: "Warning", info: "Note" };
+/** Findings listed before "Show all". */
+const QUALITY_ROWS = 12;
+
+/** The hub's data-quality checks: what they found in the last 30 days' data, worst checks first. */
+function Quality({ report, now }: { report: HealthReport; now: number }) {
+  const [all, setAll] = useState(false);
+  const quality = report.quality;
+  if (!quality) {
+    return (
+      <Card title="Data quality" wide>
+        <p className="tx-dim">{report.hub.configured ? (report.hub.reachable ? "This hub doesn't run data-quality checks yet: update the Market Data Hub." : "The hub hasn't answered.") : "No hub."}</p>
+      </Card>
+    );
+  }
+  const rows = groupFindings(quality.recent);
+  const shown = all ? rows : rows.slice(0, QUALITY_ROWS);
+  const counts = (["problem", "warning", "info"] as const).map((severity) => `${thousands(quality.open[severity])} ${SEVERITY_LABEL[severity].toLowerCase()}${quality.open[severity] === 1 ? "" : "s"}`);
+  return (
+    <Card title="Data quality" wide>
+      <p className="tx-health-note">
+        The hub checks its NSE files after every evening import: missing sessions, files for the wrong date, price outliers no corporate action explains, stored candles against NSE&apos;s closes, and lot-size and F&amp;O-list changes. Open: {counts.join(", ")}
+        {quality.lastRunAt ? ` · checked ${ago(quality.lastRunAt, now)}` : ""}
+        {quality.waitingDays ? ` · ${thousands(quality.waitingDays)} stored day${quality.waitingDays === 1 ? "" : "s"} wait for the archive download` : ""}.
+      </p>
+      {quality.checks.length > 0 && (
+        <div className="tx-health-chips">
+          {quality.checks.map((row) => (
+            <span key={`${row.check}-${row.severity}`} className={`tx-health-chip ${SEVERITY_TONE[row.severity]}`} title={`Newest: ${day(row.newestDate)}`}>
+              <span className="tx-health-dot" aria-hidden />
+              {row.label} · {thousands(row.count)}
+            </span>
+          ))}
+        </div>
+      )}
+      {quality.recent.length === 0 ? (
+        <p className="tx-dim">Nothing found in the last 30 days&apos; data.</p>
+      ) : (
+        <div className="tx-health-list">
+          {shown.map((group) => {
+            const [finding] = group;
+            const many = group.length > 1;
+            return (
+              <div key={finding.key} className="tx-health-item">
+                <div className="tx-health-item-head">
+                  <span className={`tx-health-state ${SEVERITY_TONE[finding.severity]}`}>
+                    <span className="tx-health-dot" aria-hidden />
+                    {SEVERITY_LABEL[finding.severity]}
+                  </span>
+                  <strong>
+                    {many ? `${finding.label} · ${group.length}` : finding.label}
+                    {!many && finding.symbol ? ` · ${finding.symbol}` : ""}
+                  </strong>
+                  <span className="tx-dim">{day(finding.date)}</span>
+                </div>
+                <p className="tx-health-small">{many ? `${group.map((entry) => entry.subject).join(", ")}. For example: ${finding.message}` : finding.message}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {rows.length > QUALITY_ROWS && (
+        <button type="button" className="tx-btn-outline tx-health-more" onClick={() => setAll(!all)}>
+          {all ? "Show fewer" : `Show all ${quality.recent.length}`}
+        </button>
+      )}
+      <p className="tx-dim tx-health-small">
+        Older findings: the hub&apos;s <code>GET /v1/quality</code> or <code>hub data quality</code>. New problems, warnings and lot / F&amp;O changes also flash in the terminal.
+      </p>
     </Card>
   );
 }
