@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HealthReport } from "@/contracts/api";
+import { qualityReport } from "@/core/quality/findings";
 import { HUB_DATASETS, assessHealth, candleDatasets, evidenceDataset, hubDatasetHealth, hubJobs, marketState, oiTagHealth, storeHealth, tradexJobs, type AssessInput } from "./healthRules";
 
 /** Epoch ms of an IST wall-clock time (2026-11-18 is a Wednesday). */
@@ -47,6 +48,8 @@ describe("hub dataset freshness", () => {
     const health = hubDatasetHealth(meta("resultsCalendar"), entry, { now: ist(10, 0), problems: [], warnings: [] });
     expect(health).toMatchObject({ state: "error", error: "NSE timed out", detail: "197 events" });
     expect(health.message).toMatch(/2 days ago/);
+    // Hubs reading the PR zip report results dates still to come instead.
+    expect(hubDatasetHealth(meta("resultsCalendar"), { ...entry, events: undefined, upcoming: 41 }, { now: ist(10, 0), problems: [], warnings: [] }).detail).toBe("41 upcoming");
     // An error from before the last success is history, not a failure.
     expect(hubDatasetHealth(meta("resultsCalendar"), { ...entry, lastSuccessAt: ist(9, 30) }, { now: ist(10, 0), problems: [], warnings: [] }).state).toBe("ok");
   });
@@ -117,7 +120,7 @@ describe("jobs", () => {
 });
 
 describe("why a number may be old", () => {
-  const hub: HealthReport["hub"] = { configured: true, url: "http://127.0.0.1:8787", reachable: true, error: null, version: "0.1.0", healthy: true, problems: [], warnings: [], brokerConnected: true, feed: "socket", streamOpen: true, checkedAt: ist(10, 0), uptimeSec: 100, keyName: "tradex", scopes: ["history"], streams: 1 };
+  const hub: HealthReport["hub"] = { configured: true, url: "http://127.0.0.1:8787", reachable: true, error: null, version: "0.1.0", healthy: true, problems: [], warnings: [], brokerConnected: true, endOfDay: false, modeNote: null, feed: "socket", streamOpen: true, checkedAt: ist(10, 0), uptimeSec: 100, keyName: "tradex", scopes: ["history"], streams: 1 };
   const live: HealthReport["live"] = {
     hubFeed: null,
     hubStream: { running: true, open: true, openedAt: ist(9, 15), symbols: 5, connects: 1, failures: 0, lastError: null, lastErrorAt: null, lastHeardAt: ist(10, 0) },
@@ -128,6 +131,12 @@ describe("why a number may be old", () => {
 
   it("is ok with nothing to say during a healthy session", () => {
     expect(assessHealth(base)).toEqual({ verdict: "ok", issues: [] });
+  });
+
+  it("says so, without calling it a problem, when the hub has no broker (end-of-day data)", () => {
+    const eod = assessHealth({ ...base, hub: { ...hub, brokerConnected: false, endOfDay: true, modeNote: "Live quotes and intraday charts need a broker on the hub." }, live: { ...live, hubStream: null } });
+    expect(eod.verdict).toBe("ok");
+    expect(eod.issues).toEqual([{ severity: "info", area: "hub", text: "End-of-day data (no broker connected). Live quotes and intraday charts need a broker on the hub." }]);
   });
 
   it("is down without a hub, or when it can't be reached", () => {
@@ -168,6 +177,26 @@ describe("why a number may be old", () => {
     expect(texts).toMatch(/live stream from the hub is down \(Market Data Hub network error\); prices are polled/);
     expect(texts).toMatch(/No live price has arrived for 10 min/);
     expect(texts).toMatch(/used 91% of today's broker calls/);
+  });
+
+  it("raises the hub's data-quality findings, instead of its one-line summary of them", () => {
+    const quality = qualityReport({
+      open: { problem: 1, warning: 2, info: 1 },
+      recent: [
+        { check: "missing_session", date: "2026-11-16", subject: "fo_bhav", severity: "problem", message: "F&O bhavcopy: nothing stored for Mon 16 Nov 2026, a session.", firstSeenAt: 1 },
+        { check: "price_outlier", date: "2026-11-16", subject: "ACME", severity: "warning", message: "ACME: -49.8% close to close.", firstSeenAt: 1 },
+        { check: "price_outlier", date: "2026-11-13", subject: "XYZ", severity: "warning", message: "XYZ: -80.0% close to close.", firstSeenAt: 1 },
+        { check: "lot_change", date: "2026-11-13", subject: "fo", severity: "info", message: "Lot sizes changed.", firstSeenAt: 1 },
+      ],
+    });
+    const result = assessHealth({ ...base, hub: { ...hub, warnings: ["Data quality: 1 problem in the last 14 days' data (see /v1/quality). F&O bhavcopy: …"] }, quality });
+    expect(result.verdict).toBe("degraded");
+    expect(result.issues).toEqual([
+      { severity: "problem", area: "data", text: "Data quality (missing session): F&O bhavcopy: nothing stored for Mon 16 Nov 2026, a session." },
+      { severity: "warning", area: "data", text: "Data quality: 2 price outliers in the last 30 days; newest: ACME: -49.8% close to close." },
+    ]);
+    // Without findings (an older Tradex view of the hub), the hub's summary still shows.
+    expect(assessHealth({ ...base, hub: { ...hub, warnings: ["Data quality: 1 problem…"] } }).issues).toEqual([{ severity: "warning", area: "hub", text: "Hub: Data quality: 1 problem…" }]);
   });
 
   it("raises Tradex-side staleness and failed jobs", () => {

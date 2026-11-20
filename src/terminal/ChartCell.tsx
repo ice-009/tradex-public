@@ -267,6 +267,7 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
     fetchHistory(symbol, interval, controller.signal)
       .then((result) => {
         engine.setData(result.bars, { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
+        engine.setCorporateActions(result.corporateActions);
         loaded = true;
         setStatus({ loading: false, error: null, source: result.source, reason: result.reason });
         if (result.source === "broker") {
@@ -277,6 +278,7 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
       .catch((error: Error) => {
         if (controller.signal.aborted) return;
         engine.setData([], { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
+        engine.setCorporateActions([]);
         setStatus({ loading: false, error: error.message || "Could not load chart data", source: null, reason: null });
       });
 

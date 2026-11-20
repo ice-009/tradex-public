@@ -28,6 +28,17 @@ export interface HubCandle {
 
 export type HubTimeframe = "1d" | "1w" | "1h" | "15m" | "5m" | "1m";
 
+/**
+ * Which stock prices the hub serves (market-data-hub#20): `split` — adjusted for
+ * splits, bonuses, demergers and rights issues, so a 1:10 split isn't a 90%
+ * crash; `none` — as traded (NSE's bhavcopies; daily and weekly only). Index and
+ * futures prices are never adjusted. Every request says which it wants.
+ */
+export type HubAdjust = "split" | "none";
+
+/** What charts, indicators, screeners and backtests read: adjusted prices (and all the local candle cache holds). */
+export const DEFAULT_ADJUST: HubAdjust = "split";
+
 export interface HubCandles {
   symbol: string;
   tf: HubTimeframe;
@@ -37,6 +48,8 @@ export interface HubCandles {
   coverage: { from: number; to: number } | null;
   liveThrough?: number | null;
   candles: HubCandle[];
+  /** Which prices these are (absent from hubs before market-data-hub#20, whose stock prices are adjusted). */
+  adjust?: HubAdjust;
   /** Set by this client: the hub answered 503 with what it has stored (broker unavailable, or still fetching). */
   partial?: { code: string; reason: string | null; message: string };
 }
@@ -98,7 +111,10 @@ export interface HubDataset {
   lastAttemptAt?: number | null;
   lastError?: string | null;
   count?: number;
+  /** Results calendar: events stored (hubs before the PR-zip calendar). */
   events?: number;
+  /** Results calendar: results dates from today on (hubs reading the PR zip). */
+  upcoming?: number;
   source?: string;
 }
 
@@ -123,11 +139,54 @@ export interface HubRecovery {
   last?: { reason: string; startedAt: number; finishedAt: number | null; planned?: number; calls?: number; bars?: number; skipped?: number; failed?: number; pending?: number; error?: string | null } | null;
 }
 
+/** What the hub can serve (/v1/status `features`; hubs before market-data-hub#32 don't say). */
+export interface HubFeatures {
+  dailyCandles?: boolean;
+  indexCandles?: boolean;
+  intradayCandles?: boolean;
+  liveQuotes?: boolean;
+  stream?: boolean;
+  fo?: boolean;
+}
+
+/** One data-quality finding (market-data-hub GET /v1/quality; the newest in /v1/status `quality.recent`). */
+export interface HubQualityFinding {
+  check: string;
+  /** Trade date it's about (YYYY-MM-DD). */
+  date: string;
+  day: number;
+  /** A symbol, a dataset (cash_bhav, fo_bhav, index_close, pr), "fo", "lots" or "calendar". */
+  subject: string;
+  severity: "problem" | "warning" | "info" | string;
+  message: string;
+  detail?: Record<string, unknown> | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  resolvedAt: number | null;
+}
+
+/** The hub's data-quality checks (/v1/status `quality`; hubs before ice-009/tradex-public#21 don't say). */
+export interface HubQuality {
+  lastRunAt: number | null;
+  /** Stored days not checked yet; of those, days waiting for earlier sessions (an archive download). */
+  pendingDays: number;
+  waitingDays: number;
+  open: { problem: number; warning: number; info: number };
+  checks: Array<{ check: string; severity: string; count: number; newestDate: string }>;
+  /** Open findings about the last 30 days' trade dates, newest first. */
+  recent: HubQualityFinding[];
+}
+
 export interface HubStatus {
   /** Health first: `problems` are worth an alert, `warnings` worth knowing. */
   healthy?: boolean;
   problems?: string[];
   warnings?: string[];
+  /** "end_of_day": no broker on the hub, NSE's daily files only (market-data-hub#32). "broker": the full hub. */
+  mode?: "broker" | "end_of_day" | string;
+  modeLabel?: string;
+  modeNote?: string | null;
+  features?: HubFeatures;
   service: string;
   version: string;
   /** The hub's clock when it answered (epoch ms). */
@@ -153,6 +212,7 @@ export interface HubStatus {
     resultsCalendar?: HubDataset;
     candles?: Array<{ tf: string; series: number; candles: number; lastSession?: string | null }>;
   };
+  quality?: HubQuality;
   jobs?: HubJob[];
   live?: {
     enabled: boolean;
@@ -165,17 +225,30 @@ export interface HubStatus {
   };
 }
 
+/**
+ * True when the hub runs without a broker (end-of-day data only): it says so in
+ * `mode`, and an older hub without a broker shows it as `broker.configured: false`.
+ */
+export function isEndOfDay(status: Pick<HubStatus, "mode" | "broker"> | null | undefined): boolean {
+  if (!status) return false;
+  if (status.mode) return status.mode === "end_of_day";
+  return status.broker?.configured === false;
+}
+
 /** One symbol's series in a batch answer. */
 export interface HubBatchSeries {
   /** Every final bar of the (clamped) range is stored. */
   complete: boolean;
   coverage: { from: number; to: number } | null;
   candles: HubCandle[];
+  /** Indices and baskets only: true for a synthetic equal-weight basket (EW-IT…), false for an NSE index. */
+  synthetic?: boolean;
 }
 
 /** GET /v1/candles/batch: many symbols' daily or weekly bars in one request. */
 export interface HubCandlesBatch {
   tf: "1d" | "1w";
+  adjust?: HubAdjust;
   from: number;
   to: number;
   series: Record<string, HubBatchSeries>;
@@ -267,6 +340,53 @@ export interface HubFoBan {
   current: boolean;
 }
 
+/** How far back one index's or basket's stored daily history reaches (YYYY-MM-DD). */
+export interface HubIndexHistory {
+  firstSession: string | null;
+  lastSession: string | null;
+  sessions: number;
+  coverage: { from: string; to: string } | null;
+}
+
+/** GET /v1/indices: NSE indices (from NSE's index file, 2012 on) and synthetic baskets, with the industry → sector map. */
+export interface HubIndices {
+  indices: Array<HubIndexHistory & { symbol: string; name: string; synthetic: false; source: string; intraday: boolean }>;
+  baskets: Array<HubIndexHistory & { symbol: string; name: string; synthetic: true; source: string; universe: string; industry: string | null; standsFor: string | null; members: number }>;
+  /** NIFTY 500 industries: their NSE sector indices (best first) and synthetic basket. */
+  sectors: Array<{ industry: string; indices: string[]; basket: string }>;
+  basketMethod: string;
+}
+
+/** One ex-date: prices before `date` × `factor` are comparable with prices from it on. */
+export interface HubAdjustment {
+  date: string;
+  day: number;
+  /** The ticker that day (a renamed company's older name, say). */
+  symbol: string;
+  factor: number;
+  /** What a bar on the session before is multiplied by: this factor and every later one. */
+  cumulative: number;
+  /** prev_close: NSE adjusted its PREV_CLOSE; corporate_action: NSE's corporate-actions file; price_gap: a standard-ratio gap (no file for those days). */
+  source: "prev_close" | "corporate_action" | "price_gap";
+  prevDate: string;
+  prevClose: number;
+  filePrevClose: number;
+  open: number;
+  close: number;
+  /** NSE's purpose ("BONUS 1:1", "FV SPLIT RS.10 TO RE.1", "DEMERGER"), when its file lists one. */
+  action: string | null;
+  renamedFrom: string | null;
+}
+
+/** GET /v1/adjustments: a company's split/bonus factors across its renames. */
+export interface HubAdjustments {
+  symbol: string;
+  current: string;
+  names: Array<{ symbol: string; from: string | null; until: string | null }>;
+  derivedAt: number | null;
+  factors: HubAdjustment[];
+}
+
 export interface HubResultsCalendar {
   from: string;
   to: string;
@@ -320,6 +440,8 @@ export const HUB_MEMBER_DAYS = 400;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const RETRYABLE = new Set([429, 502, 503, 504]);
+/** 503 codes that asking again won't change: the hub has no broker for this request (end-of-day mode). */
+const FINAL_CODES = new Set(["not_configured"]);
 const MAX_BACKOFF_MS = 8_000;
 
 /** Retry-After as ms: delta-seconds or an HTTP date. */
@@ -409,7 +531,7 @@ export class HubClient {
         const detail = typeof info.error === "string" ? info.error : response.statusText || "request failed";
         const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
         error = new HubError(this.scrub(`Market Data Hub ${response.status} ${code}: ${detail}`), response.status, code, retryAfterMs, body);
-        retryable = RETRYABLE.has(response.status);
+        retryable = RETRYABLE.has(response.status) && !FINAL_CODES.has(code);
         waitMs = retryAfterMs ?? this.backoff(attempt);
       } catch (caught) {
         if (caught instanceof HubError) throw caught;
@@ -466,10 +588,10 @@ export class HubClient {
    * (broker unavailable, or a fetch still running) comes back with `partial` set
    * instead of failing, without waiting out its Retry-After.
    */
-  async candles(symbol: string, tf: HubTimeframe, from: number, options: { signal?: AbortSignal } = {}): Promise<HubCandles> {
+  async candles(symbol: string, tf: HubTimeframe, from: number, options: { signal?: AbortSignal; adjust?: HubAdjust } = {}): Promise<HubCandles> {
     const body = await this.get<HubCandles & { error?: string; code?: string; reason?: string | null }>(
       "/v1/candles",
-      { symbol, tf, from: Math.floor(from) },
+      { symbol, tf, from: Math.floor(from), adjust: options.adjust ?? DEFAULT_ADJUST },
       { signal: options.signal, acceptPartial: (status, answer) => status === 503 && Array.isArray((answer as { candles?: unknown } | null)?.candles) },
     );
     if (body.code) {
@@ -499,15 +621,17 @@ export class HubClient {
    * full come back in `queued` (it fetches them in the background: ask again
    * later) with whatever it has stored so far. Series are keyed by hub ticker.
    */
-  async candlesBatch(symbols: string[], tf: "1d" | "1w", from: number, to?: number): Promise<HubCandlesBatch> {
+  async candlesBatch(symbols: string[], tf: "1d" | "1w", from: number, to?: number, options: { adjust?: HubAdjust } = {}): Promise<HubCandlesBatch> {
     const unique = [...new Set(symbols)];
-    const answer: HubCandlesBatch = { tf, from: Math.floor(from), to: to ?? Date.now(), series: {}, queued: [], unknown: [] };
+    const adjust = options.adjust ?? DEFAULT_ADJUST;
+    const answer: HubCandlesBatch = { tf, adjust, from: Math.floor(from), to: to ?? Date.now(), series: {}, queued: [], unknown: [] };
     for (let start = 0; start < unique.length; start += HUB_BATCH_SYMBOLS) {
       const part = await this.get<HubCandlesBatch>("/v1/candles/batch", {
         symbols: unique.slice(start, start + HUB_BATCH_SYMBOLS).join(","),
         tf,
         from: Math.floor(from),
         to: to === undefined ? undefined : Math.floor(to),
+        adjust,
       });
       Object.assign(answer.series, part.series ?? {});
       answer.queued.push(...(part.queued ?? []));
@@ -554,6 +678,16 @@ export class HubClient {
 
   foBan(): Promise<HubFoBan> {
     return this.get<HubFoBan>("/v1/fo/ban");
+  }
+
+  /** Indices and synthetic baskets with daily history, and the industry → sector-index map. */
+  indices(): Promise<HubIndices> {
+    return this.get<HubIndices>("/v1/indices");
+  }
+
+  /** A company's split/bonus adjustment factors (ex-dates), across its renames. A hub before market-data-hub#20 answers 404. */
+  adjustments(symbol: string): Promise<HubAdjustments> {
+    return this.get<HubAdjustments>("/v1/adjustments", { symbol }, { retries: 0 });
   }
 
   /** Results dates between two IST dates (YYYY-MM-DD). */

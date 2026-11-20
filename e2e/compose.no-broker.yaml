@@ -1,0 +1,27 @@
+# CI's no-broker run (.github/workflows/ci.yml, job `docker`), on top of compose.yaml:
+#
+#   COMPOSE_FILE=compose.yaml:e2e/compose.no-broker.yaml docker compose up -d --build
+#
+# The stack as a fresh install starts it — no .env, no broker keys, so the hub
+# runs in end-of-day mode — except that NSE is replaced by e2e/nse-stub.mjs:
+# the hub reads generated end-of-day files and CI makes no request to NSE.
+
+services:
+  nse:
+    image: node:22-alpine
+    working_dir: /stub
+    command: ["node", "nse-stub.mjs"]
+    environment:
+      STUB_UNIVERSE_DIR: /stub/universe
+    volumes:
+      - ./e2e/nse-stub.mjs:/stub/nse-stub.mjs:ro
+      - ./data/universe:/stub/universe:ro
+
+  hub:
+    environment:
+      NSE_ARCHIVE_URL: http://nse:8080
+      # The evening catch-up (the last two weeks) is enough here; skip the archive download.
+      HUB_EOD_HISTORY_YEARS: "0"
+    depends_on:
+      nse:
+        condition: service_started

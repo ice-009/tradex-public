@@ -3,6 +3,7 @@ import { FAR_ATR } from "@/core/screener/planStatus";
 import type { Features } from "@/core/screener/features";
 import type { OiFact } from "@/core/market/openInterest";
 import type { StockFacts } from "@/core/screener/score";
+import type { SectorIndexStat } from "@/core/screener/sectorIndex";
 
 // Screen definitions for BTST, swing (3–10 sessions) and positional
 // (15–30 sessions) trades. Each rule is a named check so the UI can show
@@ -82,6 +83,12 @@ export interface SectorStat {
   /** Share of the sector up today, 0–1. */
   breadth: number;
   symbols: string[];
+  /**
+   * The sector's index from the Market Data Hub, when it has one: an NSE sector
+   * index, or a synthetic equal-weight basket (`synthetic`) where no index
+   * history reaches back far enough. Sector strength ranks on its 1-month return.
+   */
+  index?: SectorIndexStat;
 }
 
 export interface MarketOverview {

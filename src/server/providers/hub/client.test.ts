@@ -1,6 +1,6 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
-import { HubClient, HubError, parseRetryAfter } from "./client";
+import { HubClient, HubError, isEndOfDay, parseRetryAfter } from "./client";
 import { hubConfig } from "./config";
 
 const KEY = "mdh_secret-key-123";
@@ -55,6 +55,18 @@ describe("HubClient requests", () => {
     expect(status.version).toBe("0.1.0");
     expect(requests).toHaveLength(3);
     expect(waits).toEqual([100, 200]);
+  });
+
+  it("doesn't retry not_configured (a hub without a broker), and spots end-of-day mode", async () => {
+    const { client, requests } = fakeHub([{ status: 503, body: { error: "Live prices need a broker", code: "not_configured", mode: "end_of_day" } }]);
+    await expect(client.quotes(["SBIN"])).rejects.toMatchObject({ status: 503, code: "not_configured" });
+    expect(requests).toHaveLength(1);
+    expect(isEndOfDay({ mode: "end_of_day", broker: { configured: false, connected: false } })).toBe(true);
+    expect(isEndOfDay({ mode: "broker", broker: { configured: true, connected: false } })).toBe(false);
+    // A hub from before market-data-hub#32 says nothing about its mode: no broker means end-of-day data.
+    expect(isEndOfDay({ broker: { configured: false, connected: false } })).toBe(true);
+    expect(isEndOfDay({ broker: { configured: true, connected: true } })).toBe(false);
+    expect(isEndOfDay(null)).toBe(false);
   });
 
   it("waits what Retry-After asks on 429", async () => {

@@ -15,6 +15,7 @@ import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
 import type { RunStamp } from "@/core/repro/stamp";
+import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
 import type { TradeTrack } from "@/core/plan/tracker";
 import type { StockFacts } from "@/core/screener/score";
@@ -57,6 +58,10 @@ export interface ChartResponse {
   /** Set when the hub is reachable but couldn't serve this chart: show this instead of a chart (never sample candles that look real). */
   error?: string | null;
   priceSeries: PricePoint[];
+  /** "split": stock prices adjusted for splits, bonuses and the like (the hub's); null: sample data. */
+  adjust?: "split" | null;
+  /** Splits, bonuses, demergers… inside the range (daily and longer charts, from the hub): where a price series was adjusted. */
+  corporateActions?: Array<{ time: number; label: string; title: string }>;
 }
 
 // ------------------------------------------------------------------ GET /api/quotes?symbols=A,B
@@ -460,6 +465,13 @@ export interface HubHealth {
   warnings: string[];
   /** The hub's own broker login (null when unknown). */
   brokerConnected: boolean | null;
+  /**
+   * The hub has no broker (end-of-day mode): daily candles, screens, backtests
+   * and the plan work from NSE's daily files; live quotes and intraday charts don't exist.
+   */
+  endOfDay: boolean;
+  /** The hub's own words for its mode, when it isn't the full one. */
+  modeNote: string | null;
   /** The hub's live feed: socket, polling, mixed, idle or down (null when unknown). */
   feed: string | null;
   /** Tradex's price stream from the hub is open. */
@@ -620,6 +632,16 @@ export interface HubStreamHealth {
   lastHeardAt: number | null;
 }
 
+/** The hub's data-quality findings (shapes in src/core/quality/findings.ts, where they're built). */
+export type { DataQualityFinding, DataQualityReport };
+
+/** GET /api/health/quality (signed in): the hub's data-quality findings, for the terminal's alerts. */
+export interface DataQualityResponse {
+  checkedAt: number;
+  /** Null without a hub, or with a hub too old to run the checks. */
+  quality: DataQualityReport | null;
+}
+
 /** GET /api/health/details (signed in): everything the /health page shows. */
 export interface HealthReport {
   checkedAt: number;
@@ -666,6 +688,8 @@ export interface HealthReport {
     sources: Array<{ id: string; label: string; lastError: string | null; restingUntil: number | null }>;
   };
   datasets: DatasetHealth[];
+  /** The hub's data-quality checks (null without a hub, or with one too old to run them). */
+  quality: DataQualityReport | null;
   jobs: JobHealth[];
   errors: HealthLogEntry[];
 }

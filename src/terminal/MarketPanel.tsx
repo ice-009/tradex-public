@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { formatPrice } from "@/core/format";
 import type { MarketRow, SectorStat } from "@/core/screener/screens";
+import type { SectorIndexStat } from "@/core/screener/sectorIndex";
 import { addPresetList, toggleShortlist, updateActiveCell, updateScreener, useTerminal, type SidePanel } from "./store";
 import { loadResultsCalendar, resultsNote, useScreenerFeed, type ResultsEvent } from "@/client/screenerFeed";
 import { openIdea } from "./ideaActions";
@@ -128,7 +129,9 @@ function Sectors() {
             </button>
           ))}
         </div>
-        <span className="tx-side-note">Median move · {universe ?? "universe"}</span>
+        <span className="tx-side-note" title="Bars: the median move of the universe's stocks in each sector. Below each: the sector's index from the Market Data Hub, which sector strength ranks on.">
+          Median move · {universe ?? "universe"}
+        </span>
       </div>
       <div className="tx-wl-list">
         {!market && <PanelState>Loading sectors…</PanelState>}
@@ -158,6 +161,7 @@ function SectorRow({ sector, value, max, open, onToggle }: { sector: SectorStat;
         </span>
         <span>{Math.round(sector.breadth * 100)}% up</span>
       </div>
+      {sector.index && <SectorIndexLine stat={sector.index} />}
       {open && (
         <div className="tx-sector-body">
           <div className="tx-sector-chips">
@@ -177,6 +181,30 @@ function SectorRow({ sector, value, max, open, onToggle }: { sector: SectorStat;
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const SYNTHETIC_NOTE =
+  "Not an NSE index: an equal-weight basket of today's members of this industry, rebuilt from NSE's daily prices by the Market Data Hub. Used where no NSE sector index has history going back as far as the stocks. Built from today's members, so its past has survivorship bias.";
+
+/** The sector's index (or synthetic basket) and its returns, end of day. Opens its chart. */
+function SectorIndexLine({ stat }: { stat: SectorIndexStat }) {
+  const asOf = stat.asOf ? new Date(stat.asOf).toISOString().slice(0, 10) : null;
+  return (
+    <div className="tx-sector-index" title={`Sector strength ranks on this series' 1-month return${asOf ? ` (close of ${asOf})` : ""}.`}>
+      {stat.synthetic && (
+        <span className="tx-tag tx-tag-synthetic" title={SYNTHETIC_NOTE}>
+          Synthetic
+        </span>
+      )}
+      <button type="button" className="tx-sector-index-name" onClick={() => updateActiveCell({ symbol: stat.symbol, interval: "1d" })} title={stat.synthetic ? SYNTHETIC_NOTE : `Open ${stat.name}`}>
+        {stat.synthetic ? `${stat.symbol} basket` : stat.name}
+      </button>
+      <span className={tone(stat.ret21)}>1M {pct(stat.ret21, 1)}</span>
+      <span className={tone(stat.vsNifty63)} title="3-month return minus NIFTY 50's over the same sessions">
+        vs NIFTY 3M {Number.isFinite(stat.vsNifty63) ? `${stat.vsNifty63 >= 0 ? "+" : ""}${stat.vsNifty63.toFixed(1)} pts` : "—"}
+      </span>
     </div>
   );
 }
