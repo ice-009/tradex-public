@@ -7,12 +7,17 @@ import { dataEngine } from "@/server/data";
 import type { BaseInterval } from "@/server/data/types";
 import { END_OF_DAY_INTRADAY } from "@/server/data/sources/hub";
 import { hubEndOfDayNow } from "@/server/providers/hub";
+import { corporateActionMarkers } from "@/server/services/corporateActions";
 
 // Candle history for a chart from the Market Data Hub (src/server/data). With
 // no hub configured, or the hub unreachable, the chart gets labelled sample
 // candles and the reason; a reachable hub that can't serve a symbol gets an
 // error instead, never sample candles that look real. A hub without a broker
 // (end-of-day data) has no intraday candles: those charts say why instead.
+//
+// Hub prices are adjusted for splits and bonuses (DEFAULT_ADJUST,
+// market-data-hub#20); daily and longer charts also get markers at the
+// ex-dates in range, so an adjusted gap-free series still shows where one was.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -47,6 +52,8 @@ export async function getChart(email: string, params: { symbol?: string | null; 
   }
   const candles = aggregate ? aggregateDaily(answer.candles, aggregate) : answer.candles;
   const first = engine.sources.find((source) => source.history?.supports(base));
+  const fromHub = answer.source?.id === "hub";
+  const corporateActions = fromHub && base === "1d" ? await corporateActionMarkers(symbol, Math.min(from, candles[0] ? Date.parse(candles[0].date) : from)) : [];
   return {
     symbol,
     interval,
@@ -63,5 +70,7 @@ export async function getChart(email: string, params: { symbol?: string | null; 
             ? null
             : answer.skipped.join(" · ") || "No data source answered.",
     priceSeries: candles,
+    adjust: fromHub ? "split" : null,
+    corporateActions,
   };
 }

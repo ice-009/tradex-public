@@ -10,6 +10,7 @@ import type {
   ApiUsageResponse,
   BacktestInfoResponse,
   BrokerStatusResponse,
+  DataQualityResponse,
   FuturesResponse,
   HealthReport,
   MarketDataStatus,
@@ -149,6 +150,9 @@ export const api = {
 
   /** The /health page: hub connection, data freshness, budget, sockets, jobs, recent errors and why a number may be old. */
   health: () => getJson<HealthReport>("/api/health/details"),
+
+  /** The hub's data-quality findings, for the terminal's alerts. */
+  quality: () => getJson<DataQualityResponse>("/api/health/quality"),
 
   /** Ready-made lists; fetched once per page load and shared. */
   presets: (() => {

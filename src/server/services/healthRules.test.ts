@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { HealthReport } from "@/contracts/api";
+import { qualityReport } from "@/core/quality/findings";
 import { HUB_DATASETS, assessHealth, candleDatasets, evidenceDataset, hubDatasetHealth, hubJobs, marketState, oiTagHealth, storeHealth, tradexJobs, type AssessInput } from "./healthRules";
 
 /** Epoch ms of an IST wall-clock time (2026-11-18 is a Wednesday). */
@@ -176,6 +177,26 @@ describe("why a number may be old", () => {
     expect(texts).toMatch(/live stream from the hub is down \(Market Data Hub network error\); prices are polled/);
     expect(texts).toMatch(/No live price has arrived for 10 min/);
     expect(texts).toMatch(/used 91% of today's broker calls/);
+  });
+
+  it("raises the hub's data-quality findings, instead of its one-line summary of them", () => {
+    const quality = qualityReport({
+      open: { problem: 1, warning: 2, info: 1 },
+      recent: [
+        { check: "missing_session", date: "2026-11-16", subject: "fo_bhav", severity: "problem", message: "F&O bhavcopy: nothing stored for Mon 16 Nov 2026, a session.", firstSeenAt: 1 },
+        { check: "price_outlier", date: "2026-11-16", subject: "ACME", severity: "warning", message: "ACME: -49.8% close to close.", firstSeenAt: 1 },
+        { check: "price_outlier", date: "2026-11-13", subject: "XYZ", severity: "warning", message: "XYZ: -80.0% close to close.", firstSeenAt: 1 },
+        { check: "lot_change", date: "2026-11-13", subject: "fo", severity: "info", message: "Lot sizes changed.", firstSeenAt: 1 },
+      ],
+    });
+    const result = assessHealth({ ...base, hub: { ...hub, warnings: ["Data quality: 1 problem in the last 14 days' data (see /v1/quality). F&O bhavcopy: …"] }, quality });
+    expect(result.verdict).toBe("degraded");
+    expect(result.issues).toEqual([
+      { severity: "problem", area: "data", text: "Data quality (missing session): F&O bhavcopy: nothing stored for Mon 16 Nov 2026, a session." },
+      { severity: "warning", area: "data", text: "Data quality: 2 price outliers in the last 30 days; newest: ACME: -49.8% close to close." },
+    ]);
+    // Without findings (an older Tradex view of the hub), the hub's summary still shows.
+    expect(assessHealth({ ...base, hub: { ...hub, warnings: ["Data quality: 1 problem…"] } }).issues).toEqual([{ severity: "warning", area: "hub", text: "Hub: Data quality: 1 problem…" }]);
   });
 
   it("raises Tradex-side staleness and failed jobs", () => {

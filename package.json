@@ -46,5 +46,8 @@
     "vitest": "^3.2.7"
   },
   "description": "Open-source trading terminal for Indian (NSE) stock futures: charts, screeners, setup scores, backtests and a source-independent market-data engine.",
-  "license": "MIT"
+  "license": "MIT",
+  "overrides": {
+    "effect": "^3.22.5"
+  }
 }

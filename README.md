@@ -26,6 +26,7 @@
 - A fast canvas chart engine: candles, hollow candles, Heikin-Ashi, OHLC bars, line and area.
 - Indicators, including Smart Money Concepts, plus automatic chart patterns (triangles, rectangles, bull flags, double bottoms, VCP, cup-and-handle) with support/resistance zones.
 - Drawing tools, and multi-chart layouts with linked symbols and crosshairs.
+- Prices adjusted for splits, bonuses and demergers (the hub's), so a 1:10 split isn't a 90% crash; daily, weekly and monthly charts mark each ex-date ("Split 10:1", "Bonus 2:1").
 - Designed for iPad and 13–14" laptops; installable as a home-screen app.
 
 **Daily trade plan** (the bottom panel's first tab)
@@ -255,7 +256,7 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 | `METRICS_TOKEN` | Bearer token a Prometheus scraper uses for `/api/metrics` (otherwise a signed-in session is needed) |
 | `TRADEX_PORT`, `TRADEX_BIND`, `TRADEX_URL`, `HUB_REF`, `TRADEX_VERSION`, `FYERS_*` | Docker Compose only: where Tradex is published, which hub to build, which release image to run, and the hub's broker login |
 
-**Why is a number old?** Open **`/health`** (also linked from the top bar's hub meter → Market data panel). It shows the hub connection, how fresh each dataset is (the hub's NSE files and Tradex's own copies), the broker budget, every live socket between the broker and your browser, background jobs and the server's recent warnings and errors, with a plain-language list of what is stale and why.
+**Why is a number old?** Open **`/health`** (also linked from the top bar's hub meter → Market data panel). It shows the hub connection, how fresh each dataset is (the hub's NSE files and Tradex's own copies), the broker budget, every live socket between the broker and your browser, background jobs and the server's recent warnings and errors, with a plain-language list of what is stale and why. Its **Data quality** card lists what the hub's checks found after each evening import (missing sessions, files for the wrong date, price outliers, broker-vs-NSE closes, lot-size and F&O-list changes); new findings also flash in the terminal.
 
 In the Docker image, `DATABASE_URL` is `file:/data/tradex.db` and `.cache/` points into the `/data` volume.
 
