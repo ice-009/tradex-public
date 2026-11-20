@@ -12,7 +12,7 @@ All of it comes from the [Market Data Hub](https://github.com/ice-009/market-dat
 |---|---|---|
 | Daily OHLCV, up to 5 years | The hub's `GET /v1/candles/batch` (300 symbols a request), cached in `.cache/screener/daily/` | Read in full once per symbol, then only the last week. Symbols the hub doesn't hold yet are downloaded by the hub in the background. |
 | **Delivery %** | NSE's `sec_bhavdata_full` file, as the hub stores it (`dp` on each daily bar) | Published in the evening. `DELIV_PER` is the % of traded quantity taken into delivery. |
-| Corporate actions | The hub drops and re-downloads a stock's history after a split or bonus | When a stored close moves by more than 1.5%, Tradex reads that stock again in full. |
+| Corporate actions | The hub serves split/bonus-adjusted prices (asked for explicitly: `adjust=split`, market-data-hub#20) and drops and re-downloads a stock's history after a new ex-date | When a stored close moves by more than 1.5%, Tradex reads that stock again in full. |
 | Today's forming candle | The hub's `/v1/quotes` and live stream | Overlaid during market hours until the day's bar is stored. |
 | Universes | The hub's F&O list (`/v1/universe/fno`, from the newest F&O bhavcopy); niftyindices.com `ind_nifty{50,200,500}list.csv` | Index lists are snapshots in `data/universe/`, refreshed when indices rebalance. They are today's constituents, so results carry survivorship bias; the F&O universe is point-in-time in backtests (`/v1/fo/members`). |
 

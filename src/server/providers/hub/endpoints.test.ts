@@ -25,6 +25,28 @@ const batch = (names: string[], extra: Record<string, unknown> = {}): Reply => (
   body: { tf: "1d", from: 1, to: 2, series: Object.fromEntries(names.map((name) => [name, { complete: true, coverage: null, candles: [] }])), queued: [], unknown: [], ...extra },
 });
 
+describe("raw or adjusted prices (market-data-hub#20)", () => {
+  it("asks for adjusted candles by default and says so; raw only when asked", async () => {
+    const { client, requests } = fakeHub([
+      { status: 200, body: { symbol: "SBIN", tf: "1d", adjust: "split", from: 0, to: 1, complete: true, coverage: null, candles: [] } },
+      { status: 200, body: { symbol: "SBIN", tf: "1d", adjust: "none", from: 0, to: 1, complete: true, coverage: null, candles: [] } },
+      batch(["SBIN"], { adjust: "none" }),
+    ]);
+    expect((await client.candles("SBIN", "1d", 0)).adjust).toBe("split");
+    expect((await client.candles("SBIN", "1d", 0, { adjust: "none" })).adjust).toBe("none");
+    await client.candlesBatch(["SBIN"], "1d", 0, undefined, { adjust: "none" });
+    expect(requests.map((url) => url.searchParams.get("adjust"))).toEqual(["split", "none", "none"]);
+  });
+
+  it("reads a company's adjustment factors", async () => {
+    const factor = { date: "2026-01-14", day: Date.UTC(2026, 0, 14), symbol: "KOTAKBANK", factor: 0.2, cumulative: 0.2, source: "price_gap", prevDate: "2026-01-13", prevClose: 2132.6, filePrevClose: 2132.6, open: 426, close: 421, action: null, renamedFrom: null };
+    const { client, requests } = fakeHub([{ status: 200, body: { symbol: "KOTAKBANK", current: "KOTAKBANK", names: [], derivedAt: 1, factors: [factor] } }, { status: 404, body: { error: "Not found", code: "not_found" } }]);
+    expect((await client.adjustments("KOTAKBANK")).factors).toEqual([factor]);
+    expect(requests[0].pathname).toBe("/v1/adjustments");
+    await expect(client.adjustments("KOTAKBANK")).rejects.toThrow(/404/); // a hub before #20
+  });
+});
+
 describe("GET /v1/candles/batch", () => {
   it("asks 300 symbols at a time and merges series, queued, unknown and the broker warning", async () => {
     const symbols = Array.from({ length: 450 }, (_, index) => `S${index}`);
@@ -34,6 +56,7 @@ describe("GET /v1/candles/batch", () => {
     expect(requests.map((url) => url.searchParams.get("symbols")!.split(",").length)).toEqual([300, 150]);
     expect(requests[0].searchParams.get("tf")).toBe("1d");
     expect(requests[0].searchParams.get("from")).toBe("1000");
+    expect(requests[0].searchParams.get("adjust")).toBe("split"); // adjusted unless asked otherwise
     expect(Object.keys(answer.series)).toEqual(["S0", "S300"]);
     expect(answer).toMatchObject({ queued: ["S1"], unknown: ["S449"], reason: "budget" });
     expect(answer.warning).toContain("budget spent");

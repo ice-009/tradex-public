@@ -8,7 +8,8 @@ import { healthReport } from "./health";
 // GET /api/metrics: Prometheus text format. The same state as the /health page
 // (one hub /v1/status read, cached 30 s), as gauges an alert rule can use —
 // e.g. `tradex_dataset_stale == 1`, `tradex_hub_reachable == 0`,
-// `time() - tradex_hub_feed_last_tick_timestamp_seconds > 120` in market hours —
+// `time() - tradex_hub_feed_last_tick_timestamp_seconds > 120` in market hours,
+// `tradex_data_quality_recent_findings{severity="problem"} > 0` —
 // plus request counts and durations and log lines per level.
 
 const seconds = (ms: number | null | undefined) => (ms ? Math.round(ms / 1000) : null);
@@ -95,11 +96,26 @@ export function metricFamilies(report: HealthReport): MetricFamily[] {
     family("tradex_dataset_stale", "1 when a dataset is stale, missing or failing to refresh.", "gauge", report.datasets.filter((dataset) => dataset.state !== "info").map((dataset) => ({ labels: { dataset: dataset.id, owner: dataset.owner }, value: Number(["stale", "missing", "error"].includes(dataset.state)) }))),
     family("tradex_dataset_as_of_timestamp_seconds", "Newest session a dataset holds (UTC midnight of its date).", "gauge", report.datasets.filter((dataset) => dataset.asOf && ISO_DAY.test(dataset.asOf)).map((dataset) => ({ labels: { dataset: dataset.id, owner: dataset.owner }, value: Date.parse(`${dataset.asOf}T00:00:00Z`) / 1000 }))),
     family("tradex_dataset_updated_timestamp_seconds", "When a dataset was last refreshed.", "gauge", report.datasets.filter((dataset) => dataset.updatedAt).map((dataset) => ({ labels: { dataset: dataset.id, owner: dataset.owner }, value: seconds(dataset.updatedAt)! }))),
+    ...qualityFamilies(report),
     family("tradex_job_running", "1 while a background job runs.", "gauge", report.jobs.map((job) => ({ labels: { job: job.id, owner: job.owner }, value: Number(job.state === "running") }))),
     family("tradex_job_failed", "1 when a background job's last run failed.", "gauge", report.jobs.map((job) => ({ labels: { job: job.id, owner: job.owner }, value: Number(job.state === "failed") }))),
     ...requestMetrics.families(),
   );
   return families;
+}
+
+/** The hub's data-quality findings (absent when the hub doesn't report them). */
+function qualityFamilies(report: HealthReport): MetricFamily[] {
+  const quality = report.quality;
+  if (!quality) return [];
+  const severities = ["problem", "warning", "info"] as const;
+  return [
+    family("tradex_data_quality_findings", "Open data-quality findings on the hub, by severity (every date).", "gauge", severities.map((severity) => ({ labels: { severity }, value: quality.open[severity] }))),
+    family("tradex_data_quality_findings_by_check", "Open data-quality findings on the hub, by check and severity.", "gauge", quality.checks.map((row) => ({ labels: { check: row.check, severity: row.severity }, value: row.count }))),
+    family("tradex_data_quality_recent_findings", "Open data-quality findings about the last 30 days' trade dates, by severity.", "gauge", severities.map((severity) => ({ labels: { severity }, value: quality.recent.filter((finding) => finding.severity === severity).length }))),
+    gauge("tradex_data_quality_pending_days", "Stored days the hub hasn't checked yet.", quality.pendingDays),
+    gauge("tradex_data_quality_last_run_timestamp_seconds", "When the hub's data-quality checks last ran.", seconds(quality.lastRunAt)),
+  ];
 }
 
 /** The Prometheus scrape body. */
