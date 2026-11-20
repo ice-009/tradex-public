@@ -74,3 +74,21 @@ test("open the plan", async ({ page }) => {
   await expect(plan).not.toContainText("couldn't be computed");
   await expect(page.getByText("Show the evidence")).toBeVisible();
 });
+
+test("scroll a daily chart back past the stored 5 years: older bars load, a renamed stock's history joined (#18, #16)", async ({ page }) => {
+  await openSymbol(page, "INFY");
+  await pickInterval(page, "D");
+  const canvas = chartCell(page).locator("canvas").first();
+  await canvas.hover();
+  // Zoom all the way out: the whole 5 years fit, the left edge is in view, and the chart asks for the bars before it.
+  const older = page.waitForResponse((response) => response.url().includes("/api/chart") && response.url().includes("INFY") && response.url().includes("from="));
+  for (let i = 0; i < 12; i += 1) await page.keyboard.press("Shift+ArrowDown");
+  const body = await (await older).json();
+  expect(body.source).toBe("broker");
+  // Ten years before the first stored bar, through 2011 when INFOSYSTCH became INFY: one series, no break.
+  expect(body.priceSeries.length).toBeGreaterThan(2000);
+  const days: number[] = body.priceSeries.map((point: { date: string }) => Date.parse(point.date));
+  const gaps = days.slice(1).filter((day, i) => day - days[i] > 5 * 86_400_000);
+  expect(gaps, "no stretch of missing sessions").toEqual([]);
+  expect(body.hasOlder, "and more before that, back to 1994").toBe(true);
+});

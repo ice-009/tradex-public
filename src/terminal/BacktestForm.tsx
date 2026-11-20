@@ -2,6 +2,7 @@
 
 import type { BacktestInfoResponse, BacktestRequest } from "@/contracts/api";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
+import { ARCHIVE_START, MARKET_PHASES, phaseById } from "@/core/backtest/phases";
 import { HOLD_BARS } from "@/core/screener/backtest";
 import { SCREENS, SCREEN_GROUPS } from "@/core/screener/screens";
 import { formatDate, fromInputDate, toInputDate } from "./BacktestFormat";
@@ -13,15 +14,18 @@ export const UNIVERSES = [
   { id: "nifty500", label: "Nifty 500" },
 ];
 
-export type PeriodPreset = "all" | "9m" | "6m" | "3m" | "custom";
+/** "phase": one of MARKET_PHASES (src/core/backtest/phases.ts), in `phase`. */
+export type PeriodPreset = "all" | "9m" | "6m" | "3m" | "custom" | "phase";
 
 export interface BacktestForm {
   screenIds: string[];
   universe: string;
   period: PeriodPreset;
-  /** Custom period (day keys). */
+  /** Custom period (day keys): any dates back to NSE's first session (1994). */
   from: number | null;
   to: number | null;
+  /** The market phase picked (period "phase"). */
+  phase?: string | null;
   /** "" = each strategy's default holding period. */
   hold: string;
   capital: number;
@@ -62,20 +66,31 @@ const PERIODS: Array<{ id: PeriodPreset; label: string; days?: number }> = [
   { id: "custom", label: "Custom" },
 ];
 
-/** The period a form asks for, resolved against the stored sessions. */
-export function resolvePeriod(form: BacktestForm, info: BacktestInfoResponse | null): { from: number | null; to: number | null; sessions: number | null } {
+/**
+ * The period a form asks for, resolved against the stored sessions. `sessions`
+ * is null for a period reaching before the stored 5 years (`long`): those bars
+ * are read from the Market Data Hub for the run.
+ */
+export function resolvePeriod(form: BacktestForm, info: BacktestInfoResponse | null): { from: number | null; to: number | null; sessions: number | null; long: boolean } {
   const dates = info?.history?.dates ?? [];
-  if (!dates.length) return { from: null, to: null, sessions: null };
-  if (form.period === "all") return { from: null, to: null, sessions: dates.length };
+  const phase = form.period === "phase" ? phaseById(form.phase ?? "") : null;
+  if (phase) {
+    const to = phase.to ?? dates.at(-1) ?? null;
+    const long = !dates.length || phase.from < dates[0];
+    return { from: phase.from, to, sessions: long ? null : dates.filter((d) => d >= phase.from && (to === null || d <= to)).length, long };
+  }
+  if (!dates.length) return { from: null, to: null, sessions: null, long: false };
+  if (form.period === "all") return { from: null, to: null, sessions: dates.length, long: false };
   if (form.period === "custom") {
-    const from = form.from ?? dates[0];
+    const from = Math.max(ARCHIVE_START, form.from ?? dates[0]);
     const to = form.to ?? dates.at(-1)!;
-    return { from, to, sessions: dates.filter((d) => d >= from && d <= to).length };
+    const long = from < dates[0];
+    return { from, to, sessions: long ? null : dates.filter((d) => d >= from && d <= to).length, long };
   }
   const days = PERIODS.find((p) => p.id === form.period)?.days ?? 0;
   const to = dates.at(-1)!;
   const from = dates.find((d) => d >= to - days * 86_400_000) ?? dates[0];
-  return { from, to, sessions: dates.filter((d) => d >= from).length };
+  return { from, to, sessions: dates.filter((d) => d >= from).length, long: false };
 }
 
 export function requestFrom(form: BacktestForm, info: BacktestInfoResponse | null): BacktestRequest {
@@ -185,13 +200,23 @@ export function BacktestFormView({
             ))}
           </div>
         </div>
+        <div className="tx-bt-field">
+          <span>Market phase</span>
+          <div className="tx-bt-seg" role="group" aria-label="Market phase">
+            {MARKET_PHASES.map((p) => (
+              <button key={p.id} type="button" title={p.note} className={form.period === "phase" && form.phase === p.id ? "is-active" : ""} onClick={() => onChange({ period: "phase", phase: p.id })}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
         {form.period === "custom" && dates.length > 0 && (
           <div className="tx-bt-dates">
             <input
               type="date"
               className="tx-input"
               aria-label="From"
-              min={toInputDate(dates[0])}
+              min={toInputDate(ARCHIVE_START)}
               max={toInputDate(dates.at(-1)!)}
               value={toInputDate(form.from ?? dates[0])}
               onChange={(event) => {
@@ -204,7 +229,7 @@ export function BacktestFormView({
               type="date"
               className="tx-input"
               aria-label="To"
-              min={toInputDate(dates[0])}
+              min={toInputDate(ARCHIVE_START)}
               max={toInputDate(dates.at(-1)!)}
               value={toInputDate(form.to ?? dates.at(-1)!)}
               onChange={(event) => {
@@ -224,6 +249,12 @@ export function BacktestFormView({
                   Selected: <b>{period.sessions}</b> sessions.
                 </>
               )}{" "}
+              {period.long && period.from !== null ? (
+                <>
+                  {" "}
+                  From <b>{formatDate(period.from)}</b>: before the stored 5 years, so this run reads the stocks&apos; history from the Market Data Hub&apos;s NSE archive (with ~15 months of warm-up before the period) — slower: the F&amp;O list takes about 6 s for the 2008 crash, 25 s per decade, 1½ minutes for 1994–2026.{" "}
+                </>
+              ) : null}
               Signals need ≥60 sessions of warm-up (200+ for screens using the 200-day average or 52-week high), so the first months only warm up.
             </>
           ) : info ? (

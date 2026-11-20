@@ -1,4 +1,6 @@
+import { ARCHIVE_START } from "@/core/backtest/phases";
 import { resampleIntraday } from "@/core/market/aggregate";
+import { DAY_MS } from "@/core/market/session";
 import type { PricePoint } from "@/contracts/api";
 import { INDEX_INSTRUMENTS, historySeriesKey } from "@/server/data/seriesKey";
 import { SourceSkip, type BaseInterval, type DataSource, type SourceQuote, type SourceTick, type StreamCapability } from "@/server/data/types";
@@ -76,9 +78,16 @@ export function hubTimeframe(interval: BaseInterval): { tf: HubTimeframe; resamp
   return TIMEFRAMES[interval] ?? null;
 }
 
-/** The hub serves ~5 years of daily and 1 year of intraday history (the broker's limits), and the last 30 days of 1-minute bars. */
-export function hubWindowDays(interval: BaseInterval): number {
-  if (interval === "1d") return 5 * 365 - 3;
+/** Days of daily history the hub's broker serves; older days come from NSE's archive (market-data-hub#22). */
+export const HUB_BROKER_DAILY_DAYS = 5 * 365 - 3;
+
+/**
+ * How far back the hub serves an interval: daily bars back to NSE's first
+ * session (3 Nov 1994: the broker's ~5 years, NSE's archive before them —
+ * market-data-hub#22), 1 year of intraday bars, the last 30 days of 1-minute bars.
+ */
+export function hubWindowDays(interval: BaseInterval, now = Date.now()): number {
+  if (interval === "1d") return Math.ceil((now - ARCHIVE_START) / DAY_MS);
   if (interval === "1m" || interval === "3m") return 30;
   return 365;
 }
@@ -257,6 +266,10 @@ export function createHubSource(deps: HubSourceDeps): DataSource {
           if (!candles.length) throw new SourceSkip(`hub: ${answer.partial.message}`);
           return { candles, complete: false };
         }
+        // Before the broker's window the hub reads NSE's archive, which may still be downloading (and a hub before
+        // market-data-hub#22 has none): such an answer counts as complete only when the hub says so, so it is asked again.
+        const long = request.interval === "1d" && request.from < now() - (HUB_BROKER_DAILY_DAYS + 30) * DAY_MS;
+        if (long) return { candles, complete: answer.complete === true && answer.sources !== undefined };
         // End-of-day mode: the hub may still be downloading NSE's archive, so a short answer is fetched again later.
         return { candles, complete: !endOfDay() || answer.complete !== false };
       },

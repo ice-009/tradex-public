@@ -3,8 +3,8 @@ import type { ChartResponse } from "@/contracts/api";
 import { authed } from "@/server/http";
 import { getChart } from "@/server/services/chart";
 
-/** Candles for ?symbol&interval&range (broker, else sample data). */
+/** Candles for ?symbol&interval&range (broker, else sample data); daily-based intervals also take &from&to (epoch ms) for older bars. */
 export const GET = authed("Chart", "Unable to load chart data right now.", async (email, request: NextRequest) => {
   const params = request.nextUrl.searchParams;
-  return NextResponse.json<ChartResponse>(await getChart(email, { symbol: params.get("symbol"), interval: params.get("interval"), range: params.get("range") }));
+  return NextResponse.json<ChartResponse>(await getChart(email, { symbol: params.get("symbol"), interval: params.get("interval"), range: params.get("range"), from: params.get("from"), to: params.get("to") }));
 });

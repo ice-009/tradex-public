@@ -21,7 +21,8 @@ import { publishCrosshair, subscribeCrosshair } from "./crosshairSync";
 import { toggleAutoPatterns, toggleShowPlans, toggleSyncCrosshair, usePrefs } from "./uiPrefs";
 import { GROUP_LABEL, focusedHit, useIdea, useScreenerFeed } from "@/client/screenerFeed";
 import { DrawingProperties } from "./DrawingProperties";
-import { INTERVAL_META } from "@/core/market/intervals";
+import { CHART_INTERVAL_CONFIG, INTERVAL_META } from "@/core/market/intervals";
+import { olderRequest } from "@/core/market/olderBars";
 import { applyTick, fetchHistory, liveHub } from "@/client/marketData";
 import { Icons } from "./icons";
 import { useTerminalUI } from "./ui";
@@ -72,6 +73,8 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
   const [focusRequest, setFocusRequest] = useState<{ id: string; n: number } | null>(null);
   const hoveredRef = useRef(false);
   const syncRef = useRef(syncCrosshair);
+  /** Loads older bars when the chart is scrolled to its left edge (set by the history effect). */
+  const needOlderRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     symbolRef.current = cell.symbol;
@@ -108,6 +111,7 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
       onCrosshairMove: (time) => {
         if (syncRef.current) publishCrosshair(index, time);
       },
+      onNeedOlder: () => needOlderRef.current?.(),
     });
     engineRef.current = engine;
     engines.set(index, engine);
@@ -262,12 +266,42 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
       if (next) engine.updateBar(next);
     };
 
+    // Daily, weekly and monthly charts reach back to 1994: scrolled to the left edge, the bars before are loaded.
+    const unit = CHART_INTERVAL_CONFIG[interval].unit;
+    let hasOlder = false;
+    let loadingOlder = false;
+    let actions: Array<{ time: number; label: string; title: string }> = [];
+    needOlderRef.current = () => {
+      if (!loaded || !hasOlder || loadingOlder || (unit !== "days" && unit !== "weeks" && unit !== "months")) return;
+      const request = olderRequest(engine.getBars(), unit);
+      if (!request) {
+        hasOlder = false;
+        return;
+      }
+      loadingOlder = true;
+      fetchHistory(symbol, interval, controller.signal, request)
+        .then((older) => {
+          hasOlder = older.hasOlder && older.bars.length > 0;
+          engine.prependBars(older.bars, request.to);
+          actions = [...older.corporateActions.filter((action) => action.time < request.to), ...actions.filter((action) => action.time >= request.to)];
+          engine.setCorporateActions(actions);
+        })
+        .catch(() => {
+          hasOlder = false; // don't keep asking; reopening the chart tries again
+        })
+        .finally(() => {
+          loadingOlder = false;
+        });
+    };
+
     setStatus({ loading: true, error: null, source: null, reason: null });
     engine.select(null); // the floating properties toolbar would point at stale geometry
     fetchHistory(symbol, interval, controller.signal)
       .then((result) => {
         engine.setData(result.bars, { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
         engine.setCorporateActions(result.corporateActions);
+        actions = result.corporateActions;
+        hasOlder = result.hasOlder;
         loaded = true;
         setStatus({ loading: false, error: null, source: result.source, reason: result.reason });
         if (result.source === "broker") {
@@ -285,6 +319,7 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
     const unsubscribe = liveHub.subscribe(symbol, onTick, 0);
     return () => {
       controller.abort();
+      needOlderRef.current = null;
       unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

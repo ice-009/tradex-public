@@ -37,7 +37,16 @@ export interface EngineCallbacks {
   onDrawingDoubleClick?(id: string): void;
   /** Crosshair moved to a bar time (null when it left the plot); used to sync other charts. */
   onCrosshairMove?(time: number | null): void;
+  /**
+   * The view reached within OLDER_EDGE_BARS of the oldest bar (called on every
+   * frame while it stays there; the owner dedupes): load older bars and hand
+   * them to `prependBars`.
+   */
+  onNeedOlder?(): void;
 }
+
+/** How close to the oldest bar the view gets before `onNeedOlder` fires. */
+export const OLDER_EDGE_BARS = 20;
 
 export interface DrawingScreenBounds {
   left: number;
@@ -227,6 +236,21 @@ export class ChartEngine {
     this.invalidate();
   }
 
+  /**
+   * Replace the bars before `to` with older ones (lazy loading as the chart is
+   * scrolled left). The view is anchored to the newest bar, so what is on
+   * screen stays put; drawings are anchored to times and stay put too.
+   */
+  prependBars(older: Bar[], to: number) {
+    const kept = this.bars.filter((bar) => bar.time >= to);
+    const added = older.filter((bar) => bar.time < to);
+    if (!added.length && kept.length === this.bars.length) return;
+    this.bars = [...added, ...kept];
+    this.rebuildDerived();
+    this.clampView();
+    this.invalidate();
+  }
+
   /** Apply a live update: replaces the last bar when times match, else appends. */
   updateBar(bar: Bar) {
     const last = this.bars[this.bars.length - 1];
@@ -238,6 +262,11 @@ export class ChartEngine {
     }
     this.rebuildDerived();
     this.invalidate();
+  }
+
+  /** The bars shown, oldest first (not to be modified). */
+  getBars(): readonly Bar[] {
+    return this.bars;
   }
 
   getLastBar(): Bar | null {
@@ -908,6 +937,8 @@ export class ChartEngine {
       [from, to] = this.visibleRange();
       if (to >= from) for (const pane of this.panes) this.autoscale(pane, from, to);
     }
+    // Scrolled (or zoomed out) to within a few bars of the oldest one: the owner may load older bars.
+    if (to >= from && from <= OLDER_EDGE_BARS) this.callbacks.onNeedOlder?.();
 
     const timeTicks = to >= from ? this.timeTicks(from, to) : [];
 

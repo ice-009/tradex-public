@@ -124,3 +124,10 @@
 .tx-plan-foot { min-width: 0; }
 .tx-plan .is-up { color: var(--pos); }
 .tx-plan .is-down { color: var(--neg); }
+
+/* The evidence table's period picker (the plan's 5 years, or a market phase). */
+.tx-plan-evidence-period {
+  display: block;
+  margin: 6px 0;
+  font-size: 12px;
+}

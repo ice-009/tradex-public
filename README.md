@@ -54,7 +54,7 @@
 
 **Data**
 - All market data comes from a [Market Data Hub](https://github.com/ice-009/market-data-hub): a separate service that owns the one broker connection, its request budget and NSE's daily files, and serves every app on it. Tradex makes no broker or exchange requests itself.
-- Charts from 1 minute to monthly; up to 5 years of daily bars (with NSE delivery %) for the screener, backtests and the daily plan; stock futures (`SBIN26NOVFUT`) charted and quoted like any symbol.
+- Charts from 1 minute to monthly, daily charts scrolling back to 1994; 5 years of daily bars (with NSE delivery %) for the screener, backtests and the daily plan, and backtests or evidence over any period back to 1994 (or a market phase: 2008 crash, 2010–13 sideways, 2020, 2021–26) from the hub's NSE archive; stock futures (`SBIN26NOVFUT`) charted and quoted like any symbol.
 - Live prices stream from the hub, with polling as the fallback and a watchdog that reconnects silent feeds.
 - Without a hub, Tradex still runs on clearly labelled sample data and says **Connect a Market Data Hub**.
 
@@ -153,7 +153,7 @@ Without `HUB_URL` and `HUB_KEY` (or while the hub is unreachable) Tradex shows a
 | Charts (1m … monthly; 3m from 1m, 10m/30m/2h/4h resampled) | `GET /v1/candles` |
 | Watchlist, order ticket and screener quotes | `GET /v1/quotes` |
 | Live prices | `GET /v1/stream` (Server-Sent Events) |
-| Screener, backtests, plan evidence: up to 5 years of daily bars with delivery % | `GET /v1/candles/batch` |
+| Screener, backtests, plan evidence: 5 years of daily bars with delivery % (older periods read per run, back to 1994) | `GET /v1/candles/batch` |
 | OI buildup next to each F&O setup | `GET /v1/fo/oi/day` |
 | Point-in-time F&O list for backtests | `GET /v1/fo/members?from&to` |
 | Futures contract, basis and lot in the order ticket; Day High/Low futures | `GET /v1/fo/contracts`, futures tickers like `SBIN26NOVFUT` |

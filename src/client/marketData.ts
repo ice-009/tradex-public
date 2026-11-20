@@ -23,11 +23,17 @@ export interface HistoryResult {
   reason: string | null;
   /** Split/bonus ex-dates in range (the hub's; prices before them are adjusted). */
   corporateActions: Array<{ time: number; label: string; title: string }>;
+  /** Daily, weekly and monthly charts: older bars may exist (fetch them with `older`). */
+  hasOlder: boolean;
 }
 
-export async function fetchHistory(symbol: string, interval: ChartInterval, signal?: AbortSignal): Promise<HistoryResult> {
+/**
+ * Candle history for a chart. `older`: the stretch before the bars already
+ * shown (src/core/market/olderBars.ts), for daily, weekly and monthly charts.
+ */
+export async function fetchHistory(symbol: string, interval: ChartInterval, signal?: AbortSignal, older?: { from: number; to: number }): Promise<HistoryResult> {
   const meta = INTERVAL_META[interval];
-  const data = await api.chart(symbol, interval, meta.range, signal);
+  const data = await api.chart(symbol, interval, meta.range, signal, older);
   if (data.error) throw new Error(data.error);
   const bars: Bar[] = (data.priceSeries ?? [])
     .map((point) => ({
@@ -40,7 +46,7 @@ export async function fetchHistory(symbol: string, interval: ChartInterval, sign
     }))
     .filter((bar: Bar) => Number.isFinite(bar.time) && Number.isFinite(bar.close))
     .sort((a: Bar, b: Bar) => a.time - b.time);
-  return { bars, source: data.source ?? "sample", reason: data.sourceReason ?? null, corporateActions: data.corporateActions ?? [] };
+  return { bars, source: data.source ?? "sample", reason: data.sourceReason ?? null, corporateActions: data.corporateActions ?? [], hasOlder: Boolean(data.hasOlder) };
 }
 
 export async function fetchQuotes(symbols: string[], options: { fresh?: boolean } = {}): Promise<Quote[]> {

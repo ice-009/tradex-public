@@ -45,6 +45,22 @@ vi.mock("@/server/providers/dailyBars", () => ({ DEEP_HISTORY_DAYS: 5 * 365 }));
 vi.mock("@/server/providers/hub", () => ({ lastHubStatus: () => null }));
 vi.mock("./screener", () => ({ BENCHMARK: "NIFTY", parseUniverse: (id: string | null) => id ?? "test" }));
 
+// A period before the store (#18): bars from the hub's long history, 2007–2009, with NIFTY's
+// stand-in (the equal-weight basket) only — NSE's index file starts in 2012.
+const LONG_T0 = Date.UTC(2006, 9, 2);
+const shift = (bars: DailyBar[]) => bars.map((bar, i) => ({ ...bar, t: LONG_T0 + i * DAY }));
+const longSeries = new Map<string, DailyBar[]>([...SYMBOLS.map((symbol, i): [string, DailyBar[]] => [symbol, shift(walk(i * 104729 + 7, 940))]), ["EW-NIFTY50", shift(walk(777, 940))]]);
+const longLoads: Array<{ symbols: string[]; from: number; to: number }> = [];
+vi.mock("@/server/providers/longStore", () => ({
+  longBars: {
+    load: async (symbols: string[], from: number, to: number) => {
+      longLoads.push({ symbols, from, to });
+      const bars = new Map([...longSeries].filter(([symbol]) => symbols.includes(symbol)).map(([symbol, series]) => [symbol, series.filter((bar) => bar.t >= from && bar.t <= to)]));
+      return { from, to, bars, missing: symbols.filter((symbol) => !bars.has(symbol)), incomplete: [], renamed: new Map([["S01", ["OLD01", "S01"]]]), scaled: new Map(), gaps: new Map() };
+    },
+  },
+}));
+
 const request: BacktestRequest = {
   universe: "test",
   screenIds: ["swing-ema-pullback", "btst-closing-strength", "swing-rsi2"],
@@ -98,6 +114,27 @@ describe("backtest replay", { timeout: 60_000 }, async () => {
     const comparison = compareRuns(original, replay);
     expect(comparison.sameInputs).toBe(false);
     expect(comparison.changes[0]).toMatch(/^Data changed: bars\./);
+  });
+
+  it("runs a period older than the store from the hub's long history, and replays it", async () => {
+    const crash = { ...request, from: Date.UTC(2008, 0, 1), to: Date.UTC(2009, 2, 31) };
+    const original = await ready(runBacktest(crash));
+    // Read from 440 days before the period (warm-up) to its end — nothing later.
+    expect(longLoads.at(-1)).toMatchObject({ from: crash.from - 440 * DAY, to: crash.to });
+    expect(original.result.period.from).toBeGreaterThanOrEqual(crash.from);
+    expect(original.result.period.to).toBeLessThanOrEqual(crash.to);
+    expect(original.result.trades.length).toBeGreaterThan(0);
+    const warnings = original.result.warnings.join("\n");
+    expect(warnings).toMatch(/Long period/);
+    expect(warnings).toMatch(/equal-weight NIFTY 50 basket/);
+    expect(warnings).toMatch(/OLD01 → S01/);
+    expect(original.stamp.data.to).toBeLessThanOrEqual(crash.to);
+
+    const replay = await ready(replayBacktest(JSON.parse(JSON.stringify({ stamp: original.stamp }))));
+    expect(compareRuns(original, replay)).toMatchObject({ identical: true });
+    // The store's own runs are untouched by it.
+    const stored = await ready(runBacktest(request));
+    expect(stored.result.warnings.join("\n")).not.toMatch(/Long period/);
   });
 
   it("refuses something that isn't a backtest stamp", async () => {

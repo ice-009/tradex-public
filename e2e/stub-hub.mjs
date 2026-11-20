@@ -11,6 +11,12 @@
 //  - Quotes are the last daily bar, marked stale (the hub's stored price, as on
 //    a weekend): Tradex shows them but builds no intraday bar from them.
 //  - The stream sends a status event and heartbeats, never a tick.
+//  - Daily and weekly answers carry `sources` (market-data-hub#22). A request
+//    reaching well before the 5 years (a chart scrolled left, a long backtest)
+//    also gets "archive" bars back to NSE's first session (3 Nov 1994): a
+//    separate walk backwards from each stock's first bar, so the 5 years stay
+//    exactly as they were. INFY's archive is served under two names
+//    (INFOSYSTCH until 28 Jun 2011), as the hub joins renamed tickers.
 //
 // Usage: node e2e/stub-hub.mjs  (STUB_HUB_PORT, default 8797; STUB_HUB_KEY, default "mdh_e2e")
 
@@ -106,6 +112,60 @@ function daily(symbol) {
   return series;
 }
 
+/** NSE's first session: the archive part reaches back to it. */
+const ARCHIVE_START = Date.UTC(1994, 10, 3);
+/** A request from before this gets archive bars too (default loads, "the last 5 years", stay as they were). */
+const ARCHIVE_ASKED = FIRST_SESSION - 30 * DAY;
+/** Tickers the archive serves under an older name before a rename (old name, first day of the new one). */
+const RENAMES = { INFY: ["INFOSYSTCH", Date.UTC(2011, 5, 29)] };
+const archiveCache = new Map();
+
+/** Daily bars before FIRST_SESSION back to 1994: a walk backwards from the first bar (indices from 2012, like NSE's index file). */
+function archive(symbol) {
+  const cached = archiveCache.get(symbol);
+  if (cached) return cached;
+  const first = daily(symbol)[0];
+  if (!first || FUTURE.test(symbol)) return [];
+  const rand = random(hash(`${symbol}:archive`));
+  const index = INDICES.has(symbol);
+  const start = index ? Date.UTC(2012, 0, 2) : ARCHIVE_START;
+  const vol = index ? 0.009 : 0.015;
+  const bars = [];
+  let next = first.o;
+  for (let t = FIRST_SESSION - DAY; t >= start; t -= DAY) {
+    const weekday = new Date(t).getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    const close = next * (1 + (rand() - 0.5) * vol * 0.3);
+    const open = close / (1 + (rand() - 0.502) * 2 * vol);
+    bars.push({ t, o: round(open), h: round(Math.max(open, close) * (1 + rand() * vol * 0.7)), l: round(Math.min(open, close) * (1 - rand() * vol * 0.7)), c: round(close), v: index ? 0 : Math.round(100_000 + rand() * 2_000_000), dp: index ? null : Math.round(25 + rand() * 50) });
+    next = Math.max(1, open);
+  }
+  bars.reverse();
+  archiveCache.set(symbol, bars);
+  return bars;
+}
+
+/** Where each stretch of `candles` came from, as the hub says it. */
+function sourcesOf(symbol, candles) {
+  if (!candles.length) return [];
+  const before = candles.filter((bar) => bar.t < FIRST_SESSION);
+  const after = candles.filter((bar) => bar.t >= FIRST_SESSION);
+  const rename = RENAMES[symbol];
+  const names = !rename || !before.length || before[0].t >= rename[1] ? [symbol] : before.at(-1).t < rename[1] ? [rename[0]] : [rename[0], symbol];
+  const spans = [];
+  if (before.length) spans.push(INDICES.has(symbol) ? { source: "index_file", from: before[0].t, to: before.at(-1).t } : { source: "archive", from: before[0].t, to: before.at(-1).t, names });
+  if (after.length) spans.push({ source: "broker", from: after[0].t, to: after.at(-1).t });
+  return spans;
+}
+
+/** Daily or weekly bars from `from`, with the archive in front when asked for. */
+function longCandles(symbol, tf, from) {
+  const all = candlesFor(symbol, tf);
+  if (!all || (tf !== "1d" && tf !== "1w") || from >= ARCHIVE_ASKED) return all;
+  const older = archive(symbol);
+  return tf === "1d" ? [...older, ...all] : [...weeklyOf(older), ...all];
+}
+
 /** Intraday bars for the last sessions, built from each day's bar (path: open → one extreme → the other → close). */
 function intraday(symbol, minutes, sessions) {
   const days = daily(symbol).slice(-sessions);
@@ -139,8 +199,12 @@ function intraday(symbol, minutes, sessions) {
 }
 
 function weekly(symbol) {
+  return weeklyOf(daily(symbol));
+}
+
+function weeklyOf(bars) {
   const weeks = new Map();
-  for (const bar of daily(symbol)) {
+  for (const bar of bars) {
     const weekday = (new Date(bar.t).getUTCDay() + 6) % 7; // Monday = 0
     const monday = bar.t - weekday * DAY;
     const week = weeks.get(monday);
@@ -234,11 +298,14 @@ const routes = {
     const symbol = (url.searchParams.get("symbol") ?? "").toUpperCase();
     const tf = url.searchParams.get("tf") ?? "1d";
     const from = asOfFrozen(Number(url.searchParams.get("from") ?? 0));
+    const toRaw = url.searchParams.get("to");
+    const to = toRaw ? asOfFrozen(Number(toRaw)) : Number.MAX_SAFE_INTEGER;
     if (!known(symbol)) return send(res, 400, { error: "bad symbol", code: "bad_request" });
-    const all = candlesFor(symbol, tf);
+    const all = longCandles(symbol, tf, from);
     if (!all) return send(res, 400, { error: `unknown tf ${tf}`, code: "bad_request" });
-    const candles = all.filter((bar) => bar.t >= from);
-    send(res, 200, { symbol, tf, from, to: all.at(-1).t, complete: true, coverage: { from: all[0].t, to: all.at(-1).t }, liveThrough: null, candles });
+    const candles = all.filter((bar) => bar.t >= from && bar.t <= to);
+    const dailyTf = tf === "1d" || tf === "1w";
+    send(res, 200, { symbol, tf, from, to: all.at(-1).t, complete: true, coverage: { from: all[0].t, to: all.at(-1).t }, liveThrough: null, ...(dailyTf ? { sources: sourcesOf(symbol, candles) } : {}), candles });
   },
 
   "/v1/candles/batch": (url, res) => {
@@ -252,8 +319,9 @@ const routes = {
         unknown.push(symbol);
         continue;
       }
-      const all = candlesFor(symbol, tf);
-      series[symbol] = { complete: true, coverage: { from: all[0].t, to: all.at(-1).t }, candles: all.filter((bar) => bar.t >= from && bar.t <= to) };
+      const all = longCandles(symbol, tf, from);
+      const candles = all.filter((bar) => bar.t >= from && bar.t <= to);
+      series[symbol] = { complete: true, coverage: { from: all[0].t, to: all.at(-1).t }, sources: sourcesOf(symbol, candles), candles };
     }
     send(res, 200, { tf, from, to: Math.min(to, LAST_SESSION), series, queued: [], unknown });
   },

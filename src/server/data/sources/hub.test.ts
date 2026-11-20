@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { HubCandles, HubCandlesBatch, HubQuote, HubQuotes } from "@/server/providers/hub/client";
 import type { HubStream, HubStreamListener } from "@/server/providers/hub/stream";
 import { SourceSkip, type SourceTick } from "../types";
-import { END_OF_DAY_INTRADAY, createHubSource, hubTimeframe, toHubSymbol } from "./hub";
+import { END_OF_DAY_INTRADAY, createHubSource, hubTimeframe, hubWindowDays, toHubSymbol } from "./hub";
+
+const DAY = 24 * 60 * 60 * 1000;
 
 const MIN = 60_000;
 /** 09:15 IST on 2026-11-09, in UTC ms. */
@@ -86,9 +88,11 @@ describe("hub source history", () => {
 
   it("asks for the hub ticker and timeframe, and keeps the stored series key", async () => {
     const { client, calls } = fakeClient(() => answer([{ t: Date.UTC(2026, 10, 6), o: 1, h: 2, l: 0.5, c: 1.5, v: 100, dp: 55 }], { tf: "1d" }));
-    const source = createHubSource({ client: () => client, stream });
-    const result = await source.history!.fetch({ symbol: "NSE:SBIN-EQ", interval: "1d", from: 123 });
-    expect(calls.candles).toEqual([["SBIN", "1d", 123]]);
+    const now = Date.UTC(2026, 10, 20, 6);
+    const source = createHubSource({ client: () => client, stream, now: () => now });
+    const from = now - 365 * DAY;
+    const result = await source.history!.fetch({ symbol: "NSE:SBIN-EQ", interval: "1d", from });
+    expect(calls.candles).toEqual([["SBIN", "1d", from]]);
     expect(calls.adjust).toEqual(["split"]); // charts, indicators and backtests read adjusted prices, asked for explicitly
     expect(result).toEqual({ candles: [{ date: "2026-11-06T00:00:00.000Z", open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 }], complete: true });
     expect(source.kind).toBe("broker");
@@ -96,6 +100,23 @@ describe("hub source history", () => {
     expect(source.history!.cacheKey!("SBIN", "1d")).toBe("NSE:SBIN-EQ:D");
     expect(source.history!.windowDays!("15m")).toBe(365);
     expect(source.history!.windowDays!("1m")).toBe(30);
+    // Daily history reaches back to NSE's first session (market-data-hub#22), not just the broker's 5 years.
+    expect(hubWindowDays("1d", now)).toBe(Math.ceil((now - Date.UTC(1994, 10, 3)) / DAY));
+  });
+
+  it("counts an answer reaching before the broker's window as complete only when the hub says so", async () => {
+    const now = Date.UTC(2026, 10, 20, 6);
+    const from = Date.UTC(2000, 0, 3);
+    const bars = [{ t: Date.UTC(2017, 0, 2), o: 1, h: 1, l: 1, c: 1, v: 1 }];
+    const fetchWith = async (extra: Partial<HubCandles>) => {
+      const { client } = fakeClient(() => ({ ...answer(bars, { tf: "1d" }), ...extra }));
+      return createHubSource({ client: () => client, stream, now: () => now }).history!.fetch({ symbol: "SBIN", interval: "1d", from });
+    };
+    // The archive is still downloading: asked again next time.
+    expect((await fetchWith({ complete: false, sources: [{ source: "archive", from: bars[0].t, to: bars[0].t }] })).complete).toBe(false);
+    expect((await fetchWith({ complete: true, sources: [{ source: "archive", from: bars[0].t, to: bars[0].t }] })).complete).toBe(true);
+    // A hub before market-data-hub#22 clamps to its window and says nothing of the older days.
+    expect((await fetchWith({ complete: true })).complete).toBe(false);
   });
 
   it("builds 30-minute candles from the hub's 15-minute ones, aligned to 09:15 IST", async () => {

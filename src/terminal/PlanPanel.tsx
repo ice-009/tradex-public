@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "./plan.css";
 import type { EvidenceResponse, ScreenerResponse, TradeDto, TradesResponse } from "@/contracts/api";
+import { MARKET_PHASES, phaseById } from "@/core/backtest/phases";
 import { formatPrice } from "@/core/format";
 import { istParts } from "@/core/market/session";
 import type { Plan, PlanIdea } from "@/core/plan/builder";
@@ -111,7 +112,7 @@ export function PlanPanel() {
               </button>
             </p>
           ) : null}
-          {ready && showEvidence && <EvidenceTableView evidence={ready} />}
+          {ready && showEvidence && <EvidencePeriods evidence={ready} />}
           <p className="tx-scr-note">A planning aid, not advice: past results of mechanical rules don&apos;t promise future ones. Orders are placed in your broker&apos;s app.</p>
         </div>
       </div>
@@ -836,6 +837,69 @@ function EvidenceTableView({ evidence }: { evidence: Extract<EvidenceResponse, {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The evidence over the plan's window (the stored 5 years), or over a market
+ * phase picked here (computed on the server in the background, back to 1994).
+ * The plan itself always uses the default window.
+ */
+function EvidencePeriods({ evidence }: { evidence: Extract<EvidenceResponse, { status: "ready" }> }) {
+  const [phaseId, setPhaseId] = useState("");
+  const [answer, setAnswer] = useState<EvidenceResponse | null>(null);
+  useEffect(() => {
+    const phase = phaseById(phaseId);
+    if (!phase) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const next = await api.evidence({ from: phase.from, to: phase.to }).catch((error: Error): EvidenceResponse => ({ status: "error", error: error.message }));
+      if (stopped) return;
+      setAnswer(next);
+      if (next.status === "computing") timer = setTimeout(poll, 2000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [phaseId]);
+  const phase = phaseById(phaseId);
+  const shown = phase && answer?.status === "ready" ? answer : phase ? null : evidence;
+  return (
+    <>
+      <label className="tx-plan-evidence-period">
+        <span className="tx-dim">Period</span>{" "}
+        <select
+          className="tx-input"
+          value={phaseId}
+          onChange={(event) => {
+            setAnswer(null);
+            setPhaseId(event.target.value);
+          }}
+        >
+          <option value="">Stored 5 years (the plan&apos;s)</option>
+          {MARKET_PHASES.map((p) => (
+            <option key={p.id} value={p.id} title={p.note}>
+              {p.label}
+            </option>
+          ))}
+        </select>{" "}
+        {phase && <span className="tx-dim">{phase.note} Not used by the plan.</span>}
+      </label>
+      {shown ? (
+        <EvidenceTableView evidence={shown} />
+      ) : (
+        <p className="tx-scr-note">
+          {answer?.status === "error"
+            ? `Evidence for ${phase?.label} unavailable: ${answer.error}`
+            : answer?.status === "computing"
+              ? `Replaying every screen over ${phase?.label} (read from the Market Data Hub's archive)… ${answer.progress.total ? `${answer.progress.done}/${answer.progress.total} sessions` : ""}`
+              : `Loading ${phase?.label}…`}
+        </p>
+      )}
+    </>
   );
 }
 
