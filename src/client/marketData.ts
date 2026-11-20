@@ -21,6 +21,8 @@ export interface HistoryResult {
   source: SourceKind;
   /** Why a fallback source was used. */
   reason: string | null;
+  /** Split/bonus ex-dates in range (the hub's; prices before them are adjusted). */
+  corporateActions: Array<{ time: number; label: string; title: string }>;
 }
 
 export async function fetchHistory(symbol: string, interval: ChartInterval, signal?: AbortSignal): Promise<HistoryResult> {
@@ -38,7 +40,7 @@ export async function fetchHistory(symbol: string, interval: ChartInterval, sign
     }))
     .filter((bar: Bar) => Number.isFinite(bar.time) && Number.isFinite(bar.close))
     .sort((a: Bar, b: Bar) => a.time - b.time);
-  return { bars, source: data.source ?? "sample", reason: data.sourceReason ?? null };
+  return { bars, source: data.source ?? "sample", reason: data.sourceReason ?? null, corporateActions: data.corporateActions ?? [] };
 }
 
 export async function fetchQuotes(symbols: string[], options: { fresh?: boolean } = {}): Promise<Quote[]> {
