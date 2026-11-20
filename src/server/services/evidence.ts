@@ -4,21 +4,20 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { EvidenceReplayResponse, EvidenceResponse } from "@/contracts/api";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
+import { lotHistoryPart, pointInTimeLots } from "@/core/backtest/lots";
 import { scanSignals } from "@/core/backtest/signals";
 import { WARMUP_DAYS, clampToArchive, isLongRange, storeStart } from "@/core/backtest/phases";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { marketStates, replaySignals, roundTripPct, summarizeEvidence, type EvidenceTable } from "@/core/plan/evidence";
 import { spliceBenchmark } from "@/core/market/longHistory";
 import { DAY_MS, istParts } from "@/core/market/session";
-import { hashDataset, makeStamp, type RunStamp } from "@/core/repro/stamp";
+import { hashDataset, makeStamp, withDataPart, type RunStamp } from "@/core/repro/stamp";
 import type { DailyBar } from "@/core/types";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { foMembership } from "@/server/providers/foData";
+import { asOfSpan, orElse, type ReferenceTimeline } from "@/server/providers/asOf";
 import { BENCHMARK_STAND_IN, longWarnings } from "@/server/providers/longBars";
 import { longBars } from "@/server/providers/longStore";
-import { getLotSizes } from "@/server/providers/reference";
-import { getUniverse } from "@/server/providers/universe";
 import { liveRecord } from "@/server/services/btstRecord";
 import { BENCHMARK } from "@/server/services/screener";
 import { hubEndOfDay } from "@/server/providers/hub";
@@ -44,13 +43,18 @@ import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./ru
 // keyed by the last stored session; a restart reads it back instead of
 // replaying again.
 //
+// Reference data — the F&O list of each session, lot sizes — comes only
+// through the point-in-time engine (asOf, src/server/providers/asOf.ts): a
+// signal counts only if the stock had futures that session, and its costs use
+// that session's lot where known (src/core/backtest/lots.ts).
+//
 // The table carries a run stamp (src/core/repro/stamp.ts): the hash of the bars,
 // F&O lists and lot sizes it read, the commit and the parameters, and the hash
 // of the table. `replayEvidence` computes a stamped table again from scratch on
 // the bars up to its last session, so the browser can show whether it reproduces.
 
 /** Bump when the replay or the statistics change, so cached tables are rebuilt. */
-const EVIDENCE_VERSION = 2;
+const EVIDENCE_VERSION = 3;
 const ENGINE = `evidence/${EVIDENCE_VERSION}`;
 const COST_PRESET: CostPresetId = "futures-2026";
 const CACHE_FILE = path.join(process.cwd(), ".cache", "plan-evidence.json");
@@ -77,7 +81,9 @@ interface State {
 interface KeyInfo {
   key: string;
   symbols: string[];
-  byDay: Map<number, Set<string>>;
+  byDay: ReadonlyMap<number, ReadonlySet<string>>;
+  /** The F&O list on a session as asOf knows it (null when unknown). */
+  listOn: (day: number) => ReadonlySet<string> | null;
   today: string[];
   lastDay: number;
   /** Range the point-in-time F&O list was read for. */
@@ -104,16 +110,27 @@ function lastFinalDay(now = Date.now()): number {
 /** A symbol's stored bars up to `lastDay`. */
 const barsThrough = (symbol: string, lastDay: number) => screenerStore.getBars(symbol).filter((bar) => bar.t <= lastDay);
 
+/** Today's F&O list and the list of each session in `window`, as asOf knows them. */
+async function membershipOver(window: { from: number; to: number }) {
+  const timeline = await asOfSpan(window.from, window.to, { results: false, factors: false });
+  const today = orElse(timeline.at(timeline.history.today).universe("fno"), []).map((member) => member.symbol);
+  return { today, byDay: timeline.history.fo.byDay, listOn: listOnOf(timeline) };
+}
+
+const listOnOf = (timeline: ReferenceTimeline) => (day: number) => {
+  const list = timeline.at(day).foList;
+  return list.known ? list.value : null;
+};
+
 /** What the table would be computed from right now (cheap: the newest and oldest stored bar per symbol). */
 async function keyInfo(): Promise<KeyInfo> {
   if (state.keyMemo && Date.now() - state.keyMemo.at < KEY_TTL_MS) return state.keyMemo.value;
-  const today = (await getUniverse("fno")).map((member) => member.symbol);
-  // Point-in-time F&O membership over the stored span, from the hub (cached).
+  // Point-in-time F&O membership over the stored span, through asOf (cached).
   const day = istParts().day;
   const window = { from: day - DEEP_HISTORY_DAYS * DAY_MS, to: day };
-  const byDay = await foMembership(window.from, window.to);
+  const { today, byDay, listOn } = await membershipOver(window);
   // Sorted, so the replay (and the order of tied signals) doesn't depend on the list's order.
-  const symbols = byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : [...today].sort();
+  const symbols = byDay.size ? pointInTimeUniverse({ byDay, today, listOn }).symbols : [...today].sort();
   screenerStore.ensureFresh([...symbols, BENCHMARK]);
   await screenerStore.hasData([...symbols, BENCHMARK]);
   const lastDay = lastFinalDay();
@@ -130,7 +147,7 @@ async function keyInfo(): Promise<KeyInfo> {
   }
   const membership = byDay.size ? `pit${byDay.size}-${Math.max(...byDay.keys())}` : "today";
   // More symbols or a deeper history (the hub finished a download) changes the key too.
-  const value = { key: `${last}:${covered}/${symbols.length}:${Number.isFinite(first) ? first : 0}:${membership}:${COST_PRESET}:${EVIDENCE_VERSION}`, symbols, byDay, today, lastDay, window };
+  const value = { key: `${last}:${covered}/${symbols.length}:${Number.isFinite(first) ? first : 0}:${membership}:${COST_PRESET}:${EVIDENCE_VERSION}`, symbols, byDay, listOn, today, lastDay, window };
   state.keyMemo = { at: Date.now(), value };
   return value;
 }
@@ -146,13 +163,12 @@ async function readDisk(key: string): Promise<Computed | null> {
 
 /** What the replay reads: the stamped symbols still in the F&O lists, up to the stamped last session. */
 async function pinnedInfo(pin: ReplayPin): Promise<KeyInfo> {
-  const today = (await getUniverse("fno")).map((member) => member.symbol);
   const window = pin.membership ?? { from: istParts().day - DEEP_HISTORY_DAYS * DAY_MS, to: istParts().day };
-  const byDay = await foMembership(window.from, window.to);
-  const listed = new Set(byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : today);
+  const { today, byDay, listOn } = await membershipOver(window);
+  const listed = new Set(byDay.size ? pointInTimeUniverse({ byDay, today, listOn }).symbols : today);
   const symbols = [...new Set(pin.symbols)].filter((symbol) => listed.has(symbol)).sort();
   await screenerStore.hasData([...symbols, BENCHMARK]);
-  return { key: "replay", symbols, byDay, today, lastDay: pin.to, window };
+  return { key: "replay", symbols, byDay, listOn, today, lastDay: pin.to, window };
 }
 
 async function compute(info: KeyInfo, progress: { done: number; total: number }): Promise<Computed> {
@@ -163,7 +179,7 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
     if (through.length) bars.set(symbol, through);
     await yieldToEventLoop();
   }
-  const pit = info.byDay.size ? pointInTimeUniverse({ byDay: info.byDay, today: info.today }) : null;
+  const pit = info.byDay.size ? pointInTimeUniverse({ byDay: info.byDay, today: info.today, listOn: info.listOn }) : null;
   const benchmark = bars.get(BENCHMARK) ?? [];
   const symbols = info.symbols.filter((symbol) => (bars.get(symbol)?.length ?? 0) > 0);
   if (symbols.length && benchmark.length < 200 && hubEndOfDay()) {
@@ -182,17 +198,21 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
       await yieldToEventLoop();
     },
   });
-  const { lots } = await getLotSizes();
+  // Each session's lot (in the bars' shares) where known, else today's; through asOf.
+  const timeline = await asOfSpan(info.window.from, info.window.to, { symbols, results: false });
+  const lots = orElse(timeline.at(timeline.history.today).lots, {});
+  const pitLots = pointInTimeLots(timeline, lots);
   const states = marketStates(benchmark);
   // A chosen period counts its own sessions only: what comes before is warm-up.
   const first = Math.max(scan.firstSignalDate ?? 0, info.range?.from ?? 0);
-  const trades = replaySignals(scan, { costs: COST_PRESETS[COST_PRESET].model, lots, states }).filter((trade) => !info.range || trade.date >= first);
+  const trades = replaySignals(scan, { costs: COST_PRESETS[COST_PRESET].model, lots, lotOn: pitLots.lotOn, states }).filter((trade) => !info.range || trade.date >= first);
   const dates = scan.dates.filter((day) => day >= first);
   if (info.range && dates.length < 2) throw new Error("The period has fewer than two sessions with enough history to replay.");
   const table = summarizeEvidence(trades, { dates, symbols: scan.symbols, lastState: states.get(benchmark.at(-1)!.t) ?? null });
   const noHistory = pit ? pit.symbols.filter((symbol) => !info.today.includes(symbol) && !(bars.get(symbol)?.length ?? 0)) : [];
-  const note = [universeNote({ sessions: dates, byDay: info.byDay, noHistory }), ...(info.range?.notes ?? [])].join(" ");
-  const data = await hashDataset({
+  const lotNote = Object.keys(lots).length ? pitLots.note(dates) : "Lot sizes couldn't be loaded: costs assume ~₹5 lakh of shares.";
+  const note = [`${universeNote({ sessions: dates, byDay: info.byDay, listOn: info.listOn, noHistory })} ${lotNote}`, ...(info.range?.notes ?? [])].join(" ");
+  const hashed = await hashDataset({
     bars,
     benchmark: BENCHMARK,
     membership: info.byDay.size ? info.byDay : null,
@@ -202,6 +222,7 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
     hub: hubVersion(),
     pause: yieldToEventLoop,
   });
+  const data = withDataPart(hashed, "lotHistory", Object.keys(lots).length ? lotHistoryPart(timeline.history, symbols) : null);
   const computedAt = Date.now();
   const stamp = makeStamp({ kind: "evidence", code: codeVersion(ENGINE), data, params: { universe: "fno", costPreset: COST_PRESET, ...(info.range ? { from: info.range.from, to: info.range.to } : {}) }, result: { table, note }, createdAt: computedAt });
   const ms = computedAt - started;
@@ -271,17 +292,16 @@ function resolveRange(range: EvidenceRange): { from: number; to: number } {
  * stand-in before 2012. `pin`: a replay's symbols and last session.
  */
 async function rangeInfo(range: { from: number; to: number }, pin: ReplayPin | null): Promise<KeyInfo> {
-  const today = (await getUniverse("fno")).map((member) => member.symbol);
   const to = pin?.to ?? range.to;
   const readFrom = clampToArchive(range.from - WARMUP_DAYS * DAY_MS);
   const window = pin?.membership ?? { from: readFrom, to };
-  const byDay = await foMembership(window.from, window.to);
-  let symbols = byDay.size ? pointInTimeUniverse({ byDay, today }).symbols : [...today].sort();
+  const { today, byDay, listOn } = await membershipOver(window);
+  let symbols = byDay.size ? pointInTimeUniverse({ byDay, today, listOn }).symbols : [...today].sort();
   if (pin) {
     const allowed = new Set(pin.symbols);
     symbols = symbols.filter((symbol) => allowed.has(symbol));
   }
-  const base = { key: `range:${range.from}:${to}`, symbols, byDay, today, lastDay: to, window };
+  const base = { key: `range:${range.from}:${to}`, symbols, byDay, listOn, today, lastDay: to, window };
   if (!isLongRange(range.from, istParts().day)) {
     await screenerStore.hasData([...symbols, BENCHMARK]);
     return { ...base, range: { from: range.from, to, barsOf: (symbol) => screenerStore.getBars(symbol).filter((bar) => bar.t >= readFrom), notes: [] } };

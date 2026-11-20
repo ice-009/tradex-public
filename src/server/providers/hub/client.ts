@@ -405,6 +405,38 @@ export interface HubAdjustments {
   factors: HubAdjustment[];
 }
 
+/** GET /v1/adjustments/batch: many listings' factors (market-data-hub#46). */
+export interface HubAdjustmentsBatch {
+  derivedAt: number | null;
+  series: Record<string, { current: string; factors: Array<Pick<HubAdjustment, "date" | "day" | "symbol" | "factor" | "cumulative" | "source" | "action">> }>;
+}
+
+/** GET /v1/lots/history: lot per stock as it was on each F&O day, as change points (market-data-hub#46). */
+export interface HubLotHistory {
+  from: string | null;
+  to: string;
+  /** First F&O day whose file carries lot sizes (NSE's format from 8 Jul 2024); null when none is stored. */
+  knownFrom: string | null;
+  knownFromDay: number | null;
+  lastDate: string;
+  lastDay: number;
+  lots: Record<string, Array<{ date: string; day: number; lot: number }>>;
+}
+
+/** GET /v1/fo/ban/history: every stored trade date's ban list (market-data-hub#46). */
+export interface HubBanHistory {
+  knownFrom: string;
+  knownFromDay: number;
+  days: Array<{ date: string; day: number; symbols: string[]; fetchedAt: number }>;
+}
+
+/** GET /v1/symbols/changes: every known ticker change (`date` = first session under the new ticker). */
+export interface HubSymbolChanges {
+  fetchedAt: number | null;
+  count: number;
+  changes: Array<{ date: string; day: number; oldSymbol: string; newSymbol: string; company: string; source: string; isin: string | null }>;
+}
+
 export interface HubResultsCalendar {
   from: string;
   to: string;
@@ -706,6 +738,33 @@ export class HubClient {
   /** A company's split/bonus adjustment factors (ex-dates), across its renames. A hub before market-data-hub#20 answers 404. */
   adjustments(symbol: string): Promise<HubAdjustments> {
     return this.get<HubAdjustments>("/v1/adjustments", { symbol }, { retries: 0 });
+  }
+
+  /** Many listings' split/bonus factors, 300 symbols a request. A hub before market-data-hub#46 answers 404. */
+  async adjustmentsBatch(symbols: string[]): Promise<HubAdjustmentsBatch> {
+    const unique = [...new Set(symbols)];
+    const answer: HubAdjustmentsBatch = { derivedAt: null, series: {} };
+    for (let start = 0; start < unique.length; start += HUB_BATCH_SYMBOLS) {
+      const part = await this.get<HubAdjustmentsBatch>("/v1/adjustments/batch", { symbols: unique.slice(start, start + HUB_BATCH_SYMBOLS).join(",") }, { retries: 0 });
+      answer.derivedAt = part.derivedAt ?? answer.derivedAt;
+      Object.assign(answer.series, part.series ?? {});
+    }
+    return answer;
+  }
+
+  /** Lot sizes as they were on each stored F&O day (change points). A hub before market-data-hub#46 answers 404. */
+  lotHistory(): Promise<HubLotHistory> {
+    return this.get<HubLotHistory>("/v1/lots/history", undefined, { retries: 0 });
+  }
+
+  /** Every stored trade date's F&O ban list. A hub before market-data-hub#46 answers 404. */
+  foBanHistory(): Promise<HubBanHistory> {
+    return this.get<HubBanHistory>("/v1/fo/ban/history", undefined, { retries: 0 });
+  }
+
+  /** Every known ticker change. */
+  symbolChanges(): Promise<HubSymbolChanges> {
+    return this.get<HubSymbolChanges>("/v1/symbols/changes", undefined, { retries: 0 });
   }
 
   /** Results dates between two IST dates (YYYY-MM-DD). */
