@@ -55,6 +55,11 @@ export interface BacktestConfig {
   costs: CostModel;
   /** Lot size per symbol; when given, quantity is whole lots. Missing symbols are sized in shares. */
   lots: Record<string, number> | null;
+  /**
+   * Lot size per symbol on a signal's session (point in time, src/core/backtest/lots.ts),
+   * in the bars' (today-adjusted) shares; null = size in shares. Takes the place of `lots` when given.
+   */
+  lotOn?: (symbol: string, day: number) => number | null;
   /** Share of the period held out at the end as out-of-sample (0.3 = last 30%). */
   oosFraction: number;
 }
@@ -387,7 +392,7 @@ export function runPortfolio(scan: SignalScan, config: BacktestConfig): Backtest
           skipped.noSlot += 1;
           continue;
         }
-        const lot = config.lots ? (config.lots[signal.symbol] ?? null) : null;
+        const lot = config.lotOn ? config.lotOn(signal.symbol, signal.date) : config.lots ? (config.lots[signal.symbol] ?? null) : null;
         const riskPerShare = signal.entry - signal.stop;
         let { qty, lots } = sizePosition((equityNow * config.riskPct) / 100, riskPerShare, lot);
         // Leverage cap on total open notional.
@@ -401,7 +406,7 @@ export function runPortfolio(scan: SignalScan, config: BacktestConfig): Backtest
           skipped.tooSmall += 1;
           continue;
         }
-        if (config.lots && !lot) unlotted += 1;
+        if ((config.lots || config.lotOn) && !lot) unlotted += 1;
         busy.add(signal.symbol);
         const order: Pending = { signal, qty, lots, buyStop: isBuyStop(signal) };
         if ((config.entry === "signal-close" || exitsAtOpen(signal.screenId)) && !order.buyStop) open(order, signal.index, date, signal.close, -1);
@@ -469,7 +474,7 @@ export function runPortfolio(scan: SignalScan, config: BacktestConfig): Backtest
       historySessions: scan.dates.length,
       firstSignalDate: scan.firstSignalDate,
     },
-    config: { ...withoutLots(config), sizing: config.lots && Object.keys(config.lots).length ? "lots" : "shares" },
+    config: { ...withoutLots(config), sizing: config.lotOn || (config.lots && Object.keys(config.lots).length) ? "lots" : "shares" },
     signals: signalCount,
     trades,
     curve,
@@ -490,8 +495,9 @@ export function runPortfolio(scan: SignalScan, config: BacktestConfig): Backtest
 }
 
 function withoutLots(config: BacktestConfig): Omit<BacktestConfig, "lots"> {
-  const { lots: _lots, ...rest } = config;
+  const { lots: _lots, lotOn: _lotOn, ...rest } = config;
   void _lots;
+  void _lotOn;
   return rest;
 }
 

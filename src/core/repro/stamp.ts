@@ -88,7 +88,7 @@ export interface DatasetInput {
   bars: Map<string, DailyBar[]>;
   benchmark: string;
   /** Point-in-time F&O list by session; days after the last session are ignored. */
-  membership?: Map<number, Set<string>> | null;
+  membership?: ReadonlyMap<number, ReadonlySet<string>> | null;
   membershipWindow?: { from: number; to: number } | null;
   /** Lot sizes; only the dataset's symbols count. */
   lots?: Record<string, number> | null;

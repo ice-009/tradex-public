@@ -9,13 +9,13 @@ import { marketRegime } from "@/core/screener/regime";
 import { sectorIndexStat, sectorSources, strengthRanks, type SectorIndexStat } from "@/core/screener/sectorIndex";
 import { latestOiFacts } from "@/server/providers/foData";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
-import { getFnoBan, getIndexCatalog } from "@/server/providers/reference";
 import { updateBtstRecord } from "@/server/services/btstRecord";
 import type { ScreenerRow } from "@/core/screener/screens";
 import { DAY_MS, SESSION_CLOSE_MIN, SESSION_OPEN_MIN, istParts } from "@/core/market/session";
 import type { DailyBar } from "@/core/types";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { UNIVERSES, getUniverse, isUniverseId, type UniverseId } from "@/server/providers/universe";
+import { UNIVERSES, isUniverseId, type UniverseId } from "@/server/providers/universe";
+import { asOf, orElse } from "@/server/providers/asOf";
 import { log } from "@/server/log";
 
 // Screener and track-record orchestration: load bars (dailyStore, filled from
@@ -28,6 +28,9 @@ import { log } from "@/server/log";
 // Sector strength ranks each industry by its sector index's 1-month return —
 // a synthetic equal-weight basket where no NSE index has that much history —
 // and by the median of the universe's own stocks when the hub has neither.
+//
+// Reference data (the universe, the sector map, the F&O ban list) is read only
+// through the point-in-time engine, as of today (asOf, src/server/providers/asOf.ts).
 
 export const BENCHMARK = "NIFTY";
 /** A sector index is used when its history starts within this many days of the stocks' window. */
@@ -55,9 +58,10 @@ function stampFirstSeen(universeId: string, results: Record<string, ScreenerRow[
 }
 
 export async function runScreener(universeId: UniverseId, useLive: boolean): Promise<ScreenerResponse> {
-  const members = await getUniverse(universeId);
+  const known = await asOf();
+  const members = orElse(known.universe(universeId), []);
   const symbols = members.map((member) => member.symbol);
-  const catalog = await getIndexCatalog();
+  const catalog = orElse(known.sectors, { available: false, indices: [], sectors: [] });
   const needFrom = istParts().day - (DEEP_HISTORY_DAYS - SECTOR_HISTORY_SLACK_DAYS) * DAY_MS;
   const sources = sectorSources(catalog, members.map((member) => member.industry || "Other"), needFrom);
   const sectorSymbols = [...new Set([...sources.values()].map((source) => source.symbol))];
@@ -108,8 +112,8 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
     if (stat) sector.index = stat;
   }
   const sectorPct = strengthRanks(new Map(market.sectors.map((sector) => [sector.sector, sector.index && Number.isFinite(sector.index.ret21) ? sector.index.ret21 : sector.ret21])));
-  const ban = await getFnoBan();
-  const banned = new Set(ban.available ? ban.symbols : []);
+  const ban = known.ban.known ? { available: true, tradeDate: known.ban.asOf, symbols: [...known.ban.value] } : { available: false, tradeDate: null, symbols: [] };
+  const banned = new Set(ban.symbols);
   // Futures OI from the hub's newest F&O bhavcopy day (GET /v1/fo/oi/day, cached; never waits).
   // Shown next to the setup, never scored: OI buildup showed no edge on its own in testing.
   const oi = latestOiFacts();
@@ -157,7 +161,7 @@ const globalForTrack = globalThis as unknown as { trackCache?: Map<string, Promi
 const trackCache = (globalForTrack.trackCache ??= new Map());
 
 export async function trackRecord(universeId: UniverseId): Promise<TrackResult> {
-  const symbols = (await getUniverse(universeId)).map((member) => member.symbol);
+  const symbols = orElse((await asOf()).universe(universeId), []).map((member) => member.symbol);
   await screenerStore.hasData([...symbols, BENCHMARK]);
   const covered = symbols.filter((symbol) => screenerStore.getBars(symbol).length > 0);
   if (!covered.length) return { status: "error", error: "No history cached for this universe yet." };

@@ -38,9 +38,31 @@ vi.mock("@/server/providers/dailyStore", () => ({
     progress: { queued: 0, message: "", phase: "idle" },
   },
 }));
-vi.mock("@/server/providers/universe", () => ({ UNIVERSES: [], getUniverse: async () => SYMBOLS.map((symbol) => ({ symbol })) }));
-vi.mock("@/server/providers/foData", () => ({ foMembership: async () => new Map() }));
-vi.mock("@/server/providers/reference", () => ({ getLotSizes: async () => ({ lots: Object.fromEntries(SYMBOLS.map((symbol) => [symbol, 500])), source: "hub" }) }));
+vi.mock("@/server/providers/universe", () => ({ UNIVERSES: [] }));
+// Reference data through asOf: no F&O files, lots known from 8 Jul 2024 (1,000 a lot, today 500),
+// and S02 split 1:2 on 2 Sep 2024 (so its earlier lot is 2,000 of today's shares).
+vi.mock("@/server/providers/asOf", async () => {
+  const { referenceTimeline, orElse } = await import("@/core/reference/pointInTime");
+  const { istParts } = await import("@/core/market/session");
+  const asOfSpan = async () =>
+    referenceTimeline({
+      today: istParts().day,
+      fo: { byDay: new Map(), span: null, stored: null },
+      lots: {
+        changes: new Map(SYMBOLS.map((symbol) => [symbol, [{ day: Date.UTC(2024, 6, 8), lot: 1000 }]])),
+        knownFrom: Date.UTC(2024, 6, 8),
+        lastDay: Date.UTC(2024, 10, 15),
+        current: Object.fromEntries(SYMBOLS.map((symbol) => [symbol, 500])),
+      },
+      ban: null,
+      results: null,
+      catalog: null,
+      universes: new Map([["test", SYMBOLS.map((symbol) => ({ symbol, name: symbol, industry: "" }))]]),
+      renames: null,
+      factors: new Map(SYMBOLS.map((symbol) => [symbol, symbol === "S02" ? [{ day: Date.UTC(2024, 8, 2), factor: 0.5 }] : []])),
+    });
+  return { asOfSpan, orElse };
+});
 vi.mock("@/server/providers/dailyBars", () => ({ DEEP_HISTORY_DAYS: 5 * 365 }));
 vi.mock("@/server/providers/hub", () => ({ lastHubStatus: () => null }));
 vi.mock("./screener", () => ({ BENCHMARK: "NIFTY", parseUniverse: (id: string | null) => id ?? "test" }));
@@ -73,7 +95,16 @@ describe("backtest replay", { timeout: 60_000 }, async () => {
   it("reproduces a run: same stamp, same result hash, even after a new session is stored", async () => {
     const original = await ready(runBacktest(request));
     expect(original.result.trades.length).toBeGreaterThan(5);
-    expect(original.stamp).toMatchObject({ kind: "backtest", code: { engine: "backtest/6" }, data: { symbols: SYMBOLS, to: T0 + 319 * DAY } });
+    // Point-in-time lots: before 8 Jul 2024 today's (500), from then that day's (1,000; S02 2,000 before its split).
+    const lotted = original.result.trades.filter((trade) => trade.lots);
+    const lotOf = (trade: (typeof lotted)[number]) => trade.qty / trade.lots!;
+    const lotsWhere = (keep: (trade: (typeof lotted)[number]) => boolean) => [...new Set(lotted.filter(keep).map(lotOf))];
+    expect(lotsWhere((trade) => trade.signalDate < Date.UTC(2024, 6, 8))).toEqual([500]);
+    expect(lotsWhere((trade) => trade.signalDate >= Date.UTC(2024, 6, 8) && trade.symbol !== "S02")).toEqual([1000]);
+    expect(lotsWhere((trade) => trade.symbol === "S02" && trade.signalDate >= Date.UTC(2024, 6, 8) && trade.signalDate < Date.UTC(2024, 8, 2)).every((lot) => lot === 2000)).toBe(true);
+    expect(original.result.warnings.join(" ")).toMatch(/Lot sizes: as listed on each day \(NSE F&O bhavcopy\) on \d+ of \d+ sessions/);
+    expect(Object.keys(original.stamp.data.parts).sort()).toEqual(["bars", "lotHistory", "lots", "universe"]);
+    expect(original.stamp).toMatchObject({ kind: "backtest", code: { engine: "backtest/7" }, data: { symbols: SYMBOLS, to: T0 + 319 * DAY } });
 
     const replay = await ready(replayBacktest(JSON.parse(JSON.stringify({ stamp: original.stamp }))));
     expect(replay.runtime.cached).toBe(false);

@@ -115,8 +115,17 @@ export function roundTripPct(costs: CostModel, price = 1000, qty = 500): number 
  * Walk every scanned signal forward (needs its full holding period after the
  * signal). Buy-stops that never trade through are not trades.
  */
-export function replaySignals(scan: SignalScan, options: { costs: CostModel; lots: Record<string, number>; states: Map<number, MarketState> }): EvidenceTrade[] {
-  const { costs, lots, states } = options;
+export function replaySignals(
+  scan: SignalScan,
+  options: {
+    costs: CostModel;
+    lots: Record<string, number>;
+    /** Lot on the signal's session (point in time, in the bars' shares); takes the place of `lots` when given. */
+    lotOn?: (symbol: string, day: number) => number | null;
+    states: Map<number, MarketState>;
+  },
+): EvidenceTrade[] {
+  const { costs, lots, lotOn, states } = options;
   const stateDays = [...states.keys()].sort((a, b) => a - b);
   const out: EvidenceTrade[] = [];
   for (const [date, signals] of scan.byDate) {
@@ -145,7 +154,7 @@ export function replaySignals(scan: SignalScan, options: { costs: CostModel; lot
         exit,
         kind: result.kind,
         grossR: (exit - entry) / risk,
-        netR: netRMultiple({ entry, exit, risk, qty: tradeQty(entry, lots[signal.symbol]), costs }),
+        netR: netRMultiple({ entry, exit, risk, qty: tradeQty(entry, lotOn ? lotOn(signal.symbol, date) : lots[signal.symbol]), costs }),
       });
     }
   }
