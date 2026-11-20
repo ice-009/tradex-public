@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "./plan.css";
 import type { EvidenceResponse, ScreenerResponse, TradeDto, TradesResponse } from "@/contracts/api";
 import { formatPrice } from "@/core/format";
@@ -8,8 +8,10 @@ import { istParts } from "@/core/market/session";
 import type { Plan, PlanIdea } from "@/core/plan/builder";
 import { MIN_T, VERDICT_LABEL, bucketFor, signedR, type EvidenceBucket, type EvidenceTable, type MarketState } from "@/core/plan/evidence";
 import { exitShort, trailSessions } from "@/core/plan/instructions";
+import { isPlanPreview, stoppedWorking } from "@/core/plan/preview";
 import { EXIT_REASONS, realisedR, slippageR, type ExitReason } from "@/core/plan/journal";
 import { withLivePrice, type TradeTrack } from "@/core/plan/tracker";
+import { BTST_WINDOW } from "@/core/screener/btstAlerts";
 import { SCREENS, SCREEN_MAP } from "@/core/screener/screens";
 import type { LiveScreenRecord } from "@/core/screener/liveRecord";
 import type { RunStamp } from "@/core/repro/stamp";
@@ -177,12 +179,25 @@ function PlanSettings() {
 
 // ------------------------------------------------------------------ today's plan
 
+/** The time now, re-read every 30 s (the plan's wording changes at the close window). */
+function useNow(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
+}
+
 function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Plan | null; state: MarketState | null; evidence: Extract<EvidenceResponse, { status: "ready" }> | null; trades: TradesResponse | null; live: boolean; eodDate: number | null }) {
   const [showMore, setShowMore] = useState(false);
   const universe = useTerminal((s) => s.screener.universe);
   const evidenceStatus = usePlanFeed((feed) => feed.evidence?.status);
   const sized = plan?.ideas.length ?? 0;
   const riskBudget = plan?.riskBudget ?? 0;
+  const now = useNow();
+  const preview = isPlanPreview(live, now) && Boolean(plan && (plan.ideas.length || plan.unsized.length));
+  const stopped = evidence && plan ? stoppedWorking(evidence.table.screens, state, plan.eligible) : [];
   return (
     <section className="tx-plan-section">
       <div className="tx-plan-title">
@@ -197,6 +212,12 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
         <div className="tx-plan-warn">
           NIFTY is below its 200-day average. In this market most long setups lost money over the last five years, so only the ones that held up in it are listed
           {plan && !plan.eligible.length ? " — and none did." : "."}
+        </div>
+      )}
+      {preview && (
+        <div className="tx-plan-preview">
+          <b>Preview at live prices.</b> These setups were tested on closing prices, so the plan is final at {BTST_WINDOW.from / 60 | 0}:{String(BTST_WINDOW.from % 60).padStart(2, "0")} PM: take an idea only if it
+          still matches then. A stock that is already up a lot today can fade by the close and drop out.
         </div>
       )}
       {!evidence ? (
@@ -224,6 +245,12 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
         </ol>
       )}
       {plan && plan.unsized.length > 0 && <UnsizedList plan={plan} />}
+      {stopped.length > 0 && (
+        <p className="tx-scr-note" title="A screen joins the plan only while it made money in both the first 60% and the last 40% of the tested years, in this market state.">
+          Left out because they lost money lately (last 12 months):{" "}
+          {stopped.map((entry) => `${entry.name} ${signedR(entry.recentR)}`).join(", ")}. They come back once their recent trades recover.
+        </p>
+      )}
       {plan && plan.invalid.length > 0 && <InvalidList plan={plan} />}
       {plan && !live && eodDate && plan.ideas.length > 0 && (
         <p className="tx-scr-note">These matched at the close of {day(eodDate)}. During the session they are re-checked on live prices: take what still matches at 3:15–3:25 PM.</p>
@@ -344,6 +371,7 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
   const span = spanLabel(evidence.table);
   const live = liveLine(idea.screenId, evidence.live, trades);
   const { size } = idea;
+  const dayPct = tick?.chp ?? idea.row.changePct;
   const sizeText =
     size.status === "ok" ? `${size.lots} lot${size.lots === 1 ? "" : "s"}` : size.status === "too-big" ? "too big for your risk" : "no room under the leverage cap";
   const sizeTitle =
@@ -366,6 +394,15 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
             <span className="tx-dim tx-plan-ltp" title={idea.entry.kind === "buy-stop" ? "A buy-stop is an order for the next session: it fills only if the price trades up to it. Nothing is bought below it." : undefined}>
               now {formatPrice(tick.ltp)}
               {idea.entry.kind === "buy-stop" && tick.ltp < idea.entry.price ? ` · ${(((idea.entry.price - tick.ltp) / tick.ltp) * 100).toFixed(1)}% below the buy-stop` : ""}
+            </span>
+          )}
+          {Number.isFinite(dayPct) && (
+            <span
+              className={`tx-plan-day ${dayPct >= 0 ? "is-up" : "is-down"}`}
+              title={Math.abs(dayPct) >= 3 ? `Already ${dayPct >= 0 ? "up" : "down"} ${Math.abs(dayPct).toFixed(1)}% today. The tested trades bought at the close, after the whole day's move; before 3:10 PM the move can still fade and the setup drop out.` : "Change since yesterday's close."}
+            >
+              {dayPct >= 0 ? "+" : ""}
+              {dayPct.toFixed(1)}% today
             </span>
           )}
         </span>
