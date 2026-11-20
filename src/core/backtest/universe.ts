@@ -19,6 +19,12 @@ export interface MembershipSource {
   byDay: ReadonlyMap<number, ReadonlySet<string>>;
   /** Today's list, for sessions the bhavcopy doesn't cover. */
   today: readonly string[];
+  /**
+   * The list on a session as the point-in-time engine knows it (src/core/reference/pointInTime.ts:
+   * that day's file, or the one before a holiday or a missing file), null when unknown.
+   * Default: `byDay`'s own entry for the day.
+   */
+  listOn?: (day: number) => ReadonlySet<string> | null;
 }
 
 export interface PointInTimeUniverse {
@@ -27,13 +33,13 @@ export interface PointInTimeUniverse {
   isMember(symbol: string, date: number): boolean;
 }
 
-export function pointInTimeUniverse({ byDay, today }: MembershipSource): PointInTimeUniverse {
+export function pointInTimeUniverse({ byDay, today, listOn }: MembershipSource): PointInTimeUniverse {
   const current = new Set(today);
   const all = new Set(today);
   for (const members of byDay.values()) for (const symbol of members) all.add(symbol);
   return {
     symbols: [...all].sort(),
-    isMember: (symbol, date) => (byDay.get(date) ?? current).has(symbol),
+    isMember: (symbol, date) => ((listOn ? listOn(date) : byDay.get(date)) ?? current).has(symbol),
   };
 }
 
@@ -46,9 +52,9 @@ const dayLabel = (day: number) => {
  * One line for the backtest's notes: which list decided membership on how many
  * of the period's sessions, and which former members had no price history.
  */
-export function universeNote(params: { sessions: number[]; byDay: ReadonlyMap<number, ReadonlySet<string>>; noHistory: string[] }): string {
-  const { sessions, byDay, noHistory } = params;
-  const covered = sessions.filter((day) => byDay.has(day));
+export function universeNote(params: { sessions: number[]; byDay: ReadonlyMap<number, ReadonlySet<string>>; noHistory: string[]; listOn?: (day: number) => ReadonlySet<string> | null }): string {
+  const { sessions, byDay, noHistory, listOn } = params;
+  const covered = sessions.filter((day) => (listOn ? listOn(day) !== null : byDay.has(day)));
   if (!covered.length) {
     return "Universe: today's F&O list for every session, so stocks dropped from F&O during the period are missing and later additions are included (survivorship bias). The Market Data Hub has no F&O bhavcopy for these sessions, which is where the list of each day comes from.";
   }

@@ -29,7 +29,7 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
 | Engine | `src/core` | Indicators, patterns, screens, scoring, backtest, tick and futures maths, IST session rules, pacing against the broker budget. Pure functions: no I/O, no React, no Next. | `@/core` |
 | Contracts | `src/contracts/api.ts` | The JSON body each `/api` route returns. Types only. | `@/core` (types) |
 | Data engine | `src/server/data` | One pipeline for market data whatever the source: source adapters, routing with fallback, caches, and the live price stream. See below. | `@/core`, `@/contracts`, `@/server` |
-| Providers | `src/server/providers` | The Market Data Hub client (`hub/`) and what is built on it: the daily-bar store (`dailyBars`, `dailyStore`), reference data (`reference`: lots, ban list, results calendar), F&O data (`foData`: OI, membership), futures contracts (`futures`), universes; plus symbols, sample data and the trade-record database. | same |
+| Providers | `src/server/providers` | The Market Data Hub client (`hub/`) and what is built on it: the daily-bar store (`dailyBars`, `dailyStore`), reference data (`reference`: lots, ban list, results calendar; `referenceHistory`: their past values; `asOf`: the point-in-time door the screener, plan and backtests must use), F&O data (`foData`: OI, membership), futures contracts (`futures`), universes; plus symbols, sample data and the trade-record database. | same |
 | Services | `src/server/services` | One use case per file: load data from providers, run the engine, return a contract type. | same |
 | Routes | `src/app/api/**/route.ts` | `export const GET = authed(...)`: read params, call one service, `NextResponse.json`. No logic. | `@/server`, `@/contracts` |
 | Client data | `src/client` | `api.ts` (typed fetchers, the only place that knows URLs) plus feeds: `marketData` (history, quotes, live ticks), `screenerFeed`, `highLowFeed`, `lotsFeed`, `futuresFeed`, `usageFeed` (the hub's health and budget). | `@/core`, `@/contracts`, `@/client` |
@@ -75,7 +75,9 @@ Tradex fetches no market data itself. Everything — candles, quotes, live price
    /v1/fo/oi/day ─────────────────────────────▶ providers/foData.ts ─▶ the screener's OI tag
    /v1/fo/members?from&to ────────────────────▶ providers/foData.ts ─▶ point-in-time F&O list for backtests and evidence
    /v1/fo/contracts ──────────────────────────▶ providers/futures.ts ─▶ order ticket, Day High/Low futures segment
-   /v1/lots, /v1/fo/ban, /v1/results-calendar ▶ providers/reference.ts
+   /v1/lots, /v1/fo/ban, /v1/results-calendar ▶ providers/reference.ts ─┐
+   /v1/lots/history, /v1/fo/ban/history,                                ├▶ providers/asOf.ts ─▶ screener, plan, backtests
+   /v1/adjustments/batch, /v1/symbols/changes ▶ providers/referenceHistory.ts ┘   (the only door to reference data for them)
    /v1/universe/fno ──────────────────────────▶ providers/universe.ts (index lists are snapshots in data/universe)
    /v1/status ────────────────────────────────▶ providers/hub/index.ts ─▶ budget pacing, top bar, "Market data" panel
 ```
@@ -119,8 +121,36 @@ The screener, backtests, the plan's evidence and the trade journal read one stor
 ### F&O data (`providers/foData.ts`, `futures.ts`)
 
 - **Open interest** for the screener's tag: `/v1/fo/oi/day` (the newest stored trade day), cached 30 minutes and shown when it's at most a week old. Each row becomes a `FoDayRecord` and `oiFact` (`src/core/market/openInterest.ts`) gives the buildup class (sign of the near-month future's change × sign of the combined OI change) and OI change %. It is **information only and never scored**: over Oct 2025 – Nov 2026 neither the buildup classes nor the futures basis showed a tradeable edge after costs.
-- **Point-in-time F&O membership** for backtests and the plan's evidence: `/v1/fo/members?from&to` over the stored span (400 days per request), cached 6 hours. Days the hub has no F&O file for are absent and fall back to today's list (`src/core/backtest/universe.ts`).
+- **Point-in-time F&O membership** for backtests and the plan's evidence: `/v1/fo/members?from&to` over the stored span (400 days per request), cached 6 hours, read through `asOf` (below). A day without a file uses the file before it, up to a week back (holidays); further gaps are unknown and fall back to today's list (`src/core/backtest/universe.ts`).
 - **Futures contracts**: `/v1/fo/contracts?symbol=` lists the near and next month as hub tickers with their real expiries and the lot, cached until the near month expires. The order ticket picks the contract (`pickContract`: the near month unless it expires inside the holding period) and reads the basis from one quote of the stock and its future. The Day High/Low sweep loads the F&O list's contracts in the background, two at a time, and sweeps each stock's near-month future once its ticker is known. Right after an expiry the hub may list only one contract (as near) until the evening's file. Tradex never builds a contract name itself.
+
+### Point in time: `asOf` (`providers/asOf.ts`, `src/core/reference/pointInTime.ts`)
+
+The screener, the plan and the backtester read reference data only through one API, so every number can be asked "as it was known on day D":
+
+```ts
+const known = await asOf(day);                       // one day (today by default)
+const span = await asOfSpan(from, to, { symbols });  // every day of a span, one set of hub requests
+span.at(day)                                         // the same answer asOf(day) gives
+```
+
+Each answer is a `Known<T>`: `{ known: true, value, asOf, source }` or `{ known: false, reason, knownFrom }`. Where the hub keeps no history the answer is **unknown, with the reason** — never today's value passed off as that day's. A caller that wants today's value as a stand-in says so with `orElse(fact, fallback)` and says so in its output (the backtest and evidence notes count the sessions).
+
+| Field | Known on day D when | Otherwise |
+|---|---|---|
+| `foList` | the hub has NSE's F&O bhavcopy for D, or for a day up to a week before (holidays) | unknown (before the hub's archive, gaps) |
+| `lots` (as traded that day), `lotInTodayShares(s)` | D is on or after 8 Jul 2024 (NSE's F&O files carry the lot column from then; `/v1/lots/history`); today: NSE's lot file | unknown before 8 Jul 2024 — the backtest and evidence use today's lot there and say on how many sessions |
+| `ban` | the hub stored that trade date's list (`/v1/fo/ban/history`, from when the hub started downloading it); today: the newest list | unknown |
+| `results.reported` | results dated D−7…D, from the hub's calendar | unknown outside the span read |
+| `results.upcoming` | today only | unknown for past days: the hub doesn't store when a date was first announced |
+| `sectors` | indices with stored history by D (their first session ≤ D); the industry → index map is the hub's current one | — |
+| `industries`, `universe("nifty…")` | today only (snapshots) | unknown for past days; `universe("fno")` of a past day is that day's F&O list |
+| `ticker(s)` | today's ticker as named on D, from NSE's ticker changes (`/v1/symbols/changes`) | unknown if the hub can't answer |
+| `priceScale(s)` | split/bonus factors loaded (`/v1/adjustments/batch`): what a today-adjusted price is multiplied by to be adjusted only for actions with an ex-date on or before D (`adjustAsOf` re-expresses bars) | unknown |
+
+Lots and prices meet in `lotInTodayShares`: the daily bars are adjusted to today, so a lot of 250 before RELIANCE's 1:1 bonus (28 Oct 2024) is 500 of the bars' shares — the same notional as 250 shares at the price then.
+
+**The lint rule.** `src/core/screener`, `src/core/plan`, `src/core/backtest` and the services `screener`, `evidence`, `backtest`, `btstRecord`, `analyze` and `trades` may not import `providers/reference`, `providers/referenceHistory`, `foMembership`, `getUniverse`, `hubClient` or `HubClient` (ESLint `no-restricted-imports`, matched by regex so relative paths are caught too; `src/asOfOnly.test.ts` proves it). Other features (the results panel, the lots endpoint, the high/low sweep) may still read today's data directly.
 
 ### Broker budget
 
@@ -184,7 +214,7 @@ The **Plan** tab (the bottom panel's default) turns the screener into a short li
 | `tracker.ts` | Today's action for an open trade from the stored daily bars (server) with the live price laid over it (browser). |
 | `journal.ts` | Realised R, net R after charges, and slippage of your fills against the plan. |
 
-The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers the 5 years of daily bars the hub serves. Point-in-time F&O membership is used on the sessions the hub has an F&O list for.
+The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers the 5 years of daily bars the hub serves. Point-in-time F&O membership is used on the sessions the hub has an F&O list for, and each trade's costs use its session's lot where known (both through `asOf`).
 
 The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later). Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`.
 
@@ -213,8 +243,8 @@ The **Backtest** tab in the bottom dock replays the screens over the stored dail
 
 Every backtest result and the plan's evidence table carry a **run stamp** (`RunStamp` in `stamp.ts`):
 
-- **Data:** a content hash of the inputs the run actually read. It has one part for each input: `bars` (every symbol's and NIFTY's daily bars, hashed per series), `membership` (the point-in-time F&O lists up to the last session), `lots` (lot sizes of the symbols used) and `universe` (today's list). It also records the symbols, the first and last session, and, for reading only, the hub's version and bhavcopy dates.
-- **Code:** the git commit (`TRADEX_COMMIT`, set by `next.config.ts` at build time; `-dirty` with uncommitted changes, `dev` without git) and the engine version (`backtest/6`, `evidence/2`).
+- **Data:** a content hash of the inputs the run actually read. It has one part for each input: `bars` (every symbol's and NIFTY's daily bars, hashed per series), `membership` (the point-in-time F&O lists up to the last session), `lots` (today's lot sizes of the symbols used), `lotHistory` (their lot changes and split/bonus factors, when sized point in time) and `universe` (today's list). It also records the symbols, the first and last session, and, for reading only, the hub's version and bhavcopy dates.
+- **Code:** the git commit (`TRADEX_COMMIT`, set by `next.config.ts` at build time; `-dirty` with uncommitted changes, `dev` without git) and the engine version (`backtest/7`, `evidence/3`).
 - **Parameters:** the validated request.
 - **Hashes:** `hash` covers the inputs and `resultHash` covers the result. Both are SHA-256 (`sha256.ts`, plain TypeScript) over canonical JSON (`canonical.ts`: sorted keys, integers exact, other numbers to 12 significant digits).
 
@@ -278,7 +308,7 @@ Further warnings flag one trade making most of the profit, most signals being sk
 - **Cash prices stand in for futures.** The futures basis (usually a small premium that decays to expiry) is ignored, as are rollover costs and slippage at monthly expiry. Positions held over an expiry would really be rolled: two more orders and a calendar spread.
 - **Daily bars only.** Inside a session the order of high and low is unknown; that's why a bar touching both stop and target counts as the stop. Intraday entries and trailing stops can't be modelled.
 - **Up to five years of history.** The hub serves about 5 years of daily bars (the broker's limit). Most screens need 60–250 sessions of warm-up. The panel shows the sessions, signals and trades behind every result.
-- **Lot sizes are today's**, applied to the whole period; NSE revises them twice a year.
+- **Lot sizes before 8 Jul 2024 are today's.** From then each signal is sized with its session's lot (`src/core/backtest/lots.ts`, through `asOf`); NSE's older F&O files don't carry lot sizes, so earlier sessions use today's lot, and the notes say on how many sessions.
 - **Delivery-based screens** need NSE delivery data, which exists only for completed sessions in the bhavcopy.
 
 The daily bars come from the hub's `/v1/candles/batch`; a symbol the hub doesn't hold yet is downloaded by the hub in the background, and the panel says so until it arrives.

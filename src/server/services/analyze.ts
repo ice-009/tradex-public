@@ -8,7 +8,7 @@ import { chartPlan } from "@/core/screener/screens";
 import { warningsFor } from "@/core/screener/warnings";
 import type { DailyBar } from "@/core/types";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { getUniverse } from "@/server/providers/universe";
+import { asOf, orElse } from "@/server/providers/asOf";
 
 export const MAX_ANALYZE_SYMBOLS = 20;
 /** Sessions of history needed for a meaningful read. */
@@ -17,7 +17,8 @@ const MIN_BARS = 60;
 /** Full read of up to 20 symbols for the Compare view: facts for the score and a chart-based plan. */
 export async function analyzeSymbols(symbols: string[]): Promise<AnalyzedStock[]> {
   if (!symbols.length) return [];
-  const [nifty500, fno] = await Promise.all([getUniverse("nifty500"), getUniverse("fno")]);
+  const known = await asOf();
+  const [nifty500, fno] = [orElse(known.universe("nifty500"), []), orElse(known.universe("fno"), [])];
   const members = new Map([...nifty500, ...fno].map((member) => [member.symbol, member]));
   // RS ranks against everything cached, so a lone symbol still gets a fair percentile.
   const peers = [...members.keys()];

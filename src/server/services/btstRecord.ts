@@ -9,7 +9,7 @@ import { SCREENS, type ScreenerRow } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
 import { readDay, readTrades, readUnsettled, watchedDays, writeEntries, writeSettlements } from "@/server/providers/btstRecord";
 import { screenerStore } from "@/server/providers/dailyStore";
-import { getLotSizes } from "@/server/providers/reference";
+import { asOf, orElse } from "@/server/providers/asOf";
 import { log } from "@/server/log";
 
 // The BTST live record (src/core/screener/liveRecord.ts): written from the
@@ -63,7 +63,8 @@ async function settle(now: number, live?: Map<string, DailyBar>) {
   // Lot sizes only when something can settle (the first call may ask the hub for them).
   const ready = open.filter((entry) => barsFor(entry.symbol).some((bar) => bar.t > entry.day));
   if (!ready.length) return;
-  const { lots } = await getLotSizes();
+  // Lots through the point-in-time engine (the open entries are from the last few sessions; today's lot file).
+  const lots = orElse((await asOf()).lots, {});
   const settled: Array<{ entry: LiveEntry; settled: LiveSettlement; qty: number; costPreset: string }> = [];
   for (const entry of ready) {
     const qty = tradeQty(entry.entryPrice, lots[entry.symbol]);
