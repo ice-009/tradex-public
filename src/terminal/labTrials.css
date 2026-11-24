@@ -1,0 +1,19 @@
+/* The Signal Lab's trial record and deflated Sharpe verdict (LabTrials.tsx). */
+
+.tx-trials { display: flex; flex-direction: column; gap: 8px; font-size: 12px; line-height: 1.5; }
+.tx-trials-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; color: var(--text-muted); }
+.tx-trials-title { color: var(--foreground); font-size: 12.5px; font-weight: 600; }
+.tx-trials-stat b { color: var(--foreground); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tx-trials-verdict { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-md); color: var(--foreground); }
+.tx-trials-verdict.is-pass { border-color: var(--pos-border); background: var(--pos-soft); }
+.tx-trials-verdict.is-fail { border-color: var(--neg-border); background: var(--neg-soft); }
+.tx-trials-verdict.is-error { border-color: var(--warn-border); background: var(--warn-soft); }
+.tx-trials-badge { margin-right: 8px; font-weight: 600; }
+.tx-trials-wrap { overflow-x: auto; }
+.tx-trials-table { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.tx-trials-table th, .tx-trials-table td { height: 26px; padding: 0 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border-subtle); }
+.tx-trials-table thead th { color: var(--text-subtle); font-weight: 600; }
+.tx-trials-table .is-left { max-width: 320px; overflow: hidden; text-align: left; text-overflow: ellipsis; }
+.tx-trials-table .is-pos { color: var(--pos); }
+.tx-trials-table .is-neg { color: var(--neg); }
+.tx-trials-table code { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
