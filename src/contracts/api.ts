@@ -14,6 +14,7 @@ import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
+import type { IdeaTrialSummary } from "@/core/lab/trials";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
@@ -199,6 +200,15 @@ export interface LiveRecordResponse {
   /** The cost model behind the net returns. */
   costs: { preset: CostPresetId; label: string };
 }
+
+// ------------------------------------------------------------------ GET /api/lab/trials?idea=
+
+/**
+ * Every variant the Signal Lab has tried for an idea, the Sharpe ratio luck alone
+ * would give the best of them, and each one's deflated Sharpe ratio and
+ * promotion verdict (src/core/lab/trials.ts). Ratios that can't be computed are null.
+ */
+export type LabTrialsResponse = IdeaTrialSummary;
 
 // ------------------------------------------------------------------ GET /api/plan/evidence
 
