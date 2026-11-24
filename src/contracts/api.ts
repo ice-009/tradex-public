@@ -14,6 +14,7 @@ import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
+import type { LabReport } from "@/core/lab/engine";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
@@ -363,6 +364,38 @@ export type BacktestResponse =
       costs: CostModel;
       runtime: { scanMs: number; simMs: number; scanCached: boolean; cached: boolean };
       /** What the run was computed from (data hash, commit, parameters) and the hash of its result. POST it to /api/backtest/replay to run it again. */
+      stamp: RunStamp;
+    }
+  | { status: "error"; error: string };
+
+// ------------------------------------------------------------------ POST /api/lab/run (the Signal Lab)
+
+/** A Signal Lab run: one signal over a universe and period (src/core/lab). */
+export interface LabRequest {
+  universe: string;
+  /** A signal id from src/core/lab/signals.ts (`momentum-12-1`, `screen:pos-52w-high`, …). */
+  signal: string;
+  /** The signal's parameters (unknown keys dropped, values clamped to the signal's bounds). */
+  params: Record<string, number>;
+  /** Formation days (day keys); null = from the first session with a value / to the newest. Before the store's 5 years: read from the hub's archive (opt-in, slower). */
+  from: number | null;
+  to: number | null;
+  /** Forward horizons in sessions (1–63). */
+  horizons: number[];
+  /** Buckets (2–10; 5 = quintiles). */
+  quantiles: number;
+  costPreset: CostPresetId;
+}
+
+export type LabResponse =
+  | {
+      status: "ready";
+      error?: undefined;
+      report: LabReport;
+      /** The cost preset behind the net numbers. */
+      costs: { preset: CostPresetId; label: string };
+      runtime: { loadMs: number; signalMs: number; labMs: number; scanCached: boolean; cached: boolean };
+      /** What the run was computed from and the hash of the report. POST it to /api/lab/replay to run it again. */
       stamp: RunStamp;
     }
   | { status: "error"; error: string };

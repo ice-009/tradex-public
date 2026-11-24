@@ -213,42 +213,37 @@ function barsFor(symbols: string[], to: number | null): Map<string, DailyBar[]> 
   return bars;
 }
 
-interface ScanRun extends Scanned {
-  key: string;
-  cached: boolean;
-  ms: number;
+/** What a run reads: the scanned symbols' bars (and the benchmark's), with the point-in-time F&O list. */
+interface Loaded {
+  id: string;
+  /** Today's universe list. */
+  symbols: string[];
+  /** Symbols with bars, sorted (so nothing depends on the list's order). */
+  scanned: string[];
+  bars: Map<string, DailyBar[]>;
   membership: Membership | null;
+  /** A long run's notes (renames, the benchmark's stand-in, gaps); null for a run on the store. */
+  notes: LongNotes | null;
+  /** Identifies the bars read (the scan cache's key); "replay" for a pinned run. */
+  key: string;
 }
 
-async function scanFor(universe: string, pin: ReplayPin | null): Promise<ScanRun> {
+/** A run on the store: every covered symbol's bars (a replay: the stamped symbols that are still in the universe, up to the stamped last session). */
+async function loadStored(universe: string, pin: ReplayPin | null): Promise<Loaded> {
   const { id, symbols, covered, scanned, membership } = await coveredSymbols(universe, { window: pin?.membership });
   if (!covered.length) throw new BacktestError(`No daily bars for this universe yet: they are read from the Market Data Hub. ${screenerStore.progress.message || "Try again in a moment."}`);
-  const started = Date.now();
   if (pin) {
-    // A replay: the stamped symbols (that are still in the universe), up to the stamped last session, scanned afresh.
     const allowed = new Set(pin.symbols);
     const replayed = scanned.filter((symbol) => allowed.has(symbol));
-    const result = await scanAndHash({ symbols: replayed, bars: barsFor(replayed, pin.to), membership, universe: symbols });
-    return { ...result, key: "replay", cached: false, ms: Date.now() - started, membership };
+    return { id, symbols, scanned: replayed, bars: barsFor(replayed, pin.to), membership, notes: null, key: "replay" };
   }
   const lastSession = Math.max(...scanned.map((symbol) => screenerStore.getBars(symbol).at(-1)?.t ?? 0));
   const key = `${id}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
-  let pending = scans.get(key);
-  const cached = Boolean(pending);
-  if (!pending) {
-    // Concurrent requests share one scan; older scans of this universe are dropped.
-    pending = scanAndHash({ symbols: scanned, bars: barsFor(scanned, null), membership, universe: symbols });
-    for (const stale of [...scans.keys()].filter((entry) => entry.startsWith(`${id}:`))) scans.delete(stale);
-    scans.set(key, pending);
-    pending.catch(() => scans.delete(key));
-  }
-  const { scan, data } = await pending;
-  const ms = Date.now() - started;
-  if (!cached) log.info("Backtest scan", { universe: id, stocks: scan.symbols, sessions: scan.dates.length, signals: scan.signals, ms });
-  return { scan, data, key, cached, ms, membership };
+  return { id, symbols, scanned, bars: barsFor(scanned, null), membership, notes: null, key };
 }
 
-class BacktestError extends Error {}
+/** A run that cannot go ahead (no data for the universe or period): its message is the answer. */
+export class BacktestError extends Error {}
 
 /** Long scans kept at once: each holds its own bars and signals (30 years of the F&O list: ~0.8 GB while it runs). */
 const MAX_LONG_SCANS = 1;
@@ -256,11 +251,11 @@ const MAX_LONG_SCANS = 1;
 const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
 
 /**
- * A long run's scan: bars from the hub from WARMUP_DAYS before the period to
- * its end (a replay: to the stamped last session, for the stamped symbols).
- * The F&O list is point-in-time over the same stretch, through asOf.
+ * A long run's bars: from the hub, from WARMUP_DAYS before the period to its
+ * end (a replay: to the stamped last session, for the stamped symbols). The F&O
+ * list is point-in-time over the same stretch, through asOf.
  */
-async function longScanFor(request: BacktestRequest, pin: ReplayPin | null): Promise<ScanRun & { notes: LongNotes }> {
+async function loadLong(request: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null): Promise<Loaded & { notes: LongNotes }> {
   const id = parseUniverse(request.universe);
   const today = istParts().day;
   const to = Math.min(pin?.to ?? request.to ?? today, today);
@@ -278,7 +273,6 @@ async function longScanFor(request: BacktestRequest, pin: ReplayPin | null): Pro
     const allowed = new Set(pin.symbols);
     wanted = wanted.filter((symbol) => allowed.has(symbol));
   }
-  const started = Date.now();
   const set = await longBars.load([...wanted, BENCHMARK, BENCHMARK_STAND_IN], readFrom, to);
   const benchmark = spliceBenchmark(set.bars.get(BENCHMARK) ?? [], set.bars.get(BENCHMARK_STAND_IN) ?? []);
   const scanned = wanted.filter((symbol) => set.bars.has(symbol)).sort();
@@ -290,32 +284,137 @@ async function longScanFor(request: BacktestRequest, pin: ReplayPin | null): Pro
     ? { byDay, listOn, isMember: pit.isMember, noHistory: pit.symbols.filter((symbol) => !current.has(symbol) && !set.bars.has(symbol)), key: `pit${byDay.size}-${Math.max(...byDay.keys())}`, window }
     : null;
   const notes: LongNotes = { from: readFrom, to, set, standInUntil: benchmark.standInUntil };
-  if (pin) {
-    const result = await scanAndHash({ symbols: scanned, bars, membership, universe: symbols });
-    return { ...result, key: "replay", cached: false, ms: Date.now() - started, membership, notes };
-  }
   const lastSession = Math.max(...scanned.map((symbol) => bars.get(symbol)!.at(-1)?.t ?? 0));
-  const key = `long:${id}:${readFrom}:${to}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
+  const key = pin ? "replay" : `long:${id}:${readFrom}:${to}:${lastSession}:${scanned.length}:${membership?.key ?? "today"}:${BACKTEST_VERSION}`;
+  return { id, symbols, scanned, bars, membership, notes, key };
+}
+
+/** The bars a period needs: the store's, or a long period's from the hub. */
+const load = (period: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null): Promise<Loaded> =>
+  isLongRange(period.from, istParts().day) ? loadLong(period, pin) : loadStored(period.universe, pin);
+
+interface ScanRun extends Scanned {
+  key: string;
+  cached: boolean;
+  ms: number;
+  membership: Membership | null;
+  notes: LongNotes | null;
+}
+
+/**
+ * The signal scan of a period's bars. Concurrent requests share one scan, cached
+ * by the bars it read: one per universe on the store (older ones of the universe
+ * are dropped) and MAX_LONG_SCANS long ones. A replay is scanned afresh.
+ */
+async function scanRun(period: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null): Promise<ScanRun> {
+  const started = Date.now();
+  const loaded = await load(period, pin);
+  const { id, key, membership, notes } = loaded;
+  const input = { symbols: loaded.scanned, bars: loaded.bars, membership, universe: loaded.symbols };
+  if (pin) return { ...(await scanAndHash(input)), key, cached: false, ms: Date.now() - started, membership, notes };
   let pending = scans.get(key);
   const cached = Boolean(pending);
   if (!pending) {
-    pending = scanAndHash({ symbols: scanned, bars, membership, universe: symbols });
-    const older = [...scans.keys()].filter((entry) => entry.startsWith("long:"));
-    for (const stale of older.slice(0, Math.max(0, older.length - MAX_LONG_SCANS + 1))) scans.delete(stale);
+    pending = scanAndHash(input);
+    if (notes) {
+      const older = [...scans.keys()].filter((entry) => entry.startsWith("long:"));
+      for (const stale of older.slice(0, Math.max(0, older.length - MAX_LONG_SCANS + 1))) scans.delete(stale);
+    } else for (const stale of [...scans.keys()].filter((entry) => entry.startsWith(`${id}:`))) scans.delete(stale);
     scans.set(key, pending);
     pending.catch(() => scans.delete(key));
   }
   const { scan, data } = await pending;
   const ms = Date.now() - started;
-  if (!cached) log.info("Backtest scan (long period)", { universe: id, from: isoDay(readFrom), to: isoDay(to), stocks: scan.symbols, sessions: scan.dates.length, signals: scan.signals, ms });
+  if (!cached) {
+    const counts = { stocks: scan.symbols, sessions: scan.dates.length, signals: scan.signals, ms };
+    if (notes) log.info("Backtest scan (long period)", { universe: id, from: isoDay(notes.from), to: isoDay(notes.to), ...counts });
+    else log.info("Backtest scan", { universe: id, ...counts });
+  }
   return { scan, data, key, cached, ms, membership, notes };
+}
+
+// ------------------------------------------------------------------ research data (the Signal Lab)
+
+/** A period's bars and point-in-time F&O list, as a backtest of it reads them (used by services/lab.ts). */
+export interface ResearchData {
+  universe: string;
+  /** Symbols with bars, sorted; former F&O members included where their history is held. */
+  symbols: string[];
+  /** Every symbol's bars, and the benchmark's under BENCHMARK. */
+  bars: Map<string, DailyBar[]>;
+  benchmark: DailyBar[];
+  /** Trading calendar: the union of the symbols' sessions, oldest first. */
+  dates: number[];
+  isMember: ((symbol: string, day: number) => boolean) | null;
+  /** Hash of the bars, F&O list and universe read: the run stamp's data. */
+  data: DataStamp;
+  /** Every screen's signals over the bars (the backtester's cached scan), when asked for. */
+  scan: SignalScan | null;
+  scanCached: boolean;
+  /** For the report: a long period's joins and gaps. */
+  warnings: string[];
+  /** Which F&O list decided membership on the given sessions (F&O universe only). */
+  universeNote: (sessions: number[]) => string | null;
+}
+
+/**
+ * The bars a backtest of `period` reads — the store's 5 years, or the hub's
+ * archive for a period reaching further back — with the point-in-time F&O list
+ * (former members included) and the data stamp. With `scan`, also the screens'
+ * signal scan, shared with the backtester's cache.
+ */
+export async function researchData(period: { universe: string; from: number | null; to: number | null }, pin: ReplayPin | null, options: { scan: boolean }): Promise<ResearchData> {
+  let bars: Map<string, DailyBar[]>;
+  let symbols: string[];
+  let data: DataStamp;
+  let scan: SignalScan | null = null;
+  let scanCached = false;
+  let membership: Membership | null;
+  let notes: LongNotes | null;
+  if (options.scan) {
+    const run = await scanRun(period, pin);
+    ({ scan, data, membership, notes } = run);
+    scanCached = run.cached;
+    symbols = [...run.scan.series.keys()];
+    bars = new Map([...run.scan.series].map(([symbol, series]) => [symbol, series.bars]));
+    bars.set(BENCHMARK, run.scan.benchmark);
+  } else {
+    const loaded = await load(period, pin);
+    ({ bars, membership, notes } = loaded);
+    symbols = loaded.scanned;
+    data = await hashDataset({
+      bars,
+      benchmark: BENCHMARK,
+      membership: membership?.byDay ?? null,
+      membershipWindow: membership?.window ?? null,
+      universe: loaded.symbols,
+      hub: hubVersion(),
+      cache: barHashes,
+      pause: yieldToEventLoop,
+    });
+  }
+  const dates = [...new Set(symbols.flatMap((symbol) => (bars.get(symbol) ?? []).map((bar) => bar.t)))].sort((a, b) => a - b);
+  const id = parseUniverse(period.universe);
+  return {
+    universe: id,
+    symbols,
+    bars,
+    benchmark: bars.get(BENCHMARK) ?? [],
+    dates,
+    isMember: membership?.isMember ?? null,
+    data,
+    scan,
+    scanCached,
+    warnings: notes ? longWarnings(notes, symbols.length) : [],
+    universeNote: (sessions) =>
+      id === "fno" ? universeNote({ sessions, byDay: membership?.byDay ?? new Map(), listOn: membership?.listOn, noHistory: membership?.noHistory ?? [] }) : null,
+  };
 }
 
 async function execute(request: BacktestRequest, pin: ReplayPin | null): Promise<BacktestResponse> {
   if (!request.screenIds.length) return { status: "error", error: "Pick at least one strategy." };
   try {
-    const long = isLongRange(request.from, istParts().day) ? await longScanFor(request, pin) : null;
-    const { scan, data: scanData, key: scanKey, cached: scanCached, ms: scanMs, membership } = long ?? (await scanFor(request.universe, pin));
+    const { scan, data: scanData, key: scanKey, cached: scanCached, ms: scanMs, membership, notes: longNotes } = await scanRun(request, pin);
     const preset = COST_PRESETS[request.costPreset].model;
     const costs: CostModel = request.slippage ? { ...preset, slippage: request.slippage } : preset;
 
@@ -358,7 +457,7 @@ async function execute(request: BacktestRequest, pin: ReplayPin | null): Promise
       oosFraction: request.oosFraction,
     });
     if (lotNote) result.warnings.unshift(lotNote);
-    if (long) result.warnings.unshift(...longWarnings(long.notes, scan.symbols));
+    if (longNotes) result.warnings.unshift(...longWarnings(longNotes, scan.symbols));
     if (pitLots) {
       const { from, to } = result.period;
       result.warnings.push(pitLots.note(scan.dates.filter((day) => day >= from && day <= to)));
