@@ -16,7 +16,8 @@
     "e2e:docker": "bash e2e/docker.sh",
     "perf": "node perf/run.mjs",
     "db:setup": "prisma db push",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "lab": "node scripts/lab.mjs"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.10.1",

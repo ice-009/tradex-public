@@ -20,6 +20,8 @@ import type {
   EvidenceReplayResponse,
   EvidenceResponse,
   HighLowResponse,
+  LabRequest,
+  LabResponse,
   LabTrialsResponse,
   LiveRecordResponse,
   LotsResponse,
@@ -134,6 +136,12 @@ export const api = {
 
   /** "Re-run this": run a stamped backtest again from scratch (no cached scan or result). */
   replayBacktest: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<BacktestResponse>("/api/backtest/replay", body, signal),
+
+  /** Test a signal in the Signal Lab (a screen signal's first run scans every stock's history: several seconds). */
+  lab: (request: LabRequest, signal?: AbortSignal) => postStatusJson<LabResponse>("/api/lab/run", request, signal),
+
+  /** "Re-run this": run a stamped Lab run again from scratch. */
+  replayLab: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<LabResponse>("/api/lab/replay", body, signal),
 
   analyze: (symbols: string[]) => getJson<AnalyzeResponse>("/api/analyze", { symbols: csv(symbols) }),
 

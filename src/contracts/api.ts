@@ -14,6 +14,7 @@ import type { HLEvent } from "@/core/scanner/highLow";
 import type { TrackReplay } from "@/core/screener/backtest";
 import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
+import type { LabReport } from "@/core/lab/engine";
 import type { IdeaTrialSummary } from "@/core/lab/trials";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
@@ -376,6 +377,50 @@ export type BacktestResponse =
       stamp: RunStamp;
     }
   | { status: "error"; error: string };
+
+// ------------------------------------------------------------------ POST /api/lab/run (the Signal Lab)
+
+/** A Signal Lab run: one signal over a universe and period (src/core/lab). */
+export interface LabRequest {
+  universe: string;
+  /** A signal id from src/core/lab/signals.ts (`momentum-12-1`, `screen:pos-52w-high`, …). */
+  signal: string;
+  /** The signal's parameters (unknown keys dropped, values clamped to the signal's bounds). */
+  params: Record<string, number>;
+  /** Formation days (day keys); null = from the first session with a value / to the newest. Before the store's 5 years: read from the hub's archive (opt-in, slower). */
+  from: number | null;
+  to: number | null;
+  /** Forward horizons in sessions (1–63). */
+  horizons: number[];
+  /** Buckets (2–10; 5 = quintiles). */
+  quantiles: number;
+  costPreset: CostPresetId;
+}
+
+export type LabResponse =
+  | {
+      status: "ready";
+      error?: undefined;
+      report: LabReport;
+      /** The cost preset behind the net numbers. */
+      costs: { preset: CostPresetId; label: string };
+      runtime: { loadMs: number; signalMs: number; labMs: number; scanCached: boolean; cached: boolean };
+      /** What the run was computed from and the hash of the report. POST it to /api/lab/replay to run it again. */
+      stamp: RunStamp;
+      /** The run's trials in the multiple-testing record (#24); GET /api/lab/trials?idea= for the deflated Sharpe ratios. */
+      trials: LabTrialRecord;
+    }
+  | { status: "error"; error: string };
+
+/** What a Lab run added to the trial record: one trial per horizon of the idea (the signal). */
+export interface LabTrialRecord {
+  ideaId: string;
+  recorded: number;
+  /** Horizons not recorded (too few observations, no variance) and why. */
+  skipped: Array<{ horizon: number; reason: string }>;
+  /** The record couldn't be written: the run's trials are NOT counted. */
+  error: string | null;
+}
 
 // ------------------------------------------------------------------ GET /api/analyze?symbols=A,B
 
