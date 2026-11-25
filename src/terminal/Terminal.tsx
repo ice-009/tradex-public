@@ -18,6 +18,7 @@ import { QualityAlertWatcher } from "./QualityAlerts";
 import { BtstAlertWatcher } from "./ScreenerAlerts";
 import { HighLowPanel } from "./HighLowPanel";
 import { BacktestPanel } from "./BacktestPanel";
+import { LabPanel } from "./LabPanel";
 import { PlanPanel } from "./PlanPanel";
 import { usePlanPolling } from "@/client/planFeed";
 import { useHighLowPolling } from "@/client/highLowFeed";
@@ -168,7 +169,7 @@ function Workspace() {
           <div className={`tx-center ${screenerOpen && screenerMax ? "is-max" : ""}`}>
             <ChartGrid layout={layout} cellCount={cellCount} activeCell={activeCell} />
             <LayoutGuide />
-            {screenerOpen && (screenerView === "compare" ? <ComparePanel /> : screenerView === "highlow" ? <HighLowPanel /> : screenerView === "backtest" ? <BacktestPanel /> : screenerView === "plan" ? <PlanPanel /> : <ScreenerPanel />)}
+            {screenerOpen && (screenerView === "compare" ? <ComparePanel /> : screenerView === "highlow" ? <HighLowPanel /> : screenerView === "backtest" ? <BacktestPanel /> : screenerView === "lab" ? <LabPanel /> : screenerView === "plan" ? <PlanPanel /> : <ScreenerPanel />)}
             <BottomDock />
           </div>
           {watchlistOpen && <Watchlist />}

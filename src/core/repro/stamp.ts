@@ -14,7 +14,7 @@ import { Sha256, sha256 } from "./sha256";
 
 export const STAMP_SCHEMA = 1;
 
-export type RunKind = "backtest" | "evidence";
+export type RunKind = "backtest" | "evidence" | "lab";
 
 export interface CodeVersion {
   /** Git commit the server was built from; "-dirty" when built with uncommitted changes, "dev" when unknown. */

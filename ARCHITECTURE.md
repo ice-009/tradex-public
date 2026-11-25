@@ -322,3 +322,41 @@ Further warnings flag one trade making most of the profit, most signals being sk
 - **Delivery-based screens** need NSE delivery data, which exists only for completed sessions in the bhavcopy.
 
 The daily bars come from the hub's `/v1/candles/batch`; a symbol the hub doesn't hold yet is downloaded by the hub in the background, and the panel says so until it arrives.
+
+## Signal Lab (`src/core/lab`)
+
+The **Lab** tab in the bottom dock (and `npm run lab`) is a test bench for any signal: one number per stock per day. Every idea has to show an edge on Tradex's own data, net of costs and after counting how many variants were tried, before it reaches the score.
+
+```
+ researchData (services/backtest.ts)   the bars a backtest of the period reads: the store's 5 years, or the hub's
+        │                              archive back to 1994 (opt-in); point-in-time F&O list, former members included;
+        │                              the data stamp; for screen signals, the backtester's cached signal scan
+        ▼
+ signals.ts   the signal's value per (day, stock)       built-ins + every screen as "matched vs the rest" and "score among matches"
+        ▼
+ engine.ts runLab()   rank → forward returns → spreads, splits, decay, turnover      ~0.5 s for 220 stocks × 5 years
+        ▼
+ LabReport ── run stamp (kind "lab") ── trial record (#24: trialInputs.ts → services/labTrials.ts)
+        ▼
+ POST /api/lab/run → LabPanel.tsx / LabResults.tsx          scripts/lab.ts → the same report as text (format.ts)
+```
+
+| Step | Rule |
+|---|---|
+| Universe | Each formation day: stocks on that day's F&O list (via `asOf`), traded that day, with a value. Days with fewer than 20 are skipped. |
+| Ranking | Into quintiles by value (Q1 lowest, Q5 highest; `quantiles.ts`). Ties share a bucket; a signal with no more distinct values than buckets (a screen's 1/0) is spread by value, so "matched" is always Q5 and "the rest" Q1. |
+| Forward returns | close(t + h) / close(t) − 1 on the stock's own bars, h = 1, 5, 10, 21 (any of 1–63). A stock whose bars stop before the data's (delisted, merged) is closed at its last close. A window holding a session that moved more than ±50% close to close is a data error (a missed split or bonus) and is left out; the report counts them. |
+| Costs | A futures round trip per position (`costs.ts` presets, ~₹5 lakh position): ~0.17% with the 2026 rates. The long–short spread pays two. "Net @ turnover" charges only the stocks replaced at each h-session rebalance. |
+| Spread and t | Q5 − Q1 mean per day; t-stats are Newey–West with lag h − 1, because a new h-session window starts every day. IC: daily rank correlation of value and return. |
+| Splits | NIFTY above / below its 200-day average on the formation day (`marketStates`), and the evidence's first 60% / last 40% of days (`splitDay`). **Edge** = the evidence's PASS rule on the net spread: > 0 in both parts and t > 2. |
+| Decay | The spread at every horizon 1–21, and of each session alone. |
+| Turnover | Share of each bucket (and the long and short legs) not in it h sessions earlier. |
+| Trials | Each run records one trial per horizon (idea = the signal, variant = its parameters): the net spread's Sharpe on every h-th day (non-overlapping, 252 ÷ h a year), its length, skewness and kurtosis, for the deflated Sharpe ratio. |
+
+**Adding a signal** is one entry in `BUILT_IN_SIGNALS` (`src/core/lab/signals.ts`); the API, CLI and panel list it automatically.
+
+```bash
+npm run lab -- --list
+npm run lab -- --signal momentum-12-1 --from 2021-01-01
+npm run lab -- --signal screen:pos-52w-high --horizons 1,5,10,21 --json out.json
+```

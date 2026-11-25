@@ -1,0 +1,23 @@
+/* ============================================================
+   Signal Lab panel (src/terminal/LabPanel.tsx, LabResults.tsx).
+   Builds on backtest.css (form, cards, tables); theme tokens from globals.css.
+   ============================================================ */
+
+.tx-lab-seg { flex-wrap: wrap; }
+.tx-lab-seg button { flex: 1 0 auto; }
+.tx-lab-horizons { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0 4px; }
+.tx-lab-horizons .tx-bt-check { padding-left: 2px; }
+.tx-lab-params { margin-top: 6px; }
+
+.tx-lab-wrap { overflow-x: auto; }
+.tx-lab-table td.is-pos { color: var(--pos); }
+.tx-lab-table td.is-neg { color: var(--neg); }
+.tx-lab-table .tx-lab-strong { font-weight: 700; color: var(--foreground); }
+.tx-lab-table thead th[colspan] { text-align: center; }
+
+.tx-lab-decay svg { overflow: visible; }
+.tx-lab-axis { stroke: var(--border); stroke-width: 1; }
+.tx-lab-tick { fill: var(--text-subtle); font-size: 10px; font-variant-numeric: tabular-nums; }
+.tx-lab-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.tx-lab-bar.is-pos { fill: var(--pos); opacity: 0.55; }
+.tx-lab-bar.is-neg { fill: var(--neg); opacity: 0.55; }
