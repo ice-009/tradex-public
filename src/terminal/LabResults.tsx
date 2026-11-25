@@ -20,6 +20,9 @@ const replay =
     return answer.status === "error" ? { error: answer.error } : { stamp: answer.stamp, result: answer.report };
   };
 
+/** Buckets some stock fell in (a binary signal uses only Q1 and the top one). */
+const usedBuckets = (report: LabReport) => Array.from({ length: report.quantiles }, (_, b) => b).filter((b) => (report.byHorizon[0]?.quantiles[b]?.stocks ?? 0) > 0);
+
 const tone = (value: number | null | undefined) => (value === null || value === undefined || !Number.isFinite(value) || value === 0 ? "" : value > 0 ? "is-pos" : "is-neg");
 /** A t-stat beyond ±2 is shown bold. */
 const tCell = (t: number | null) => <td className={Math.abs(t ?? 0) >= 2 ? "tx-lab-strong" : ""}>{num(t)}</td>;
@@ -159,7 +162,7 @@ export function LabResults({ data }: { data: Ready }) {
                 <th className="is-left">Rebalance</th>
                 <th>Long</th>
                 <th>Short</th>
-                {Array.from({ length: report.quantiles }, (_, b) => (
+                {usedBuckets(report).map((b) => (
                   <th key={b}>Q{b + 1}</th>
                 ))}
               </tr>
@@ -170,8 +173,8 @@ export function LabResults({ data }: { data: Ready }) {
                   <th className="is-left">{label}</th>
                   <td>{share(turnover.long)}</td>
                   <td>{share(turnover.short)}</td>
-                  {turnover.buckets.map((value, b) => (
-                    <td key={b}>{share(value)}</td>
+                  {usedBuckets(report).map((b) => (
+                    <td key={b}>{share(turnover.buckets[b])}</td>
                   ))}
                 </tr>
               ))}
@@ -221,7 +224,7 @@ function QuantileTable({ report }: { report: LabReport }) {
           </tr>
         </thead>
         <tbody>
-          {Array.from({ length: report.quantiles }, (_, b) => (
+          {usedBuckets(report).map((b) => (
             <tr key={b} className="is-static">
               <th className="is-left">Q{b + 1}</th>
               <td>{first ? first.quantiles[b].stocks.toFixed(1) : "—"}</td>
