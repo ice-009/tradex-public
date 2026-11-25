@@ -58,6 +58,12 @@ export const DEFAULT_MIN_STOCKS = 20;
  * (a missed split or bonus, a bad print) far more often than a real move.
  */
 export const MAX_DAILY_MOVE = 0.5;
+/**
+ * Sessions a stock's bars may end before the data's last session and still
+ * count as trading (its newest bars not in yet). Ending earlier, it stopped
+ * trading — delisted, merged, suspended — and is closed at its last close.
+ */
+export const STOPPED_AFTER = 5;
 /** Sessions a year, for annualising Sharpe ratios. */
 const SESSIONS_PER_YEAR = 252;
 
@@ -240,7 +246,9 @@ export function runLab(input: LabInput): LabReport {
   const { costs, values } = input;
   const from = input.from ?? -Infinity;
   const to = input.to ?? Infinity;
-  const lastDay = input.dates.at(-1) ?? 0;
+  // A series ending more than STOPPED_AFTER sessions before the data does has stopped trading;
+  // one missing only the newest session or two is merely not updated yet (no future: left out).
+  const stoppedBefore = input.dates[Math.max(0, input.dates.length - 1 - STOPPED_AFTER)] ?? 0;
 
   const maxMove = input.maxDailyMove ?? MAX_DAILY_MOVE;
   const symbols = [...input.symbols];
@@ -260,7 +268,7 @@ export function runLab(input: LabInput): LabReport {
       badPrefix[i] = (i > 0 ? badPrefix[i - 1] : 0) + (bad ? 1 : 0);
       if (bad && bars[i].t >= from && bars[i].t <= to) badBars.set(symbol, (badBars.get(symbol) ?? 0) + 1);
     }
-    return { closes, index, badPrefix, stopped: bars[bars.length - 1].t < lastDay };
+    return { closes, index, badPrefix, stopped: bars[bars.length - 1].t < stoppedBefore };
   });
 
   // Formation days, and per day: bucket (−1 = not ranked) and side (1 long, 2 short) of each stock.

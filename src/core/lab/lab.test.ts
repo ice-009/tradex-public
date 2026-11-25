@@ -253,6 +253,15 @@ describe("runLab", () => {
     expect(report.universe.perDay.min).toBeLessThan(30);
   });
 
+  it("doesn't mistake a series missing only its newest sessions for a delisted stock", () => {
+    const { input, bars } = fixture({ stocks: 30 });
+    // S28's newest two bars aren't in yet: its last windows have no future, not a flat exit.
+    const lagging = bars.get("S28")!.slice(0, -2);
+    const report = runLab({ ...input, bars: new Map([...bars, ["S28", lagging]]) });
+    expect(report.truncated).toBe(0);
+    expect(report.byHorizon[0].spread.gross.mean).toBeCloseTo(runLab(input).byHorizon[0].spread.gross.mean!, 3);
+  });
+
   it("leaves out forward windows holding a data error (a missed 1:5 split) and counts them", () => {
     const { input, bars } = fixture();
     // S39 (top bucket) "falls 80%" on day 150: a split the adjustment missed.

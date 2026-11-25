@@ -3,7 +3,7 @@
 import "./backtest.css";
 import "./lab.css";
 import { useEffect, useRef, useState } from "react";
-import type { BacktestInfoResponse, LabRequest, LabResponse } from "@/contracts/api";
+import type { LabRequest, LabResponse } from "@/contracts/api";
 import { api } from "@/client/api";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { ARCHIVE_START, MARKET_PHASES, phaseById } from "@/core/backtest/phases";
@@ -113,7 +113,6 @@ export function LabPanel() {
   const maximized = useTerminal((state) => state.screener.maximized);
   const [form, setForm] = useState<LabForm>(DEFAULT_FORM);
   const [ready, setReady] = useState(false);
-  const [info, setInfo] = useState<BacktestInfoResponse | null>(null);
   const [result, setResult] = useState<LabResponse | null>(saved.result);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,28 +136,6 @@ export function LabPanel() {
       // Not saved; the form still works.
     }
   }, [form, ready]);
-
-  // The stored history (asking for it also brings it up to date from the hub), again every 10 s while that runs.
-  useEffect(() => {
-    if (!ready) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const load = () =>
-      api
-        .backtestInfo(form.universe, controller.signal)
-        .then((next) => {
-          setInfo(next);
-          if (next.sync?.active) timer = setTimeout(load, 10_000);
-        })
-        .catch(() => {
-          // The run reports its own error; the hint just stays empty.
-        });
-    void load();
-    return () => {
-      controller.abort();
-      if (timer) clearTimeout(timer);
-    };
-  }, [form.universe, ready]);
 
   useEffect(() => {
     if (!running) return;
@@ -199,8 +176,7 @@ export function LabPanel() {
   const ok = result?.status === "ready" ? result : null;
   const signal = findSignal(form.signal);
   const params = form.params[form.signal] ?? {};
-  const stored = info?.history;
-  const long = form.period === "2010" || form.period === "1994" || (form.period === "phase" && (phaseById(form.phase)?.from ?? 0) < (stored?.from ?? 0)) || (form.period === "custom" && form.from !== null && form.from < (stored?.from ?? 0));
+  const long = form.period !== "stored";
 
   return (
     <section className="tx-scr tx-bt tx-lab" style={{ height: maximized ? undefined : `min(${height}px, 42vh)` }}>
@@ -333,12 +309,11 @@ export function LabPanel() {
                 </div>
               )}
               <p className="tx-bt-hint">
+                Daily bars from the hub&apos;s archive: one series per company across ticker renames, and each day&apos;s own F&amp;O list, merged and delisted members
+                included.{" "}
                 {long
-                  ? "Read from the hub's NSE archive for this run (one series per company across renames; before 2012 NIFTY's regime comes from its equal-weight stand-in). Price adjustments are least certain in the oldest years."
-                  : stored
-                    ? `${stored.sessions} stored sessions. Signals need warm-up (momentum a year), so the first ranked day comes later.`
-                    : "Reading the stored history…"}{" "}
-                The F&amp;O list is each day&apos;s own, former members included.
+                  ? "Longer periods take longer (a screen over 15 years: a minute or more). Before 2012 NIFTY's regime comes from its equal-weight stand-in; price adjustments are least certain in the oldest years."
+                  : "Warm-up comes from the year before, so the first day is ranked too."}
               </p>
             </fieldset>
 
@@ -384,23 +359,13 @@ export function LabPanel() {
 
             <div className="tx-bt-run">
               <button type="submit" className="tx-btn" disabled={running || !form.horizons.length}>
-                {running ? "Running…" : "Run"}
+                {running ? "Running…" : "Run signal test"}
               </button>
             </div>
           </form>
         )}
         <div className="tx-bt-main" ref={mainRef}>
           {error && <div className="tx-scr-state is-error">{error}</div>}
-          {info?.sync?.active && !long && (
-            <div className="tx-scr-state">
-              <span className="tx-spinner" />
-              <span>
-                {info.sync.queued
-                  ? `The Market Data Hub is downloading ${info.sync.queued} symbol${info.sync.queued === 1 ? "" : "s"}; runs meanwhile use the ${info.covered} of ${info.symbols} stocks already here.`
-                  : "Reading this universe's daily history from the Market Data Hub…"}
-              </span>
-            </div>
-          )}
           {ok ? (
             <LabResults data={ok} />
           ) : (

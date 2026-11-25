@@ -1,8 +1,8 @@
 // The Signal Lab from the command line (issue #22): the same service and the
 // same report as the Lab panel. Run through scripts/lab.mjs (`npm run lab`),
 // which bundles this file with the app's `@/` paths. Needs HUB_URL and HUB_KEY
-// (read from .env when present); reads and stores daily bars like the server
-// (.cache/), and records every run in the trial record (#24).
+// (read from .env when present); reads daily bars from the hub's archive like
+// the server, and records every run in the trial record (#24, .cache/market.db).
 //
 //   npm run lab -- --list
 //   npm run lab -- --signal momentum-12-1 --from 2021-01-01
@@ -15,7 +15,7 @@ import { MARKET_PHASES, phaseById } from "@/core/backtest/phases";
 import { formatLabReport, num } from "@/core/lab/format";
 import { LAB_SIGNALS, findSignal } from "@/core/lab/signals";
 import { shortHash } from "@/core/repro/stamp";
-import { parseLabRequest, runLabRequest, syncStoredBars } from "@/server/services/lab";
+import { parseLabRequest, runLabRequest } from "@/server/services/lab";
 import { trialSummary } from "@/server/services/labTrials";
 
 const USAGE = `Usage: npm run lab -- --signal <id> [options]
@@ -23,8 +23,7 @@ const USAGE = `Usage: npm run lab -- --signal <id> [options]
   --signal <id>        a signal (see --list): momentum-12-1, screen:<screen id>, screen-score:<screen id>, …
   --param key=value    a signal parameter (repeatable)
   --universe <id>      fno (default), nifty50, nifty200, nifty500
-  --from YYYY-MM-DD    first formation day (default: all stored history, 5 years);
-                       earlier than the store reads the hub's archive back to 1994 (slower)
+  --from YYYY-MM-DD    first formation day, back to 1994 (default: 5 years ago); longer periods take longer
   --to YYYY-MM-DD      last formation day (default: newest session)
   --phase <id>         a market phase instead of --from/--to: ${MARKET_PHASES.map((phase) => phase.id).join(", ")}
   --horizons 1,5,10,21 forward horizons in sessions
@@ -89,10 +88,7 @@ async function main() {
   });
 
   const started = Date.now();
-  process.stderr.write(`Reading ${request.universe} daily bars from the Market Data Hub…\n`);
-  const syncNote = await syncStoredBars(request.universe);
-  if (syncNote) process.stderr.write(`Note: ${syncNote}\n`);
-  process.stderr.write(`Running ${request.signal}…\n`);
+  process.stderr.write(`Running ${request.signal} on ${request.universe} (daily bars from the Market Data Hub's archive)…\n`);
   const response = await runLabRequest(request);
   if (response.status === "error") throw new Error(response.error);
 

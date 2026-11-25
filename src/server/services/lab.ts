@@ -9,17 +9,19 @@ import { findSignal, resolveParams, signalMeta } from "@/core/lab/signals";
 import { marketStates } from "@/core/plan/evidence";
 import { makeStamp, type RunStamp } from "@/core/repro/stamp";
 import { log } from "@/server/log";
-import { screenerStore } from "@/server/providers/dailyStore";
-import { BacktestError, backtestInfo, researchData } from "./backtest";
+import { storeStart } from "@/core/backtest/phases";
+import { istParts } from "@/core/market/session";
+import { BacktestError, researchData } from "./backtest";
 import { codeVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { parseUniverse } from "./screener";
 
 // The Signal Lab (issue #22): test any signal — one number per stock per day —
-// on the same data a backtest reads. The bars, the point-in-time F&O list
-// (former members included) and the data stamp come from the backtester's
-// loader (researchData in ./backtest.ts: the store's 5 years, or the hub's
-// archive back to 1994 for an earlier period, opt-in); screen signals reuse its
-// cached signal scan. The engine (src/core/lab) ranks, measures and splits; the
+// on the data a backtest of the period reads. The bars, the point-in-time F&O
+// list and the data stamp come from the backtester's loader (researchData in
+// ./backtest.ts), always from the hub's archive: one series per company across
+// ticker renames, and former F&O members the screener's store never held
+// (merged, delisted). The default period is the stored 5 years; any period back
+// to 1994 is opt-in. Screen signals reuse the backtester's cached signal scan. The engine (src/core/lab) ranks, measures and splits; the
 // CLI (scripts/lab.ts) calls this same service, so both print the same report.
 //
 // Every run carries a run stamp (src/core/repro/stamp.ts, kind "lab"): data
@@ -77,12 +79,16 @@ export function parseLabRequest(body: unknown): LabRequest {
 
 class LabError extends Error {}
 
-async function execute(request: LabRequest, pin: ReplayPin | null): Promise<LabResponse> {
-  const signal = findSignal(request.signal);
-  if (!signal) return { status: "error", error: `Unknown signal "${request.signal}".` };
+async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabResponse> {
+  const signal = findSignal(raw.signal);
+  if (!signal) return { status: "error", error: `Unknown signal "${raw.signal}".` };
+  // No `from`: the stored 5 years, as a fixed first day, so the stamp says exactly what was read and a replay reads it again.
+  const request: LabRequest = { ...raw, from: raw.from ?? storeStart(istParts().day) };
   try {
     const started = Date.now();
-    const research = await researchData({ universe: request.universe, from: request.from, to: request.to }, pin, { scan: Boolean(signal.usesScan) });
+    // Always from the hub's archive: one series per company across renames, and the
+    // former F&O members (merged, delisted) the screener's store never held.
+    const research = await researchData({ universe: request.universe, from: request.from, to: request.to }, pin, { scan: Boolean(signal.usesScan), archive: true });
     const loadMs = Date.now() - started;
     const costs = COST_PRESETS[request.costPreset];
     const key = JSON.stringify([request, research.data.hash]);
@@ -132,19 +138,6 @@ async function execute(request: LabRequest, pin: ReplayPin | null): Promise<LabR
 }
 
 export const runLabRequest = (request: LabRequest) => execute(request, null);
-
-/**
- * Bring a universe's stored daily bars up to date from the hub and wait for it
- * (the CLI; the Lab panel asks /api/backtest?universe= and shows the progress).
- * Returns the store's message when it couldn't read everything.
- */
-export async function syncStoredBars(universe: string, maxWaitMs = 10 * 60_000): Promise<string | null> {
-  const started = Date.now();
-  await backtestInfo(universe);
-  while (screenerStore.isSyncing() && Date.now() - started < maxWaitMs) await new Promise((resolve) => setTimeout(resolve, 500));
-  const { progress } = screenerStore;
-  return progress.phase === "error" || progress.queued ? progress.message : null;
-}
 
 /** "Re-run this": a stamped Lab run again from scratch, on the bars up to its last session. */
 export async function replayLab(body: unknown): Promise<LabResponse> {
