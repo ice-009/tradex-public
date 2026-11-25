@@ -68,11 +68,15 @@ function universe() {
   // Listed late (shorter history, aligned to the same calendar).
   data.set("NEW", series(77, SESSIONS).slice(SESSIONS - 150));
   data.set("TINY", series(78, 40));
-  // A bad row: NaN volume and a zero close. The cursor falls back to computeFeatures for such stocks.
+  // A bad row (NaN volume): the cursor falls back to computeFeatures for such stocks.
   const bad = series(79, SESSIONS);
   bad[300] = { ...bad[300], v: Number.NaN };
-  bad[420] = { ...bad[420], c: 0 };
   data.set("BAD", bad);
+  // A zero close and a zero-range bar at zero: odd but finite, so it stays on the fast path.
+  const zero = series(80, SESSIONS);
+  zero[420] = { ...zero[420], c: 0 };
+  zero[421] = { ...zero[421], o: 0, h: 0, l: 0, c: 0 };
+  data.set("ZERO", zero);
   return data;
 }
 
@@ -85,6 +89,8 @@ describe("featureCursor", () => {
     let checked = 0;
     for (const [symbol, bars] of data) {
       const cursor = featureCursor(symbol, bars);
+      // Only the stock with a NaN bar falls back to computeFeatures; the rest test the fast path.
+      expect(cursor.fast, symbol).toBe(symbol !== "BAD");
       for (let i = 0; i < bars.length; i += 1) {
         const from = Math.max(0, i - WINDOW + 1);
         expect(cursor.at(i, from), `${symbol} bar ${i}`).toEqual(old(symbol, bars, i, from));

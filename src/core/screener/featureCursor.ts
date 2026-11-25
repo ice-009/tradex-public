@@ -1,5 +1,5 @@
 import type { Bar } from "@/core/types";
-import { detectPatterns, nearestLevels } from "@/core/indicators/patterns";
+import { detectPatternsWithAtr, nearestLevels } from "@/core/indicators/patterns";
 import { EVENT_GAP_PCT, EVENT_VOL_X, computeFeatures, type DailyInput, type Features } from "./features";
 
 // Fast path for replaying the screens over history (backtest scan, evidence,
@@ -13,13 +13,15 @@ import { EVENT_GAP_PCT, EVENT_VOL_X, computeFeatures, type DailyInput, type Feat
 // - Everything that doesn't depend on where the window starts is computed once
 //   per stock over its whole history: the OHLCV columns, Bar objects, true
 //   range, directional movement, log returns, the prior 20/50-session volume
-//   averages, and the last session with delivery data.
+//   averages, the last session with delivery data and the 52-week high / low.
 // - The moving averages, RSI, ATR and ADX do depend on the window start (an
 //   EMA or Wilder average is seeded from the first bars it sees, and a running
 //   SMA sum accumulates rounding from there), so to stay identical they are
 //   still run over the window, but in one fused pass with no allocation,
 //   keeping only the values the screens read (today, and yesterday / 5 / 22
 //   sessions ago where a feature needs it) instead of whole output series.
+//   The same pass fills the chart patterns' ATR series, which detectPatterns
+//   would otherwise recompute.
 // - Everything else reads the precomputed columns by index instead of copying
 //   the window.
 //
@@ -32,6 +34,8 @@ import { EVENT_GAP_PCT, EVENT_VOL_X, computeFeatures, type DailyInput, type Feat
 export interface FeatureCursor {
   /** Features of the session at `index`, computed on the bars from `from` (default 0) to `index` inclusive. */
   at(index: number, from?: number): Features;
+  /** False when the stock has non-finite or absurd bars, so every call goes through computeFeatures itself. */
+  readonly fast: boolean;
 }
 
 const EMA20 = 2 / (20 + 1);
@@ -67,6 +71,16 @@ function lowest(src: Float64Array, from: number, to: number) {
   let result = Infinity;
   for (let j = from; j <= to; j += 1) result = Math.min(result, src[j]);
   return result;
+}
+
+/** Extreme of src over the `width` bars ending at a bar (from bar width − 1 on), in O(1) per query. */
+function blockExtremes(src: Float64Array, width: number, pick: (a: number, b: number) => number) {
+  const total = src.length;
+  const forward = new Float64Array(total);
+  const backward = new Float64Array(total);
+  for (let j = 0; j < total; j += 1) forward[j] = j % width === 0 ? src[j] : pick(forward[j - 1], src[j]);
+  for (let j = total - 1; j >= 0; j -= 1) backward[j] = j % width === width - 1 || j === total - 1 ? src[j] : pick(backward[j + 1], src[j]);
+  return (end: number) => pick(backward[end - width + 1], forward[end]);
 }
 
 export function featureCursor(symbol: string, input: DailyInput[]): FeatureCursor {
@@ -116,6 +130,12 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
   // Latest bar at or before j with delivery %, or −1.
   const LASTDP = new Int32Array(total);
   for (let j = 0; j < total; j += 1) LASTDP[j] = input[j].dp !== undefined ? j : j > 0 ? LASTDP[j - 1] : -1;
+  // 52-week (252-bar) high / low ending at each bar, for windows that long (van Herk / Gil-Werman:
+  // running extremes within 252-bar blocks, forwards and backwards). Math.max / Math.min give the
+  // same value whatever the grouping, so this equals the plain scan in features.ts.
+  const HIGH52 = blockExtremes(H, 252, Math.max);
+  const LOW52 = blockExtremes(L, 252, Math.min);
+  const PATTERN_ATR = new Float64Array(total);
 
   /** features.ts annualVolatility over the `days` sessions ending at e, for a window of n bars. */
   function annualVolatility(e: number, n: number, days: number) {
@@ -189,7 +209,12 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
     let sma200Prev22 = NaN;
     let ema50Prev5 = NaN;
     let rsi14Prev = NaN;
-    for (let j = s; j <= e; j += 1) {
+    // The chart patterns' own ATR(14) series over the window, for detectPatterns (reused buffer).
+    const patternAtr = PATTERN_ATR;
+    let patternAtrPrev = 0;
+    // Warm-up: the first 50 bars, where averages are still being seeded.
+    const warm = Math.min(e, s + 49);
+    for (let j = s; j <= warm; j += 1) {
       const k = j - s;
       const c = C[j];
 
@@ -233,6 +258,18 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
         atr22 += tr;
         if (k === 21) atr22 /= 22;
       } else atr22 = (atr22 * 21 + tr) / 22;
+
+      // patterns.ts atrSeries: from the second bar, the first 13 true ranges summed and divided
+      // by 14, then Wilder updates; a value from the 15th bar (k = 14) on.
+      if (k === 0) patternAtr[0] = NaN;
+      else if (k < 14) {
+        patternAtrPrev = k === 1 ? tr : patternAtrPrev + tr;
+        if (k === 13) patternAtrPrev /= 14;
+        patternAtr[k] = NaN;
+      } else {
+        patternAtrPrev = (patternAtrPrev * 13 + tr) / 14;
+        patternAtr[k] = patternAtrPrev;
+      }
 
       if (k >= 1) {
         const m = k - 1;
@@ -298,6 +335,52 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
       if (j === e - 5 && k >= 49) ema50Prev5 = ema50;
       if (j === e - 22 && k >= 199) sma200Prev22 = sum200 / 200;
     }
+    // The rest of the window (k ≥ 50): every average past its seed, so the same
+    // updates as above without the warm-up branches. This is most of the work.
+    for (let j = warm + 1; j <= e; j += 1) {
+      const k = j - s;
+      const c = C[j];
+      sum5 += c;
+      sum5 -= C[j - 5];
+      sum20 += c;
+      sum20 -= C[j - 20];
+      sum50 += c;
+      sum50 -= C[j - 50];
+      sum150 += c;
+      if (k >= 150) sum150 -= C[j - 150];
+      sum200 += c;
+      if (k >= 200) sum200 -= C[j - 200];
+      ema20 = EMA20 * c + (1 - EMA20) * ema20;
+      ema25 = EMA25 * c + (1 - EMA25) * ema25;
+      ema50 = EMA50 * c + (1 - EMA50) * ema50;
+      const tr = TR[j];
+      atr14 = (atr14 * 13 + tr) / 14;
+      atr20 = (atr20 * 19 + tr) / 20;
+      atr22 = (atr22 * 21 + tr) / 22;
+      patternAtrPrev = (patternAtrPrev * 13 + tr) / 14;
+      patternAtr[k] = patternAtrPrev;
+      const change = c - C[j - 1];
+      const gain = Math.max(change, 0);
+      const loss = Math.max(-change, 0);
+      gain14 = (gain14 * 13 + gain) / 14;
+      loss14 = (loss14 * 13 + loss) / 14;
+      gain2 = (gain2 * 1 + gain) / 2;
+      loss2 = (loss2 * 1 + loss) / 2;
+      dmTr = (dmTr * 13 + tr) / 14;
+      dmPlus = (dmPlus * 13 + PDM[j]) / 14;
+      dmMinus = (dmMinus * 13 + MDM[j]) / 14;
+      plusDI = dmTr === 0 ? 0 : (100 * dmPlus) / dmTr;
+      minusDI = dmTr === 0 ? 0 : (100 * dmMinus) / dmTr;
+      const sum = plusDI + minusDI;
+      adx = (adx * 13 + (100 * Math.abs(plusDI - minusDI)) / (sum === 0 ? 1 : sum)) / 14;
+
+      if (j === e - 1) {
+        sma20Prev = sum20 / 20;
+        rsi14Prev = rsiOf(gain14, loss14);
+      }
+      if (j === e - 5) ema50Prev5 = ema50;
+      if (j === e - 22 && k >= 199) sma200Prev22 = sum200 / 200;
+    }
     // Values on the last bar: NaN until the series has `length` values (k = n − 1 on the last bar).
     const last = n - 1;
     const sma5Now = last >= 4 ? sum5 / 5 : NaN;
@@ -348,7 +431,7 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
     let lowSinceEvent = NaN;
     if (eventIndex >= 0) lowSinceEvent = lowest(L, eventIndex, e);
 
-    const patterns = detectPatterns(bars.slice(s, e + 1));
+    const patterns = detectPatternsWithAtr(bars.slice(s, e + 1), () => patternAtr.subarray(0, n));
     const best = patterns.best;
     const bearish = patterns.patterns.find((pattern) => pattern.direction === "bear" && pattern.status === "forming");
     const levels = nearestLevels(patterns.levels, today.c);
@@ -373,8 +456,8 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
       }
     }
 
-    const high52 = highest(H, e + 1 - Math.min(252, n), e);
-    const low52 = lowest(L, e + 1 - Math.min(252, n), e);
+    const high52 = n >= 252 ? HIGH52(e) : highest(H, s, e);
+    const low52 = n >= 252 ? LOW52(e) : lowest(L, s, e);
     const eventAt = eventIndex >= 0 ? input[eventIndex] : undefined;
 
     return {
@@ -469,5 +552,5 @@ export function featureCursor(symbol: string, input: DailyInput[]): FeatureCurso
     };
   }
 
-  return { at };
+  return { at, fast };
 }

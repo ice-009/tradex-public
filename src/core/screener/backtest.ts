@@ -170,10 +170,10 @@ export async function runTrackRecord(
     // Yield between sessions so a long replay doesn't stall chart and quote requests.
     await new Promise((resolve) => setImmediate(resolve));
     const day: Array<{ f: Features; bars: DailyBar[]; i: number }> = [];
-    for (const [symbol, entry] of series) {
+    for (const entry of series.values()) {
       const i = entry.index.get(date);
       if (i === undefined || i < MIN_HISTORY - 1) continue;
-      // Same as computeFeatures(symbol, entry.bars.slice(i - 259, i + 1), false), without the copying.
+      // Same as computeFeatures(symbol, bars.slice(i - 259, i + 1), false), without the copying.
       day.push({ f: entry.cursor.at(i, Math.max(0, i - 259)), bars: entry.bars, i });
     }
     if (!day.length) continue;
