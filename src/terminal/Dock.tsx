@@ -79,6 +79,14 @@ export function BottomDock() {
       >
         Backtest
       </button>
+      <button
+        type="button"
+        className={`tx-dock-tab ${open && view === "lab" ? "is-active" : ""}`}
+        onClick={() => updateScreener(open && view === "lab" ? { open: false, maximized: false } : { open: true, view: "lab", maximized: true })}
+        title="Signal Lab: test any signal or screen — quintile returns, long–short spread with Newey–West t-stats, regimes, decay and turnover, net of futures costs"
+      >
+        Lab
+      </button>
       <span className="tx-dock-hint">
         <kbd>[</kbd>
         <kbd>]</kbd> previous / next idea

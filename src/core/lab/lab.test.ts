@@ -73,12 +73,21 @@ describe("quantile ranking", () => {
     expect([...quantileBuckets(values, 5)]).toEqual([2, 0, 4, 1, 3, 1, 4, 0, 3, 2]);
   });
 
-  it("keeps ties together at their average position (a binary signal: matched vs the rest)", () => {
-    const values = [...Array(18).fill(0), 1, 1];
-    const buckets = [...quantileBuckets(values, 5)];
-    expect(new Set(buckets.slice(0, 18))).toEqual(new Set([2]));
-    expect(buckets.slice(18)).toEqual([4, 4]);
-    expect(new Set(quantileBuckets([3, 3, 3, 3, 3], 5)).size).toBe(1);
+  it("keeps ties together at their average position", () => {
+    const values = [1, 1, 1, 1, 1, 1, 2, 3, 4, 5, 6, 7];
+    // The six tied 1s sit at positions 0–5 (average 2.5 → Q2); the rest by position.
+    expect([...quantileBuckets(values, 5)]).toEqual([1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 4, 4]);
+  });
+
+  it("spreads a coarse signal by distinct value: a binary one is always the rest in Q1, matched in Q5", () => {
+    for (const matched of [2, 10, 15]) {
+      const values = [...Array(20 - matched).fill(0), ...Array(matched).fill(1)];
+      const buckets = [...quantileBuckets(values, 5)];
+      expect(new Set(buckets.slice(0, 20 - matched))).toEqual(new Set([0]));
+      expect(new Set(buckets.slice(20 - matched))).toEqual(new Set([4]));
+    }
+    expect([...quantileBuckets([0, 1, 2, 2, 1], 5)]).toEqual([0, 2, 4, 4, 2]);
+    expect(new Set(quantileBuckets([3, 3, 3, 3, 3], 5))).toEqual(new Set([2]));
   });
 
   it("handles a count that isn't a multiple of the buckets", () => {
@@ -270,8 +279,8 @@ describe("runLab", () => {
     expect(report.notes[0]).toContain("matched minus the rest");
     const rows = report.byHorizon[0].quantiles;
     expect(rows[4].stocks).toBe(4);
-    expect(rows[2].stocks).toBe(36);
-    expect(rows[0].gross).toBeNull();
+    expect(rows[0].stocks).toBe(36);
+    expect(rows[2].gross).toBeNull();
     // Matched (s 36…39) vs the rest (s 0…35): (37.5 − 17.5) × 0.0005 = 1% a day.
     expect(report.byHorizon[0].spread.gross.mean!).toBeCloseTo(0.01, 2);
   });

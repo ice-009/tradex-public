@@ -10,6 +10,16 @@ export function pct(value: number | null | undefined, digits = 2): string {
   return `${p > 0 ? "+" : p < 0 ? "−" : ""}${Math.abs(p).toFixed(digits)}%`;
 }
 
+/** A share as an unsigned percentage: 0.23 → "23%". */
+export const share = (value: number | null | undefined, digits = 0) =>
+  value === null || value === undefined || !Number.isFinite(value) ? "—" : `${(value * 100).toFixed(digits)}%`;
+
+/** Turnover rows: daily, then each horizon's rebalance (1 session is the daily row). */
+export const turnoverRows = (report: LabReport) => [
+  { label: "daily", turnover: report.dailyTurnover },
+  ...report.byHorizon.filter((h) => h.horizon > 1).map((h) => ({ label: `every ${h.horizon}d`, turnover: h.turnover })),
+];
+
 /** A t-stat or ratio: "2.31", "−0.40". */
 export function num(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
@@ -83,10 +93,7 @@ export function formatLabReport(report: LabReport): string[] {
     "Turnover: share of the long / short leg replaced since the last rebalance",
     ...table(
       ["Rebalance", "Long (top)", "Short (bottom)", ...Array.from({ length: report.quantiles }, (_, b) => `Q${b + 1}`)],
-      [
-        ["daily", pct(report.dailyTurnover.long, 0), pct(report.dailyTurnover.short, 0), ...report.dailyTurnover.buckets.map((v) => pct(v, 0))],
-        ...report.byHorizon.map((h) => [`every ${h.horizon}d`, pct(h.turnover.long, 0), pct(h.turnover.short, 0), ...h.turnover.buckets.map((v) => pct(v, 0))]),
-      ],
+      turnoverRows(report).map(({ label, turnover }) => [label, share(turnover.long), share(turnover.short), ...turnover.buckets.map((v) => share(v))]),
     ),
     "",
     "Decay: spread by horizon (cumulative) and of that one session alone (marginal)",
