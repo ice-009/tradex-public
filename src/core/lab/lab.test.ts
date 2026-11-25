@@ -10,6 +10,8 @@ import { formatLabReport } from "./format";
 import { quantileBuckets } from "./quantiles";
 import { BUILT_IN_SIGNALS, LAB_SIGNALS, findSignal, resolveParams, signalMeta } from "./signals";
 import { averageRanks, everyNth, neweyWestSE, neweyWestT, seriesStats, spearman } from "./stats";
+import { ideaIdOf, labTrialInputs } from "./trialInputs";
+import { summarizeIdea, trialInputError } from "./trials";
 
 const DAY = 86_400_000;
 const T0 = Date.UTC(2022, 0, 3);
@@ -342,9 +344,11 @@ describe("signals", () => {
   it("clamps parameters and keys each variant", () => {
     const momentum = findSignal("momentum-12-1")!;
     expect(resolveParams(momentum, { lookback: "9999", skip: 2.6, junk: 1 })).toEqual({ lookback: 504, skip: 3 });
-    expect(variantKey("momentum-12-1", resolveParams(momentum, {}))).toBe('momentum-12-1{"lookback":252,"skip":21}');
+    // The trial record's key (trials.ts variantKeyOf): the same variant always gets the same key.
+    expect(variantKey("momentum-12-1", resolveParams(momentum, {}))).toBe('momentum-12-1 {"lookback":252,"skip":21}');
+    expect(variantKey("momentum-12-1", { skip: 21, lookback: 252 })).toBe(variantKey("momentum-12-1", { lookback: 252, skip: 21 }));
     expect(signalMeta(momentum, { lookback: 252, skip: 21 }).kind).toBe("numeric");
-    expect(variantKey("screen:pos-52w-high", {})).toBe("screen:pos-52w-high");
+    expect(variantKey("screen:pos-52w-high", {})).toBe("screen:pos-52w-high {}");
   });
 
   it("turns every screen into a match signal and a score signal", () => {
@@ -377,5 +381,45 @@ describe("text report", () => {
     const text = formatLabReport(report).join("\n");
     for (const section of ["Long–short spread", "Quantile returns", "market regime", "Turnover", "Decay", "Deflated-Sharpe"]) expect(text).toContain(section);
     expect(text).toContain("Variant test");
+  });
+});
+
+describe("trial record (#24)", () => {
+  it("hands over one valid trial per horizon: net spread, non-overlapping, 252 ÷ h a year", () => {
+    const { input } = fixture({ noise: 0.02, drift: (s) => (s - 20) * 0.0001, sessions: 400 });
+    const report = runLab({ ...input, costs: FUTURES });
+    const { trials, skipped } = labTrialInputs(report, { stampHash: "abc", from: null });
+    expect(skipped).toEqual([]);
+    expect(trials.map((trial) => trial.horizon)).toEqual([1, 5, 10, 21]);
+    for (const [i, trial] of trials.entries()) {
+      const h = report.byHorizon[i];
+      expect(trialInputError(trial)).toBeNull();
+      expect(trial.ideaId).toBe(ideaIdOf(report));
+      expect(trial.variantKey).toBe(report.signal.variantKey);
+      expect(trial.periodsPerYear).toBeCloseTo(252 / h.horizon, 12);
+      // Effective T ≈ sessions ÷ horizon: every h-th day of the spread series.
+      expect(trial.T).toBe(Math.ceil(h.spread.net.n / h.horizon));
+      expect(trial.sharpe).toBe(h.dsr.sharpe);
+      expect(trial.tStat).toBe(h.spread.net.t);
+      expect(trial.period).toEqual({ from: null, to: report.period.to });
+    }
+    // The trials module can judge them.
+    const summary = summarizeIdea(
+      "test",
+      trials.map((trial) => ({ ...trial, runAt: 1 })),
+    );
+    expect(summary.n).toBe(4);
+    expect(summary.variants).toHaveLength(4);
+    expect(summary.best?.variantKey).toBe(report.signal.variantKey);
+  });
+
+  it("skips a horizon it can't judge rather than recording a broken trial", () => {
+    const { input } = fixture({ noise: 0.02, sessions: 200 });
+    const report = runLab(input);
+    // A spread with no variance has no Sharpe ratio (dsr.sharpe null).
+    report.byHorizon[0] = { ...report.byHorizon[0], dsr: { ...report.byHorizon[0].dsr, sharpe: null } };
+    const { trials, skipped } = labTrialInputs(report, { stampHash: "x", from: null });
+    expect(trials.map((trial) => trial.horizon)).toEqual([5, 10, 21]);
+    expect(skipped).toEqual([{ horizon: 1, reason: expect.stringMatching(/finite/) }]);
   });
 });

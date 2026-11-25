@@ -407,8 +407,20 @@ export type LabResponse =
       runtime: { loadMs: number; signalMs: number; labMs: number; scanCached: boolean; cached: boolean };
       /** What the run was computed from and the hash of the report. POST it to /api/lab/replay to run it again. */
       stamp: RunStamp;
+      /** The run's trials in the multiple-testing record (#24); GET /api/lab/trials?idea= for the deflated Sharpe ratios. */
+      trials: LabTrialRecord;
     }
   | { status: "error"; error: string };
+
+/** What a Lab run added to the trial record: one trial per horizon of the idea (the signal). */
+export interface LabTrialRecord {
+  ideaId: string;
+  recorded: number;
+  /** Horizons not recorded (too few observations, no variance) and why. */
+  skipped: Array<{ horizon: number; reason: string }>;
+  /** The record couldn't be written: the run's trials are NOT counted. */
+  error: string | null;
+}
 
 // ------------------------------------------------------------------ GET /api/analyze?symbols=A,B
 

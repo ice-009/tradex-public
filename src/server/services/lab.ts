@@ -1,6 +1,8 @@
 import "server-only";
 
-import type { LabRequest, LabResponse } from "@/contracts/api";
+import type { LabRequest, LabResponse, LabTrialRecord } from "@/contracts/api";
+import { ideaIdOf, labTrialInputs } from "@/core/lab/trialInputs";
+import { recordTrials } from "./labTrials";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { DEFAULT_HORIZONS, DEFAULT_QUANTILES, LAB_ENGINE, LabInputError, MAX_HORIZON, runLab, type LabReport } from "@/core/lab/engine";
 import { findSignal, resolveParams, signalMeta } from "@/core/lab/signals";
@@ -26,8 +28,27 @@ import { parseUniverse } from "./screener";
 
 const MAX_RESULTS = 12;
 
-const globalForLab = globalThis as unknown as { labResults?: Map<string, { report: LabReport; stamp: RunStamp }> };
+const globalForLab = globalThis as unknown as { labResults?: Map<string, { report: LabReport; stamp: RunStamp; trials: LabTrialRecord }> };
 const results = (globalForLab.labResults ??= new Map());
+
+/**
+ * Record a run in the multiple-testing record (#24): one trial per horizon
+ * (src/core/lab/trialInputs.ts; contract in src/core/lab/trials.ts). Every run
+ * counts, the CLI's and replays included — an identical run (same stamp) is
+ * stored once. A failure to record is reported with the run, never hidden:
+ * the deflated Sharpe ratio is only honest if every trial is counted.
+ */
+function recordLabTrials(report: LabReport, stamp: RunStamp, from: number | null): LabTrialRecord {
+  const ideaId = ideaIdOf(report);
+  const { trials, skipped } = labTrialInputs(report, { stampHash: stamp.hash, from });
+  try {
+    if (trials.length) recordTrials(trials);
+    return { ideaId, recorded: trials.length, skipped, error: null };
+  } catch (error) {
+    log.warn("Lab trials not recorded", { idea: ideaId, error: error instanceof Error ? error.message : String(error) });
+    return { ideaId, recorded: 0, skipped, error: error instanceof Error ? error.message : "The trial record couldn't be written." };
+  }
+}
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -66,7 +87,7 @@ async function execute(request: LabRequest, pin: ReplayPin | null): Promise<LabR
     const costs = COST_PRESETS[request.costPreset];
     const key = JSON.stringify([request, research.data.hash]);
     const hit = pin ? undefined : results.get(key);
-    if (hit) return { status: "ready", report: hit.report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs: 0, labMs: 0, scanCached: research.scanCached, cached: true }, stamp: hit.stamp };
+    if (hit) return { status: "ready", report: hit.report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs: 0, labMs: 0, scanCached: research.scanCached, cached: true }, stamp: hit.stamp, trials: hit.trials };
     if (!research.symbols.length) throw new LabError("No daily bars for this universe and period yet: they are read from the Market Data Hub.");
 
     const params = resolveParams(signal, request.params);
@@ -96,22 +117,14 @@ async function execute(request: LabRequest, pin: ReplayPin | null): Promise<LabR
     report.notes.push(...research.warnings, ...(universeNote ? [universeNote] : []));
     const labMs = Date.now() - labStarted;
 
-    // ---- TRIALS HOOK (#24) ------------------------------------------------
-    // When src/core/lab/trials.ts and deflatedSharpe.ts land, record this run as
-    // one trial and fill report.trials here, before the stamp hashes the report:
-    //   recordTrial({ variantKey: report.signal.variantKey, dsr: report.byHorizon.map((h) => h.dsr), … })
-    //   report.trials = { trials: n, deflatedSharpe: … }
-    // Every input DSR needs is already in report.byHorizon[i].dsr (Sharpe per
-    // h-session period, n, skewness, kurtosis — non-overlapping).
-    // -----------------------------------------------------------------------
-
     const stamp = makeStamp({ kind: "lab", code: codeVersion(LAB_ENGINE), data: research.data, params: { ...request, params }, result: report, createdAt: Date.now() });
+    const trials = recordLabTrials(report, stamp, request.from);
     if (!pin) {
-      results.set(key, { report, stamp });
+      results.set(key, { report, stamp, trials });
       while (results.size > MAX_RESULTS) results.delete(results.keys().next().value!);
     }
-    log.info("Lab run", { signal: signal.id, universe: request.universe, days: report.period.days, stocks: report.universe.symbols, loadMs, signalMs, labMs });
-    return { status: "ready", report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs, labMs, scanCached: research.scanCached, cached: false }, stamp };
+    log.info("Lab run", { signal: signal.id, universe: request.universe, days: report.period.days, stocks: report.universe.symbols, trials: trials.recorded, loadMs, signalMs, labMs });
+    return { status: "ready", report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs, labMs, scanCached: research.scanCached, cached: false }, stamp, trials };
   } catch (error) {
     if (error instanceof LabError || error instanceof LabInputError || error instanceof BacktestError) return { status: "error", error: error.message };
     throw error;

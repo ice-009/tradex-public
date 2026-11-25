@@ -1,6 +1,6 @@
 import { roundTripCosts, slipped, type CostModel } from "@/core/backtest/costs";
 import { MIN_T, MIN_TRADES, SPLIT_FRACTION, splitDay, stateOn, type MarketState } from "@/core/plan/evidence";
-import { canonicalJson } from "@/core/repro/canonical";
+import { variantKeyOf } from "./trials";
 import { tradeQty } from "@/core/screener/liveRecord";
 import type { DailyBar } from "@/core/types";
 import { quantileBuckets } from "./quantiles";
@@ -202,13 +202,11 @@ export interface LabReport {
   decay: DecayPoint[];
   /** Turnover from one session to the next. */
   dailyTurnover: Turnover;
-  /** Filled in by the multiple-testing module (#24) once it lands; null until then. */
-  trials: Record<string, unknown> | null;
   notes: string[];
 }
 
-/** One trial's identity: the signal's id and its parameters in canonical form. */
-export const variantKey = (id: string, params: Record<string, number>) => `${id}${Object.keys(params).length ? canonicalJson(params) : ""}`;
+/** One trial's identity: the signal's id and its parameters in canonical form (the trial record's key, trials.ts). */
+export const variantKey = (id: string, params: Record<string, number>) => variantKeyOf(id, params);
 
 /** Round-trip cost of a position at `price` (slippage both legs + charges), as a fraction of the price. */
 export function roundTripFraction(price: number, costs: CostModel, qty = tradeQty(price, null)): number {
@@ -584,7 +582,6 @@ export function runLab(input: LabInput): LabReport {
     byHorizon,
     decay,
     dailyTurnover: turnoverAt(1),
-    trials: null,
     notes,
   };
 }
