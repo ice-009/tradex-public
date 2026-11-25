@@ -22,6 +22,7 @@ import type {
   HighLowResponse,
   LabRequest,
   LabResponse,
+  LabTrialsResponse,
   LiveRecordResponse,
   LotsResponse,
   PresetList,
@@ -109,6 +110,9 @@ export const api = {
 
   /** What the BTST setups did live (recorded at 3:10–3:25 PM, settled at the next open). */
   liveRecord: () => getJson<LiveRecordResponse>("/api/screener/live-record"),
+
+  /** The Signal Lab's trial record for an idea: variants tried, deflated Sharpe ratios, promotion verdict. */
+  labTrials: (idea: string, signal?: AbortSignal) => getJson<LabTrialsResponse>("/api/lab/trials", { idea }, signal),
 
   /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
   evidence: (period?: { from: number; to: number | null }) =>
