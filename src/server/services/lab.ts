@@ -3,6 +3,7 @@ import "server-only";
 import type { LabRequest, LabResponse, LabTrialRecord } from "@/contracts/api";
 import { ideaIdOf, labTrialInputs } from "@/core/lab/trialInputs";
 import { recordTrials } from "./labTrials";
+import { saveLabCard } from "./labCards";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { DEFAULT_HORIZONS, DEFAULT_QUANTILES, LAB_ENGINE, LabInputError, MAX_HORIZON, runLab, type LabReport } from "@/core/lab/engine";
 import { findSignal, resolveParams, signalMeta } from "@/core/lab/signals";
@@ -93,6 +94,8 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     const costs = COST_PRESETS[request.costPreset];
     const key = JSON.stringify([request, research.data.hash]);
     const hit = pin ? undefined : results.get(key);
+    // A repeat is the variant's latest run again (another run of it may have replaced its card since).
+    if (hit) saveLabCard(hit.report, hit.stamp, { preset: request.costPreset, label: costs.label });
     if (hit) return { status: "ready", report: hit.report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs: 0, labMs: 0, scanCached: research.scanCached, cached: true }, stamp: hit.stamp, trials: hit.trials };
     if (!research.symbols.length) throw new LabError("No daily bars for this universe and period yet: they are read from the Market Data Hub.");
 
@@ -126,6 +129,8 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     const stamp = makeStamp({ kind: "lab", code: codeVersion(LAB_ENGINE), data: research.data, params: { ...request, params }, result: report, createdAt: Date.now() });
     const trials = recordLabTrials(report, stamp, request.from);
     if (!pin) {
+      // The variant's report card (#23) shows its latest run; a replay of an older stamp doesn't replace it.
+      saveLabCard(report, stamp, { preset: request.costPreset, label: costs.label });
       results.set(key, { report, stamp, trials });
       while (results.size > MAX_RESULTS) results.delete(results.keys().next().value!);
     }

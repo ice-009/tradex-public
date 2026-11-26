@@ -353,7 +353,20 @@ The **Lab** tab in the bottom dock (and `npm run lab`) is a test bench for any s
 | Turnover | Share of each bucket (and the long and short legs) not in it h sessions earlier. |
 | Trials | Each run records one trial per horizon (idea = the signal, variant = its parameters): the net spread's Sharpe on every h-th day (non-overlapping, 252 ÷ h a year), its length, skewness and kurtosis, for the deflated Sharpe ratio. |
 
-**Adding a signal** is one entry in `BUILT_IN_SIGNALS` (`src/core/lab/signals.ts`); the API, CLI and panel list it automatically.
+**Adding a signal** is one entry in `BUILT_IN_SIGNALS` (`src/core/lab/signals.ts`); the API, CLI, panel and report cards list it automatically.
+
+### Report cards (`/lab`, `/lab/<signal>`)
+
+Every run (panel, CLI, card; not a replay of an old stamp) is saved as its variant's latest report (`lab_reports` in `.cache/market.db`, `providers/labReports.ts`, next to the trial record), so a card opens without running the Lab again. `/lab` lists every signal with its latest verdict, period and DSR; `/lab/<signal>[?variant=…]` is one signal's card: the verdict and its reasons, the long–short spread's equity curve (net, summed over non-overlapping h-session holds), decay with a ±2 Newey–West se band, bucket returns, regime and 60/40 tables, costs and turnover, sample sizes, data errors, notes, the trial record and the run stamp ("Re-run this", "Run again on the latest data"). The Lab tab links to it ("Open report card").
+
+The verdict (`src/core/lab/verdict.ts`, rules in its header) is worked out when the card is read, against the trial record as it stands then, at the horizon with the highest net t (or the one picked on the card):
+
+| Verdict | When |
+|---|---|
+| too little data | fewer than 30 days with a spread, or fewer than 20 non-overlapping h-session spreads |
+| works | net spread > 0 with t > 2 over the period, > 0 in both the first 60% and last 40%, and the variant's deflated Sharpe ratio ≥ 0.95 |
+| works in uptrends / downtrends only | one regime (NIFTY vs its 200-day average) has an edge on its own (> 0, t > 2, 30+ days) and the other is ≤ 0; deflated on that regime's days |
+| no edge | anything else — including an edge that fails the deflated Sharpe ratio, which the card calls "looks good, but likely luck after N trials" |
 
 ```bash
 npm run lab -- --list

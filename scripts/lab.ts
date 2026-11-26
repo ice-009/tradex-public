@@ -2,7 +2,8 @@
 // same report as the Lab panel. Run through scripts/lab.mjs (`npm run lab`),
 // which bundles this file with the app's `@/` paths. Needs HUB_URL and HUB_KEY
 // (read from .env when present); reads daily bars from the hub's archive like
-// the server, and records every run in the trial record (#24, .cache/market.db).
+// the server, records every run in the trial record (#24, .cache/market.db) and
+// saves it as the variant's report card (#23), whose verdict it prints last.
 //
 //   npm run lab -- --list
 //   npm run lab -- --signal momentum-12-1 --from 2021-01-01
@@ -16,6 +17,7 @@ import { formatLabReport, num } from "@/core/lab/format";
 import { LAB_SIGNALS, findSignal } from "@/core/lab/signals";
 import { shortHash } from "@/core/repro/stamp";
 import { parseLabRequest, runLabRequest } from "@/server/services/lab";
+import { labCard } from "@/server/services/labCards";
 import { trialSummary } from "@/server/services/labTrials";
 
 const USAGE = `Usage: npm run lab -- --signal <id> [options]
@@ -105,6 +107,13 @@ async function main() {
       `Trials: ${trials.recorded} recorded for idea ${trials.ideaId} (${summary.n} distinct, ${summary.runs} runs; luck benchmark Sharpe ${num(summary.sr0Annual)}/yr)` +
         (best ? `; best ${best.variantKey} @ ${best.horizon}d: deflated Sharpe ${num(best.verdict.dsr, 3)} — ${best.verdict.reason}` : ""),
     );
+  }
+  const card = labCard(report.signal.id, report.signal.variantKey)?.card;
+  const verdict = card?.verdicts.find((entry) => entry.horizon === card.primary);
+  if (verdict) {
+    console.log("");
+    console.log(`Verdict (report card, /lab/${encodeURIComponent(report.signal.id)}): ${verdict.label.toUpperCase()} at ${verdict.horizon}d — ${verdict.headline}`);
+    for (const reason of verdict.reasons) console.log(`  · ${reason}`);
   }
   console.log(`Time: load ${(runtime.loadMs / 1000).toFixed(1)} s, signal ${(runtime.signalMs / 1000).toFixed(1)} s, lab ${(runtime.labMs / 1000).toFixed(2)} s; total ${((Date.now() - started) / 1000).toFixed(1)} s.`);
   if (args.json) {
