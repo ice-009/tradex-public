@@ -126,13 +126,14 @@ Every run is a recorded trial (#24), and re-running a variant replaces its resul
 |---|---|---|---|---|
 | `sector-momentum` | lookback 21, 63, 126; 126 with synthetic = 0 | 16 | 40 | 3.29 |
 | `sector-reversal` | lookback 21; 21 with synthetic = 0 | 8 | 16 | 3.34 |
-| `sector-rrg` | quadrant 5, 4, 1; 5 with synthetic = 0 (s 10, w 63, k 10) | 16 | 41 | 5.28 |
-| **Total** | **10** | **40** | **97** | |
+| `sector-rrg` | quadrant 5, 4, 1; 5 with synthetic = 0 (s 10, w 63, k 10) | 16 | 45 | 5.28 |
+| **Total** | **10** | **40** | **101** | |
 
-The 97 runs are 24 runs × 4 horizons, plus one smoke run of `sector-rrg`
-(quadrant 5, horizon 5, 2025-06 onward) that checked the plumbing. The smoke run
-had the same variant and horizon as a planned trial, so its result was replaced
-and didn't add a trial. The three `synthetic = 1` sets were each run three times,
+The 101 runs are 24 runs × 4 horizons, plus two checks. One is a smoke run of
+`sector-rrg` (quadrant 5, horizon 5, 2025-06 onward) that checked the plumbing.
+The other re-ran the NSE-only RRG variant after merging main: 4 runs, with the
+same result to three decimals. Both checks repeat variants and horizons that were
+already planned, so they replaced results and didn't add trials. The three `synthetic = 1` sets were each run three times,
 in this order: full span, basket era, then the primary window last. So the record
 and the report cards hold the 2013+ run. No other variants were tried: no other
 RRG parameters, no other quadrants, and no reversed runs. The trial record lives
