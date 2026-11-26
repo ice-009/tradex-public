@@ -74,6 +74,9 @@ export function parseLabRequest(body: unknown): LabRequest {
     horizons: horizons.length ? horizons : [...DEFAULT_HORIZONS],
     quantiles: Number.isFinite(quantiles) ? Math.min(10, Math.max(2, quantiles)) : DEFAULT_QUANTILES,
     costPreset: preset in COST_PRESETS ? (preset as CostPresetId) : "futures-2026",
+    // Only when set, so a plain request (and its stamp) reads as it always did.
+    ...(raw.reverse === true ? { reverse: true } : {}),
+    ...(raw.forward === "close-open" ? { forward: "close-open" as const } : {}),
   };
 }
 
@@ -105,7 +108,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     const signalMs = Date.now() - signalStarted;
     const labStarted = Date.now();
     const report = runLab({
-      signal: signalMeta(signal, params),
+      signal: { ...signalMeta(signal, params), ...(request.reverse ? { reversed: true } : {}), ...(request.forward === "close-open" ? { forward: request.forward } : {}) },
       dates: research.dates,
       symbols: research.symbols,
       bars: research.bars,

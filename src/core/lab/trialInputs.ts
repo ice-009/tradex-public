@@ -1,4 +1,4 @@
-import type { LabReport } from "./engine";
+import { variantParams, type LabReport } from "./engine";
 import { SESSIONS_PER_YEAR, trialInputError, type TrialInput } from "./trials";
 
 // From a Lab report to the multiple-testing record (#24): one trial per
@@ -27,7 +27,8 @@ export function labTrialInputs(report: LabReport, run: { stampHash: string; from
     const input: TrialInput = {
       ideaId: ideaIdOf(report),
       variantKey: report.signal.variantKey,
-      params: report.signal.params,
+      // The variant as run: reverse / close-open forward are part of it.
+      params: variantParams(report.signal.params, report.signal),
       period: { from: run.from, to: report.period.to ?? 0 },
       horizon: h.horizon,
       periodsPerYear: SESSIONS_PER_YEAR / h.horizon,
