@@ -171,6 +171,11 @@ function pctChange(closes: number[], lookback: number) {
   return n > lookback ? (closes[n - 1] / closes[n - 1 - lookback] - 1) * 100 : NaN;
 }
 
+/**
+ * Features of the last bar of `input`. Replays over history (backtest scan,
+ * track record) use featureCursor.ts, which must give exactly the same result:
+ * change a feature here and change it there too (featureCursor.test.ts checks).
+ */
 export function computeFeatures(symbol: string, input: DailyInput[], live: boolean): Features {
   const n = input.length;
   const bars: Bar[] = input.map((bar) => ({ time: bar.t, open: bar.o, high: bar.h, low: bar.l, close: bar.c, volume: bar.v }));
