@@ -62,6 +62,7 @@ const HORIZONS = [1, 2, 3, 5, 10, 15, 21, 42, 63];
 
 const GROUPS: Array<{ id: SignalGroup; label: string }> = [
   { id: "built-in", label: "Built-in signals" },
+  { id: "sector", label: "Sector rotation" },
   { id: "screen", label: "Screens: matched vs the rest" },
   { id: "screen-score", label: "Screens: score among matches" },
 ];

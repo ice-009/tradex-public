@@ -2,6 +2,7 @@ import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/s
 import { SCREENS, type ScreenDef } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
 import { MAX_DAILY_MOVE, type LabSignalMeta, type SignalValues } from "./engine";
+import { SECTOR_SIGNALS, type SectorContext } from "./sectorSignals";
 import { MOMENTUM_SIGNALS } from "./momentumSignals";
 import { SCORE_SIGNALS } from "./scoreSignals";
 
@@ -23,6 +24,10 @@ import { SCORE_SIGNALS } from "./scoreSignals";
 //                      among its matches, does the score pick the better ones?
 // They read the screens' signal scan (src/core/backtest/signals.ts: no
 // look-ahead), which the service shares with the backtester.
+//
+// Sector signals (./sectorSignals.ts, issue #30) give each stock its sector's
+// value; they declare `usesSectors` and the service hands them the sector
+// series in `sectors`.
 
 export interface SignalContext {
   /** Trading calendar, oldest first. */
@@ -37,6 +42,8 @@ export interface SignalContext {
   scan?: SignalScan | null;
   /** Called between sessions of a scan so a server stays responsive. */
   pause?: () => Promise<void>;
+  /** Each stock's sector and the sectors' long series (for signals with `usesSectors`). */
+  sectors?: SectorContext | null;
   /** A stock's industry (today's NSE classification), for signals with `usesIndustries`; null when unknown. */
   industryOf?: (symbol: string) => string | null;
 }
@@ -51,7 +58,7 @@ export interface ParamSpec {
   integer?: boolean;
 }
 
-export type SignalGroup = "built-in" | "screen" | "screen-score";
+export type SignalGroup = "built-in" | "sector" | "screen" | "screen-score";
 
 export interface LabSignal {
   id: string;
@@ -62,6 +69,8 @@ export interface LabSignal {
   params: ParamSpec[];
   /** Reads the screens' signal scan (the service hands it the backtest's cached one). */
   usesScan?: boolean;
+  /** Reads the sector series (the service loads them only for these). */
+  usesSectors?: boolean;
   /** Reads `industryOf` with these parameters (the service then loads the industry map). */
   usesIndustries?: (params: Record<string, number>) => boolean;
   /** Calendar days of history the signal needs before the first formation day, when more than the backtester's warm-up. */
@@ -271,7 +280,14 @@ function screenSignal(screen: ScreenDef, mode: "match" | "score"): LabSignal {
   };
 }
 
-export const LAB_SIGNALS: LabSignal[] = [...BUILT_IN_SIGNALS, ...MOMENTUM_SIGNALS, ...SCORE_SIGNALS, ...SCREENS.map((screen) => screenSignal(screen, "match")), ...SCREENS.map((screen) => screenSignal(screen, "score"))];
+export const LAB_SIGNALS: LabSignal[] = [
+  ...BUILT_IN_SIGNALS,
+  ...MOMENTUM_SIGNALS,
+  ...SECTOR_SIGNALS,
+  ...SCORE_SIGNALS,
+  ...SCREENS.map((screen) => screenSignal(screen, "match")),
+  ...SCREENS.map((screen) => screenSignal(screen, "score")),
+];
 
 const BY_ID = new Map(LAB_SIGNALS.map((signal) => [signal.id, signal]));
 
