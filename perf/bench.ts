@@ -170,11 +170,11 @@ async function screenerScan(): Promise<Record<string, Metric>> {
 /**
  * A portfolio backtest of every screen over 5 years × the F&O list: the signal scan plus the portfolio simulation.
  *
- * Target 10 s (issue #14), not met yet: the scan computes every stock's features
- * from scratch on every session (~270,000 computeFeatures calls on 260-bar
- * windows), ~12 s on an Apple-silicon laptop and 25–33 s on a GitHub runner.
- * Until it is made incremental or parallel, CI enforces a 40 s ceiling (the slowest
- * runner time seen + ~20%) and the 20% regression check against the base.
+ * Budget 10 s (issue #14). The scan evaluates every stock on every session
+ * (~270,000 feature sets on 260-bar windows) through a per-stock feature cursor
+ * (src/core/screener/featureCursor.ts): ~2.7 s on an Apple-silicon laptop and
+ * ~6 s on a GitHub runner, down from ~12 s and 25–33 s when each session
+ * called computeFeatures on a fresh slice.
  */
 async function backtest(): Promise<Record<string, Metric>> {
   const { scanSignals } = await import("@/core/backtest/signals");
@@ -182,7 +182,7 @@ async function backtest(): Promise<Record<string, Metric>> {
   const { COST_PRESETS } = await import("@/core/backtest/costs");
   const { SCREENS } = await import("@/core/screener/screens");
   const universe = fnoUniverse();
-  // One run per process (~10 s): run.mjs repeats the process for each round.
+  // One run per process (a few seconds): run.mjs repeats the process for each round.
   const [scanMs, scan] = await timeAsync(() =>
     scanSignals({ symbols: universe.symbols, getBars: (symbol) => universe.bars.get(symbol) ?? [], benchmark: universe.benchmark }),
   );
@@ -205,8 +205,7 @@ async function backtest(): Promise<Record<string, Metric>> {
   return {
     "backtest.5y.fno": {
       ms: round(scanMs + simMs),
-      budget: 40_000,
-      target: 10_000,
+      budget: 10_000,
       compare: true,
       info: { symbols: FNO_SYMBOLS, sessions: SESSIONS_5Y, signals: scan.signals, trades: result.trades.length, scanMs: round(scanMs), simMs: round(simMs) },
     },

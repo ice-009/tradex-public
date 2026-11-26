@@ -1,6 +1,7 @@
 import type { DailyBar } from "@/core/types";
-import { computeFeatures, rankRelativeStrength, type Features } from "@/core/screener/features";
-import { SCREENS, type ScreenDef } from "@/core/screener/screens";
+import { featureCursor } from "@/core/screener/featureCursor";
+import { rankRelativeStrength, type Features } from "@/core/screener/features";
+import { SCREENS, type ScreenContext, type ScreenDef } from "@/core/screener/screens";
 
 // Step 1 of a backtest: replay the screens over history and record every
 // signal, session by session. This is the expensive part (features for every
@@ -9,13 +10,17 @@ import { SCREENS, type ScreenDef } from "@/core/screener/screens";
 // of portfolio simulations (portfolio.ts) on it.
 //
 // No look-ahead: a session's features are computed from that stock's bars up to
-// and including that session only (`bars.slice(.., i + 1)`), and relative
+// and including that session only (the 260 bars ending on it), and relative
 // strength is ranked across stocks on the same session. Nothing about later
 // sessions can change an earlier signal — signals.test.ts checks this.
+//
+// Features come from a per-stock featureCursor (src/core/screener/featureCursor.ts),
+// which gives exactly computeFeatures(symbol, bars.slice(i - 259, i + 1), false)
+// without rebuilding the window's arrays every session (issue #14).
 
 /** Sessions of history a stock needs before its features are trusted (same as the track record). */
 export const WARMUP_SESSIONS = 60;
-/** Bars handed to computeFeatures per session (52 weeks + a little, as the live screener uses). */
+/** Bars the features see per session (52 weeks + a little, as the live screener uses). */
 const FEATURE_WINDOW = 260;
 
 export interface Signal {
@@ -67,6 +72,12 @@ export interface ScanInput {
   isMember?: (symbol: string, date: number) => boolean;
 }
 
+/** Every rule of the screen holds (rules.every without a closure per stock per screen per session). */
+function passes(screen: ScreenDef, f: Features, ctx: ScreenContext) {
+  for (const rule of screen.rules) if (!rule.test(f, ctx)) return false;
+  return true;
+}
+
 export function seriesOf(bars: DailyBar[]): Series {
   return { bars, index: new Map(bars.map((bar, i) => [bar.t, i])) };
 }
@@ -80,22 +91,34 @@ export async function scanSignals({ symbols, getBars, benchmark, screens = SCREE
   }
   const bench = seriesOf(benchmark);
   const dates = [...new Set([...series.values()].flatMap((entry) => entry.bars.map((bar) => bar.t)))].sort((a, b) => a - b);
+  // Per stock: its feature cursor, and its bar index on each calendar session (−1 = no bar),
+  // the same lookup as entry.index.get(date) without a Map lookup per stock per session.
+  const dateIndex = new Map(dates.map((date, d) => [date, d]));
+  const stocks = [...series].map(([symbol, entry]) => {
+    const barOn = new Int32Array(dates.length).fill(-1);
+    entry.bars.forEach((bar, i) => {
+      barOn[dateIndex.get(bar.t)!] = i;
+    });
+    return { symbol, bars: entry.bars, barOn, cursor: featureCursor(symbol, entry.bars) };
+  });
   const byDate = new Map<number, Signal[]>();
   let firstSignalDate: number | null = null;
   let count = 0;
   const firstByScreen: Record<string, number> = {};
 
-  for (const date of dates) {
+  for (let d = 0; d < dates.length; d += 1) {
+    const date = dates[d];
     if (pause) await pause();
     const day: Features[] = [];
-    const where = new Map<string, { bars: DailyBar[]; i: number }>();
-    for (const [symbol, entry] of series) {
-      const i = entry.index.get(date);
-      if (i === undefined || i < WARMUP_SESSIONS - 1) continue;
-      if (isMember && !isMember(symbol, date)) continue;
+    // Where each of day's features came from (same order as day).
+    const where: Array<{ bars: DailyBar[]; i: number }> = [];
+    for (const stock of stocks) {
+      const i = stock.barOn[d];
+      if (i < WARMUP_SESSIONS - 1) continue;
+      if (isMember && !isMember(stock.symbol, date)) continue;
       // Only bars up to and including this session: the screen can't see the future.
-      day.push(computeFeatures(symbol, entry.bars.slice(Math.max(0, i - FEATURE_WINDOW + 1), i + 1), false));
-      where.set(symbol, { bars: entry.bars, i });
+      day.push(stock.cursor.at(i, Math.max(0, i - FEATURE_WINDOW + 1)));
+      where.push({ bars: stock.bars, i });
     }
     if (!day.length) continue;
     firstSignalDate ??= date;
@@ -106,11 +129,12 @@ export async function scanSignals({ symbols, getBars, benchmark, screens = SCREE
 
     const found: Signal[] = [];
     for (const screen of screens) {
-      for (const f of day) {
-        const { bars, i } = where.get(f.symbol)!;
+      for (let k = 0; k < day.length; k += 1) {
+        const f = day[k];
+        const { bars, i } = where[k];
         // End-of-day screens read delivery %, which only exists for completed sessions.
         if (screen.basis === "eod" && bars[i].dp === undefined) continue;
-        if (!screen.rules.every((rule) => rule.test(f, ctx))) continue;
+        if (!passes(screen, f, ctx)) continue;
         const plan = screen.plan(f);
         if (!(plan.entry - plan.stop > 0)) continue;
         const score = screen.score(f);
