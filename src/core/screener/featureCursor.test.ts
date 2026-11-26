@@ -82,7 +82,8 @@ function universe() {
 
 const old = (symbol: string, bars: DailyBar[], i: number, from: number) => computeFeatures(symbol, bars.slice(from, i + 1), false);
 
-describe("featureCursor", () => {
+// Thousands of computeFeatures calls: a few seconds, several times that under coverage.
+describe("featureCursor", { timeout: 60_000 }, () => {
   const data = universe();
 
   it("equals computeFeatures on every session's sliding 260-bar window", () => {
