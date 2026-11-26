@@ -19,7 +19,7 @@
 //
 // GET-only; nothing here writes to the hub.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync, gzipSync, inflateRawSync } from "node:zlib";
 import type { HubClient } from "@/server/providers/hub/client";
@@ -42,9 +42,24 @@ const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
 const say = (text: string) => process.stderr.write(`${text}\n`);
 
 function ensureDir(dir: string) {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+/** A cached file's bytes, or null when it isn't there (read once: no exists-then-read race). */
+function cached(file: string): Buffer | null {
+  try {
+    return readFileSync(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+const cachedJson = <T>(file: string): T | null => {
+  const bytes = cached(file);
+  return bytes === null ? null : (JSON.parse((file.endsWith(".gz") ? gunzipSync(bytes) : bytes).toString("utf8")) as T);
+};
 
 // ---------- 1. IIMA ----------
 
@@ -74,12 +89,15 @@ async function fetchText(url: string, headers: Record<string, string> = {}): Pro
 export async function iimaFiles(cacheDir: string, refresh: boolean): Promise<IimaFiles> {
   const dir = ensureDir(path.join(cacheDir, "iima"));
   const marker = path.join(dir, "release.txt");
-  let release = !refresh && existsSync(marker) ? readFileSync(marker, "utf8").trim() : "";
-  if (!release) {
+  // A release is YYYY-MM: anything else in the marker (or on the page) is ignored.
+  const isRelease = (text: string) => /^\d{4}-\d{2}$/.test(text);
+  let release = refresh ? "" : (cached(marker)?.toString("utf8").trim() ?? "");
+  if (!isRelease(release)) {
     const page = await fetchText(IIMA_PAGE);
     const found = page.match(/DATA\/(\d{4}-\d{2})_FourFactors_and_Market_Returns_Monthly_SurvivorshipBiasAdjusted\.csv/);
     if (!found) throw new Error(`No factor file linked from ${IIMA_PAGE} (the page changed?)`);
     release = found[1];
+    if (!isRelease(release)) throw new Error(`Unexpected IIMA release name ${release}`);
   }
   const urls: Record<string, string> = {};
   const out: Record<string, string> = {};
@@ -87,12 +105,14 @@ export async function iimaFiles(cacheDir: string, refresh: boolean): Promise<Iim
     const url = `${IIMA_PAGE}DATA/${release}_${name}`;
     urls[key] = url;
     const file = path.join(dir, `${release}_${name}`);
-    if (!existsSync(file)) {
+    let text = cached(file)?.toString("utf8");
+    if (text === undefined) {
       say(`Downloading ${url}`);
-      writeFileSync(file, await fetchText(url));
+      text = await fetchText(url);
+      writeFileSync(file, text);
       await sleep(1_000);
     }
-    out[key] = readFileSync(file, "utf8");
+    out[key] = text;
   }
   writeFileSync(marker, release);
   return { release, monthly: out.monthly, daily: out.daily, portfolios: out.portfolios, breakpoints: out.breakpoints, urls };
@@ -193,8 +213,9 @@ export async function nseMonthSamples(cacheDir: string, from: string, to: string
   for (let [y, m] = from.split("-").map(Number); `${y}-${String(m).padStart(2, "0")}` <= to; m === 12 ? ((y += 1), (m = 1)) : (m += 1)) {
     const month = `${y}-${String(m).padStart(2, "0")}`;
     const file = path.join(dir, `${month}.json`);
-    if (existsSync(file)) {
-      out.push(JSON.parse(readFileSync(file, "utf8")) as MonthSample);
+    const known = cachedJson<MonthSample>(file);
+    if (known) {
+      out.push(known);
       continue;
     }
     let sample: MonthSample = { month, date: null, rows: [] };
@@ -246,9 +267,16 @@ export async function hubSet(client: HubClient, symbols: string[], from: number,
   const dir = ensureDir(path.join(cacheDir, "hub", `bars-${isoDay(to)}`));
   const fileOf = (symbol: string) => path.join(dir, `${encodeURIComponent(symbol)}.json.gz`);
   const unknownFile = path.join(dir, "_unknown.json");
-  const unknown = new Set<string>(existsSync(unknownFile) ? (JSON.parse(readFileSync(unknownFile, "utf8")) as string[]) : []);
+  const unknown = new Set<string>(cachedJson<string[]>(unknownFile) ?? []);
   const sorted = [...new Set(symbols)].sort();
-  const todo = sorted.filter((symbol) => !unknown.has(symbol) && !existsSync(fileOf(symbol)));
+  const series = new Map<string, RawSeries>();
+  const todo: string[] = [];
+  for (const symbol of sorted) {
+    if (unknown.has(symbol)) continue;
+    const item = cachedJson<RawSeries>(fileOf(symbol));
+    if (item === null) todo.push(symbol);
+    else if (item.t.length) series.set(symbol, item);
+  }
   for (let start = 0; start < todo.length; start += HUB_BATCH) {
     const part = todo.slice(start, start + HUB_BATCH);
     const batch = await client.candlesBatch(part, "1d", from, to, { adjust: "none" });
@@ -258,20 +286,15 @@ export async function hubSet(client: HubClient, symbols: string[], from: number,
       const names = [...new Set((item.sources ?? []).flatMap((span) => span.names ?? []))];
       const raw: RawSeries = { names: names.length ? names : [symbol], t: bars.map((bar) => bar.t), c: bars.map((bar) => bar.c), v: bars.map((bar) => bar.v) };
       writeFileSync(fileOf(symbol), gzipSync(JSON.stringify(raw)));
+      if (raw.t.length) series.set(symbol, raw);
     }
     for (const symbol of part) if (!batch.series[symbol]) unknown.add(symbol);
     writeFileSync(unknownFile, JSON.stringify([...unknown].sort()));
     if ((start / HUB_BATCH) % 10 === 0 || start + HUB_BATCH >= todo.length) say(`Hub bars: ${Math.min(todo.length, start + HUB_BATCH)}/${todo.length} symbols to fetch`);
   }
-  const series = new Map<string, RawSeries>();
-  for (const symbol of sorted) {
-    if (unknown.has(symbol) || !existsSync(fileOf(symbol))) continue;
-    const item = JSON.parse(gunzipSync(readFileSync(fileOf(symbol))).toString("utf8")) as RawSeries;
-    if (item.t.length) series.set(symbol, item);
-  }
 
   const factorFile = path.join(cacheDir, "hub", `factors-${isoDay(to)}.json.gz`);
-  const stored: Record<string, FactorList> = existsSync(factorFile) ? JSON.parse(gunzipSync(readFileSync(factorFile)).toString("utf8")) : {};
+  const stored: Record<string, FactorList> = cachedJson<Record<string, FactorList>>(factorFile) ?? {};
   const missing = [...series.keys()].filter((symbol) => !stored[symbol]);
   for (let start = 0; start < missing.length; start += ADJUST_BATCH) {
     const batch = await client.adjustmentsBatch(missing.slice(start, start + ADJUST_BATCH));
@@ -294,7 +317,8 @@ export interface CorporateAction {
 /** NSE's corporate actions as the hub stores them (the PR zip's bc file, 2010 on), every ticker, 400 days a request, cached. */
 export async function hubCorporateActions(client: HubClient, from: number, to: number, cacheDir: string): Promise<CorporateAction[]> {
   const file = path.join(ensureDir(path.join(cacheDir, "hub")), `actions-${isoDay(from)}-${isoDay(to)}.json.gz`);
-  if (existsSync(file)) return JSON.parse(gunzipSync(readFileSync(file)).toString("utf8"));
+  const known = cachedJson<CorporateAction[]>(file);
+  if (known) return known;
   const out: CorporateAction[] = [];
   const span = 399 * 86_400_000;
   for (let start = from; start <= to; start += span + 86_400_000) {
