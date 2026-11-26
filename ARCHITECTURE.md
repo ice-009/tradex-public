@@ -355,6 +355,8 @@ The **Lab** tab in the bottom dock (and `npm run lab`) is a test bench for any s
 
 **Adding a signal** is one entry in `BUILT_IN_SIGNALS` (`src/core/lab/signals.ts`); the API, CLI, panel and report cards list it automatically.
 
+**Sector signals** (`src/core/lab/sectorSignals.ts`, issue #30) give each stock its sector's value: sector momentum (relative strength vs NIFTY 500), sector reversal and RRG quadrant membership. They declare `usesSectors`; the service (`services/labSectors.ts`) then reads each industry's long series — its NSE index from 2012 with the hub's synthetic equal-weight basket spliced in front (`src/core/sector/series.ts`) — and NIFTY 500 over the run's span, and adds their hashes and the industry map to the data stamp. The RRG maths (`src/core/sector/rrg.ts`: a documented approximation, not RRG Research's formula) also feeds the Sectors panel's rotation graph. Results: [docs/research/sector-rotation.md](docs/research/sector-rotation.md).
+
 ### Report cards (`/lab`, `/lab/<signal>`)
 
 Every run (panel, CLI, card; not a replay of an old stamp) is saved as its variant's latest report (`lab_reports` in `.cache/market.db`, `providers/labReports.ts`, next to the trial record), so a card opens without running the Lab again. `/lab` lists every signal with its latest verdict, period and DSR; `/lab/<signal>[?variant=…]` is one signal's card: the verdict and its reasons, the long–short spread's equity curve (net, summed over non-overlapping h-session holds), decay with a ±2 Newey–West se band, bucket returns, regime and 60/40 tables, costs and turnover, sample sizes, data errors, notes, the trial record and the run stamp ("Re-run this", "Run again on the latest data"). The Lab tab links to it ("Open report card").

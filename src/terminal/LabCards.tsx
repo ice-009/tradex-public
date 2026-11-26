@@ -29,6 +29,7 @@ import { RunStampBar, type Replay } from "./RunStampBar";
 
 const GROUPS: Array<{ id: SignalGroup; label: string }> = [
   { id: "built-in", label: "Built-in signals" },
+  { id: "sector", label: "Sector rotation" },
   { id: "screen", label: "Screens: matched vs the rest" },
   { id: "screen-score", label: "Screens: score among matches" },
 ];

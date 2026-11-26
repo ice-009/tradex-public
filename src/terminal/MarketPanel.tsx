@@ -9,6 +9,7 @@ import { loadResultsCalendar, resultsNote, useScreenerFeed, type ResultsEvent } 
 import { openIdea } from "./ideaActions";
 import { SymbolLogo } from "./Watchlist";
 import { Icons } from "./icons";
+import { QuadrantTag, RRG_NOTE, RotationChart, RotationTimeline } from "./SectorRotation";
 import { istParts } from "@/core/market/session";
 
 const pct = (value: number, digits = 2) => (Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(digits)}%` : "—");
@@ -106,37 +107,71 @@ function MoverRow({ row, value, tone: valueTone }: { row: MarketRow; value: stri
 // ------------------------------------------------------------------ Sectors
 
 const SECTOR_SORTS = [
-  { id: "change", label: "1D" },
-  { id: "ret5", label: "1W" },
-  { id: "ret21", label: "1M" },
+  { id: "change", label: "1D", title: "Median move today" },
+  { id: "ret5", label: "1W", title: "Median move over 5 sessions" },
+  { id: "ret21", label: "1M", title: "Median move over 21 sessions" },
+  { id: "rs", label: "RS", title: "RS-Ratio against NIFTY 500 (strongest first; bars show the 1M move)" },
 ] as const;
+type SectorSort = (typeof SECTOR_SORTS)[number]["id"];
+
+/** Leading first, then Improving, Weakening, Lagging: the rotation view's order. */
+const QUADRANT_ORDER = { leading: 0, improving: 1, weakening: 2, lagging: 3 } as const;
+
+const sortValue = (sector: SectorStat, sort: SectorSort) => (sort === "rs" ? (sector.index?.rrg?.ratio ?? -Infinity) : sector[sort] || 0);
 
 function Sectors() {
   const market = useScreenerFeed((feed) => feed.data?.market);
   const universe = useScreenerFeed((feed) => feed.data?.universe?.label);
-  const [sort, setSort] = useState<(typeof SECTOR_SORTS)[number]["id"]>("change");
+  const [sort, setSort] = useState<SectorSort>("change");
+  const [view, setView] = useState<"list" | "rotation">("list");
   const [open, setOpen] = useState<string | null>(null);
-  const sectors = useMemo(() => [...(market?.sectors ?? [])].sort((a, b) => (b[sort] || 0) - (a[sort] || 0)), [market, sort]);
-  const max = Math.max(0.5, ...sectors.map((sector) => Math.abs(sector[sort] || 0)));
+  const sectors = useMemo(() => {
+    const list = [...(market?.sectors ?? [])];
+    if (view === "rotation") {
+      const rank = (sector: SectorStat) => (sector.index?.rrg ? QUADRANT_ORDER[sector.index.rrg.quadrant] : 9);
+      return list.sort((a, b) => rank(a) - rank(b) || (b.index?.rrg?.ratio ?? 0) - (a.index?.rrg?.ratio ?? 0));
+    }
+    return list.sort((a, b) => sortValue(b, sort) - sortValue(a, sort));
+  }, [market, sort, view]);
+  const shown: "change" | "ret5" | "ret21" = view === "rotation" || sort === "rs" ? "ret21" : sort;
+  const max = Math.max(0.5, ...sectors.map((sector) => Math.abs(sector[shown] || 0)));
+  const toggle = (sector: string) => setOpen(open === sector ? null : sector);
 
   return (
     <>
       <div className="tx-side-sub">
-        <div className="tx-seg" role="tablist" aria-label="Sort sectors by">
-          {SECTOR_SORTS.map((entry) => (
-            <button type="button" key={entry.id} className={sort === entry.id ? "is-active" : ""} onClick={() => setSort(entry.id)}>
-              {entry.label}
+        <div className="tx-sector-tools">
+          <div className="tx-seg" role="tablist" aria-label="Sort sectors by">
+            {SECTOR_SORTS.map((entry) => (
+              <button
+                type="button"
+                key={entry.id}
+                title={entry.title}
+                className={view === "list" && sort === entry.id ? "is-active" : ""}
+                onClick={() => {
+                  setSort(entry.id);
+                  setView("list");
+                }}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+          <div className="tx-seg" role="tablist" aria-label="Sector view">
+            <button type="button" className={view === "rotation" ? "is-active" : ""} title={RRG_NOTE} onClick={() => setView(view === "rotation" ? "list" : "rotation")}>
+              Rotation
             </button>
-          ))}
+          </div>
         </div>
-        <span className="tx-side-note" title="Bars: the median move of the universe's stocks in each sector. Below each: the sector's index from the Market Data Hub, which sector strength ranks on.">
-          Median move · {universe ?? "universe"}
+        <span className="tx-side-note" title="Bars: the median move of the universe's stocks in each sector. Below each: the sector's index from the Market Data Hub, which sector strength ranks on, and its RRG quadrant against NIFTY 500.">
+          {view === "rotation" ? "RRG vs NIFTY 500 · bars: 1M median move" : `Median move${sort === "rs" ? " (1M)" : ""}`} · {universe ?? "universe"}
         </span>
       </div>
       <div className="tx-wl-list">
         {!market && <PanelState>Loading sectors…</PanelState>}
+        {market && view === "rotation" && <RotationChart sectors={sectors} selected={open} onSelect={toggle} />}
         {sectors.map((sector) => (
-          <SectorRow key={sector.sector} sector={sector} value={sector[sort]} max={max} open={open === sector.sector} onToggle={() => setOpen(open === sector.sector ? null : sector.sector)} />
+          <SectorRow key={sector.sector} sector={sector} value={sector[shown]} max={max} open={open === sector.sector} onToggle={() => toggle(sector.sector)} />
         ))}
       </div>
     </>
@@ -164,6 +199,7 @@ function SectorRow({ sector, value, max, open, onToggle }: { sector: SectorStat;
       {sector.index && <SectorIndexLine stat={sector.index} />}
       {open && (
         <div className="tx-sector-body">
+          {sector.index?.rrg && <RotationTimeline rrg={sector.index.rrg} />}
           <div className="tx-sector-chips">
             {sector.symbols.slice(0, 24).map((symbol) => (
               <button type="button" key={symbol} className="tx-scr-chip" onClick={() => updateActiveCell({ symbol, interval: "1d" })}>
@@ -201,6 +237,7 @@ function SectorIndexLine({ stat }: { stat: SectorIndexStat }) {
       <button type="button" className="tx-sector-index-name" onClick={() => updateActiveCell({ symbol: stat.symbol, interval: "1d" })} title={stat.synthetic ? SYNTHETIC_NOTE : `Open ${stat.name}`}>
         {stat.synthetic ? `${stat.symbol} basket` : stat.name}
       </button>
+      {stat.rrg && <QuadrantTag rrg={stat.rrg} />}
       <span className={tone(stat.ret21)}>1M {pct(stat.ret21, 1)}</span>
       <span className={tone(stat.vsNifty63)} title="3-month return minus NIFTY 50's over the same sessions">
         vs NIFTY 3M {Number.isFinite(stat.vsNifty63) ? `${stat.vsNifty63 >= 0 ? "+" : ""}${stat.vsNifty63.toFixed(1)} pts` : "—"}
