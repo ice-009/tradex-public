@@ -17,6 +17,7 @@ results only, because the site was unreachable from the development environment.
 | [lottery-max-volatility.md](lottery-max-volatility.md) | Signal Lab test of MAX, MAX(5) and 20/60-day volatility on the F&O list, 2002–26 (issue #26): no edge after costs, the score is unchanged |
 | [overnight-intraday.md](overnight-intraday.md) | Signal Lab test of overnight and intraday momentum and the cross-period reversal at the BTST horizon, using the close → open forward return (issue #28): strong before costs, fails net, and a ranking check for the BTST screens |
 | [residual-momentum.md](residual-momentum.md) | Signal Lab study (#27): residual momentum and volatility-managed momentum vs the score's RS factor, 2002–2026, with the multiple-testing guard; no score change (`src/core/lab/residual.ts`, `momentumSignals.ts`, `overlay.ts`) |
+| [iima-factor-check.md](iima-factor-check.md) | Our momentum and market factors, rebuilt from the hub's NSE archive, vs IIM Ahmedabad's: correlations, the months that differ, data bugs found (`npm run research -- iima-check`) |
 
 Primary sources used throughout: Zerodha Varsity (Indian-market usage: CPR, pivots,
 Supertrend, VWAP, EMA pairs), StockCharts ChartSchool (formulas and worked examples —
