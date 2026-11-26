@@ -14,6 +14,8 @@ results only, because the site was unreachable from the development environment.
 | [patterns.md](patterns.md) | Automatic chart patterns and S/R zones: detection rules, false-positive checks on random walks, plan levels (pattern stop, measured target, chandelier trail) (`src/core/indicators/patterns.ts`) |
 | [platform-review.md](platform-review.md) | Review of the live terminal vs TradingView / Kite / Fyers / Chartink: chart-label and axis fixes, alerts, order ticket (GTT OCO, NSE tick sizes), backlog |
 | [drawings.md](drawings.md) | Behaviour of the drawing tools, incl. Long/Short position (`src/chart/drawings.ts`) |
+| [lottery-max-volatility.md](lottery-max-volatility.md) | Signal Lab test of MAX, MAX(5) and 20/60-day volatility on the F&O list, 2002–26 (issue #26): no edge after costs, the score is unchanged |
+| [overnight-intraday.md](overnight-intraday.md) | Signal Lab test of overnight and intraday momentum and the cross-period reversal at the BTST horizon, using the close → open forward return (issue #28): strong before costs, fails net, and a ranking check for the BTST screens |
 | [iima-factor-check.md](iima-factor-check.md) | Our momentum and market factors, rebuilt from the hub's NSE archive, vs IIM Ahmedabad's: correlations, the months that differ, data bugs found (`npm run research -- iima-check`) |
 
 Primary sources used throughout: Zerodha Varsity (Indian-market usage: CPR, pivots,

@@ -1,5 +1,6 @@
 import type { DailyBar } from "@/core/types";
-import { computeFeatures, rankRelativeStrength, type Features } from "@/core/screener/features";
+import { featureCursor, type FeatureCursor } from "@/core/screener/featureCursor";
+import { rankRelativeStrength, type Features } from "@/core/screener/features";
 import { SCREENS, type ScreenDef, type ScreenGroup } from "@/core/screener/screens";
 
 // Track record: replay every screen's rules over the cached daily history and
@@ -150,11 +151,11 @@ export async function runTrackRecord(
   benchmark: string,
 ): Promise<TrackReplay> {
   const benchBars = getBars(benchmark);
-  const series = new Map<string, { bars: DailyBar[]; index: Map<number, number> }>();
+  const series = new Map<string, { bars: DailyBar[]; index: Map<number, number>; cursor: FeatureCursor }>();
   for (const symbol of symbols) {
     const bars = getBars(symbol);
     if (bars.length < MIN_HISTORY) continue;
-    series.set(symbol, { bars, index: new Map(bars.map((bar, i) => [bar.t, i])) });
+    series.set(symbol, { bars, index: new Map(bars.map((bar, i) => [bar.t, i])), cursor: featureCursor(symbol, bars) });
   }
   const benchIndex = new Map(benchBars.map((bar, i) => [bar.t, i]));
   // Calendar of sessions: the union of everyone's dates, newest last.
@@ -169,11 +170,11 @@ export async function runTrackRecord(
     // Yield between sessions so a long replay doesn't stall chart and quote requests.
     await new Promise((resolve) => setImmediate(resolve));
     const day: Array<{ f: Features; bars: DailyBar[]; i: number }> = [];
-    for (const [symbol, entry] of series) {
+    for (const entry of series.values()) {
       const i = entry.index.get(date);
       if (i === undefined || i < MIN_HISTORY - 1) continue;
-      const slice = entry.bars.slice(Math.max(0, i - 259), i + 1);
-      day.push({ f: computeFeatures(symbol, slice, false), bars: entry.bars, i });
+      // Same as computeFeatures(symbol, bars.slice(i - 259, i + 1), false), without the copying.
+      day.push({ f: entry.cursor.at(i, Math.max(0, i - 259)), bars: entry.bars, i });
     }
     if (!day.length) continue;
     rankRelativeStrength(day.map((item) => item.f));

@@ -91,7 +91,7 @@ const NAMES: Record<PatternKind, string> = {
 
 // ------------------------------------------------------------------ helpers
 
-function atrSeries(bars: Bar[], length = 14): Float64Array {
+export function atrSeries(bars: Bar[], length = 14): Float64Array {
   const out = new Float64Array(bars.length).fill(NaN);
   let prev = NaN;
   for (let i = 1; i < bars.length; i += 1) {
@@ -528,11 +528,21 @@ function detectCup(ctx: Ctx): Pattern[] {
 // ------------------------------------------------------------------ entry point
 
 export function detectPatterns(bars: Bar[], params: Partial<PatternParams> = {}): PatternResult {
+  return detectPatternsWithAtr(bars, () => atrSeries(bars), params);
+}
+
+/**
+ * detectPatterns with the ATR(14) series supplied by the caller, for callers
+ * that already have it (the backtest's feature cursor computes it alongside its
+ * other averages). `atrOf()` must return exactly what atrSeries(bars) would;
+ * it is only called once there are enough bars for a pattern.
+ */
+export function detectPatternsWithAtr(bars: Bar[], atrOf: () => Float64Array, params: Partial<PatternParams> = {}): PatternResult {
   const p = { ...DEFAULT_PATTERN_PARAMS, ...params };
   const n = bars.length;
   const empty: PatternResult = { pivots: [], levels: [], patterns: [], best: null, atr: NaN };
   if (n < 40) return empty;
-  const atrs = atrSeries(bars);
+  const atrs = atrOf();
   const atr = atrs[n - 1];
   if (!Number.isFinite(atr) || atr <= 0) return empty;
   const from = Math.max(0, n - p.lookback);

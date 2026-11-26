@@ -344,19 +344,36 @@ The **Lab** tab in the bottom dock (and `npm run lab`) is a test bench for any s
 | Step | Rule |
 |---|---|
 | Universe | Each formation day: stocks on that day's F&O list (via `asOf`), traded that day, with a value. Days with fewer than 20 are skipped. |
-| Ranking | Into quintiles by value (Q1 lowest, Q5 highest; `quantiles.ts`). Ties share a bucket; a signal with no more distinct values than buckets (a screen's 1/0) is spread by value, so "matched" is always Q5 and "the rest" Q1. |
-| Forward returns | close(t + h) / close(t) − 1 on the stock's own bars, h = 1, 5, 10, 21 (any of 1–63). A stock whose bars stop before the data's (delisted, merged) is closed at its last close. A window holding a session that moved more than ±50% close to close is a data error (a missed split or bonus) and is left out; the report counts them. |
-| Costs | A futures round trip per position (`costs.ts` presets, ~₹5 lakh position): ~0.17% with the 2026 rates. The long–short spread pays two. "Net @ turnover" charges only the stocks replaced at each h-session rebalance. |
+| Ranking | Into quintiles by value (Q1 lowest, Q5 highest; `quantiles.ts`). Ties share a bucket; a signal with no more distinct values than buckets (a screen's 1/0) is spread by value, so "matched" is always Q5 and "the rest" Q1. `reverse` (`--reverse`) ranks by minus the value, which is how you test the long side of a signal whose expected sign is negative (MAX, volatility). It is part of the variant key. |
+| Forward returns | close(t + h) / close(t) − 1 on the stock's own bars, h = 1, 5, 10, 21 (any of 1–63). With `forward: "close-open"` (`--forward close-open`) it is open(t + h) / close(t) − 1 instead: sold at the open h sessions later, so h = 1 is the BTST trade. This is also part of the variant key. A stock whose bars stop before the data's (delisted, merged) is closed at its last close. A window holding a session that moved more than ±50% close to close is a data error (a missed split or bonus) and is left out; in close → open mode so is one holding an open that gapped more than ±50%. The report counts them. |
+| Costs | A futures round trip per position (`costs.ts` presets, ~₹5 lakh position): ~0.17% with the 2026 rates. The long–short spread pays two. "Net @ turnover" charges only the stocks replaced at each h-session rebalance (not reported for close → open, where every position is sold at the open). |
 | Spread and t | Q5 − Q1 mean per day; t-stats are Newey–West with lag h − 1, because a new h-session window starts every day. IC: daily rank correlation of value and return. |
 | Splits | NIFTY above / below its 200-day average on the formation day (`marketStates`), and the evidence's first 60% / last 40% of days (`splitDay`). **Edge** = the evidence's PASS rule on the net spread: > 0 in both parts and t > 2. |
 | Decay | The spread at every horizon 1–21, and of each session alone. |
 | Turnover | Share of each bucket (and the long and short legs) not in it h sessions earlier. |
 | Trials | Each run records one trial per horizon (idea = the signal, variant = its parameters): the net spread's Sharpe on every h-th day (non-overlapping, 252 ÷ h a year), its length, skewness and kurtosis, for the deflated Sharpe ratio. |
 
-**Adding a signal** is one entry in `BUILT_IN_SIGNALS` (`src/core/lab/signals.ts`); the API, CLI and panel list it automatically.
+**Adding a signal** is one entry in `BUILT_IN_SIGNALS` (`src/core/lab/signals.ts`); the API, CLI, panel and report cards list it automatically.
+
+### Report cards (`/lab`, `/lab/<signal>`)
+
+Every run (panel, CLI, card; not a replay of an old stamp) is saved as its variant's latest report (`lab_reports` in `.cache/market.db`, `providers/labReports.ts`, next to the trial record), so a card opens without running the Lab again. `/lab` lists every signal with its latest verdict, period and DSR; `/lab/<signal>[?variant=…]` is one signal's card: the verdict and its reasons, the long–short spread's equity curve (net, summed over non-overlapping h-session holds), decay with a ±2 Newey–West se band, bucket returns, regime and 60/40 tables, costs and turnover, sample sizes, data errors, notes, the trial record and the run stamp ("Re-run this", "Run again on the latest data"). The Lab tab links to it ("Open report card").
+
+The verdict (`src/core/lab/verdict.ts`, rules in its header) is worked out when the card is read, against the trial record as it stands then, at the horizon with the highest net t (or the one picked on the card):
+
+| Verdict | When |
+|---|---|
+| too little data | fewer than 30 days with a spread, or fewer than 20 non-overlapping h-session spreads |
+| works | net spread > 0 with t > 2 over the period, > 0 in both the first 60% and last 40%, and the variant's deflated Sharpe ratio ≥ 0.95 |
+| works in uptrends / downtrends only | one regime (NIFTY vs its 200-day average) has an edge on its own (> 0, t > 2, 30+ days) and the other is ≤ 0; deflated on that regime's days |
+| no edge | anything else — including an edge that fails the deflated Sharpe ratio, which the card calls "looks good, but likely luck after N trials" |
 
 ```bash
 npm run lab -- --list
 npm run lab -- --signal momentum-12-1 --from 2021-01-01
 npm run lab -- --signal screen:pos-52w-high --horizons 1,5,10,21 --json out.json
+npm run lab -- --signal max-21d --param top=5 --reverse --from 2010-01-01          # issue #26
+npm run lab -- --signal overnight-return --forward close-open --horizons 1 --from 2010-01-01   # issue #28
 ```
+
+Results so far: [lottery-max-volatility.md](docs/research/lottery-max-volatility.md) (#26) and [overnight-intraday.md](docs/research/overnight-intraday.md) (#28).

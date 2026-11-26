@@ -48,7 +48,7 @@ export function formatLabReport(report: LabReport): string[] {
     .map(([key, value]) => `${key}=${value}`)
     .join(", ");
   const out: string[] = [
-    `Signal Lab — ${signal.name} (${signal.id}${params ? `; ${params}` : ""})`,
+    `Signal Lab — ${signal.name} (${signal.id}${params ? `; ${params}` : ""})${signal.reversed ? " — reversed (low values in Q" + report.quantiles + ")" : ""}${signal.forward === "close-open" ? " — forward close → open" : ""}`,
     `Variant ${signal.variantKey}`,
     `Period ${isoDay(period.from)} – ${isoDay(period.to)}: ${period.days} ranked sessions of ${period.sessions}; ${universe.symbols} stocks, ${universe.perDay.mean.toFixed(0)} a day (${universe.perDay.min}–${universe.perDay.max}).`,
     `Q${report.quantiles} = highest values. Costs: ${pct(report.costPerTrade, 3)} a round trip per position (futures, slippage both legs + charges).`,

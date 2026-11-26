@@ -59,6 +59,18 @@ export function verdict(ideaId: string, variantKey: string, options?: TrialOptio
   return candidate ? promotionVerdict(trials, candidate, options) : null;
 }
 
+/** The promotion verdict of a variant at each horizon it was recorded at (its latest run there), from one read of the record. */
+export function verdictsByHorizon(ideaId: string, variantKey: string, options?: TrialOptions): Map<number, TrialVerdict> {
+  const trials = readTrials(ideaId);
+  const latest = new Map<number, Trial>();
+  for (const trial of trials) {
+    if (trial.variantKey !== variantKey) continue;
+    const seen = latest.get(trial.horizon);
+    if (!seen || trial.runAt >= seen.runAt) latest.set(trial.horizon, trial);
+  }
+  return new Map([...latest].map(([horizon, candidate]) => [horizon, promotionVerdict(trials, candidate, options)]));
+}
+
 /**
  * The gate for the score (#29): may this idea feed it? True only when its best
  * variant's deflated Sharpe ratio, after every trial recorded for the idea,
