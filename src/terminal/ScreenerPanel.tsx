@@ -31,7 +31,7 @@ const UNIVERSES = [
 
 const MIN_RR_OPTIONS = [0, 1.5, 2, 3];
 
-type SortKey = "setups" | "score" | "setupScore" | "symbol" | "changePct" | "volRatio" | "deliveryPct" | "rsi14" | "rsRank" | "rr" | "track" | "since";
+type SortKey = "setups" | "score" | "setupScore" | "symbol" | "changePct" | "volRatio" | "deliveryPct" | "rsi14" | "rsRank" | "rr" | "track" | "since" | "sector";
 
 /** One table row: a stock plus the setup whose plan the row shows. */
 interface Line {
@@ -145,6 +145,9 @@ export function ScreenerPanel() {
         case "since":
           // Newest setup on the stock (in "All setups" a stock can match several screens).
           return Math.max(0, ...idea.hits.map((entry) => entry.row.firstSeenAt ?? 0), row.firstSeenAt ?? 0);
+        case "sector":
+          // Sector strength (0–1 rank of the sector index's 1-month return), then the setup score within a sector.
+          return (row.facts?.sectorPct ?? -1) * 1000 + (scores.get(`${row.symbol}:${hit.screen.id}`)?.total ?? 0) / 1000;
         default: {
           const raw = row[sort.key];
           return typeof raw === "number" && Number.isFinite(raw) ? raw : -Infinity;
@@ -350,6 +353,14 @@ export function ScreenerPanel() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className={`tx-btn-outline tx-scr-new ${sort.key === "sector" ? "is-on" : ""}`}
+            title="Sort by sector strength: stocks in the strongest sectors (their sector index's 1-month return, ranked) first. Context only: sector momentum showed no edge after costs in the Signal Lab (issue #30)."
+            onClick={() => setSort(sort.key === "sector" ? { key: "setupScore", dir: -1 } : { key: "sector", dir: -1 })}
+          >
+            Strong sectors
+          </button>
           <select className="tx-input" value={prefs.minRR} onChange={(event) => updateScreener({ minRR: Number(event.target.value) })} aria-label="Minimum reward to risk">
             {MIN_RR_OPTIONS.map((value) => (
               <option key={value} value={value}>

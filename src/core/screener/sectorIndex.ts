@@ -1,4 +1,5 @@
 import { DAY_MS } from "@/core/market/session";
+import type { SectorRrg } from "@/core/sector/rrg";
 import type { DailyBar } from "@/core/types";
 
 // Sector strength from sector indices. The Market Data Hub serves NSE's
@@ -65,6 +66,8 @@ export interface SectorIndexStat extends SectorSource {
   vsNifty63: number;
   /** Day key of the newest bar used. */
   asOf: number | null;
+  /** Place on the Relative Rotation Graph against NIFTY 500, with its weekly trail (src/core/sector/rrg.ts); null without enough history. */
+  rrg?: SectorRrg | null;
 }
 
 const change = (bars: DailyBar[], sessions: number) => (bars.length > sessions && bars[bars.length - 1 - sessions].c > 0 ? (bars[bars.length - 1].c / bars[bars.length - 1 - sessions].c - 1) * 100 : Number.NaN);

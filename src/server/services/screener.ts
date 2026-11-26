@@ -7,6 +7,8 @@ import { buildFeatureSets, marketOverview, runScreens } from "@/core/screener/ru
 import { emptyFresh, freshKey, updateFresh, type FreshState } from "@/core/screener/fresh";
 import { marketRegime } from "@/core/screener/regime";
 import { sectorIndexStat, sectorSources, strengthRanks, type SectorIndexStat } from "@/core/screener/sectorIndex";
+import { sectorRrg } from "@/core/sector/rrg";
+import { RS_BENCHMARK } from "@/core/sector/series";
 import { latestOiFacts } from "@/server/providers/foData";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { updateBtstRecord } from "@/server/services/btstRecord";
@@ -65,8 +67,10 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
   const needFrom = istParts().day - (DEEP_HISTORY_DAYS - SECTOR_HISTORY_SLACK_DAYS) * DAY_MS;
   const sources = sectorSources(catalog, members.map((member) => member.industry || "Other"), needFrom);
   const sectorSymbols = [...new Set([...sources.values()].map((source) => source.symbol))];
-  screenerStore.ensureFresh([...symbols, BENCHMARK, ...sectorSymbols]);
-  await screenerStore.hasData([...symbols, BENCHMARK, ...sectorSymbols]);
+  // NIFTY 500: the sectors' Relative Rotation Graph benchmark (issue #30).
+  const sectorBenchmark = sectorSymbols.length ? [RS_BENCHMARK] : [];
+  screenerStore.ensureFresh([...symbols, BENCHMARK, ...sectorBenchmark, ...sectorSymbols]);
+  await screenerStore.hasData([...symbols, BENCHMARK, ...sectorBenchmark, ...sectorSymbols]);
 
   const covered = symbols.filter((symbol) => screenerStore.getBars(symbol).length > 0);
   const progress = screenerStore.progress;
@@ -102,10 +106,12 @@ export async function runScreener(universeId: UniverseId, useLive: boolean): Pro
   });
   // Sector strength: each sector's rank (0 weakest – 1 strongest) by its sector index's 1-month
   // return (end of day), or the median 1-month return of its stocks when the hub has no index for it.
+  // Each sector index's place on the Relative Rotation Graph against NIFTY 500, with its weekly trail (end of day).
   const indexStats = new Map<string, SectorIndexStat>();
+  const rrgBench = sectorBenchmark.length ? stored(RS_BENCHMARK) : [];
   for (const [industry, source] of sources) {
     const bars = stored(source.symbol);
-    if (bars.length) indexStats.set(industry, sectorIndexStat(source, bars, stored(BENCHMARK)));
+    if (bars.length) indexStats.set(industry, { ...sectorIndexStat(source, bars, stored(BENCHMARK)), rrg: rrgBench.length ? sectorRrg(bars, rrgBench) : null });
   }
   for (const sector of market.sectors) {
     const stat = indexStats.get(sector.sector);

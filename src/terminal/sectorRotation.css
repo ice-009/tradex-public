@@ -1,0 +1,54 @@
+/* ============================================================
+   Sector rotation (src/terminal/SectorRotation.tsx): the Sectors panel's
+   Relative Rotation Graph, quadrant tags and weekly timelines (issue #30).
+   Quadrant colours from the theme tokens: Leading pos, Weakening warn,
+   Lagging neg, Improving accent.
+   ============================================================ */
+
+.tx-rrg { margin: 0; padding: var(--sp-2) var(--sp-3) var(--sp-1); border-bottom: 1px solid var(--border); }
+.tx-rrg svg { display: block; width: 100%; max-width: 360px; height: auto; margin: 0 auto; overflow: visible; }
+.tx-rrg-q { stroke: none; }
+.tx-rrg-q.is-leading { fill: var(--pos-soft); }
+.tx-rrg-q.is-weakening { fill: var(--warn-soft); }
+.tx-rrg-q.is-lagging { fill: var(--neg-soft); }
+.tx-rrg-q.is-improving { fill: var(--accent-soft); }
+.tx-rrg-axis { stroke: var(--border-strong); stroke-width: 1; }
+.tx-rrg-qlabel { font-size: 9px; font-weight: var(--fw-semibold); letter-spacing: 0.02em; text-transform: uppercase; opacity: 0.85; }
+.tx-rrg-qlabel.is-leading { fill: var(--pos); }
+.tx-rrg-qlabel.is-weakening { fill: var(--warn); }
+.tx-rrg-qlabel.is-lagging { fill: var(--neg); }
+.tx-rrg-qlabel.is-improving { fill: var(--accent-text); }
+
+.tx-rrg-sector { cursor: pointer; outline: none; }
+.tx-rrg-sector.is-leading { --rrg: var(--pos); }
+.tx-rrg-sector.is-weakening { --rrg: var(--warn); }
+.tx-rrg-sector.is-lagging { --rrg: var(--neg); }
+.tx-rrg-sector.is-improving { --rrg: var(--accent-text); }
+.tx-rrg-tail { fill: none; stroke: var(--rrg); stroke-width: 1.2; stroke-linejoin: round; opacity: 0.55; }
+.tx-rrg-step { fill: var(--rrg); opacity: 0.55; }
+.tx-rrg-head { fill: var(--rrg); stroke: var(--surface); stroke-width: 1; }
+.tx-rrg-name { fill: var(--text-muted); font-size: 9px; pointer-events: none; }
+.tx-rrg-sector.is-dim { opacity: 0.3; }
+.tx-rrg-sector.is-selected .tx-rrg-tail { stroke-width: 2; opacity: 0.9; }
+.tx-rrg-sector.is-selected .tx-rrg-name { fill: var(--text); font-weight: var(--fw-semibold); }
+.tx-rrg-sector:hover .tx-rrg-name, .tx-rrg-sector:focus-visible .tx-rrg-name { fill: var(--text); }
+.tx-rrg-sector:focus-visible .tx-rrg-head { stroke: var(--accent); stroke-width: 2; }
+
+.tx-rrg-axes { display: flex; justify-content: space-between; gap: var(--sp-2); padding-top: 4px; color: var(--text-subtle); font-size: var(--fs-xs); }
+.tx-rrg-axes span:last-child { cursor: help; }
+
+.tx-rrg-tag { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: var(--r-full); font-size: var(--fs-xs); font-weight: var(--fw-medium); cursor: help; }
+.tx-rrg-tag.is-leading { color: var(--pos); background: var(--pos-soft); }
+.tx-rrg-tag.is-weakening { color: var(--warn); background: var(--warn-soft); }
+.tx-rrg-tag.is-lagging { color: var(--neg); background: var(--neg-soft); }
+.tx-rrg-tag.is-improving { color: var(--accent-text); background: var(--accent-soft); }
+
+.tx-rrg-timeline { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); color: var(--text-subtle); font-size: var(--fs-xs); }
+.tx-rrg-cells { display: flex; flex: 1; gap: 1px; min-width: 0; }
+.tx-rrg-cells i { flex: 1; height: 8px; border-radius: 1px; }
+.tx-rrg-cells i.is-leading { background: var(--pos); }
+.tx-rrg-cells i.is-weakening { background: var(--warn); }
+.tx-rrg-cells i.is-lagging { background: var(--neg); }
+.tx-rrg-cells i.is-improving { background: var(--accent); }
+
+.tx-sector-tools { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }

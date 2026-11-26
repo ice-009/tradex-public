@@ -15,6 +15,7 @@ results only, because the site was unreachable from the development environment.
 | [platform-review.md](platform-review.md) | Review of the live terminal vs TradingView / Kite / Fyers / Chartink: chart-label and axis fixes, alerts, order ticket (GTT OCO, NSE tick sizes), backlog |
 | [drawings.md](drawings.md) | Behaviour of the drawing tools, incl. Long/Short position (`src/chart/drawings.ts`) |
 | [lottery-max-volatility.md](lottery-max-volatility.md) | Signal Lab test of MAX, MAX(5) and 20/60-day volatility on the F&O list, 2002–26 (issue #26): no edge after costs, the score is unchanged |
+| [sector-rotation.md](sector-rotation.md) | RRG-style sector quadrants (documented approximation), sector momentum and sector reversal in the Signal Lab on the F&O list, 2003–26 (issue #30): 1-month sector momentum before costs, no edge after them; the score is unchanged |
 | [overnight-intraday.md](overnight-intraday.md) | Signal Lab test of overnight and intraday momentum and the cross-period reversal at the BTST horizon, using the close → open forward return (issue #28): strong before costs, fails net, and a ranking check for the BTST screens |
 
 Primary sources used throughout: Zerodha Varsity (Indian-market usage: CPR, pivots,

@@ -13,6 +13,7 @@ import { log } from "@/server/log";
 import { storeStart } from "@/core/backtest/phases";
 import { istParts } from "@/core/market/session";
 import { BacktestError, researchData } from "./backtest";
+import { LabSectorError, labSectors } from "./labSectors";
 import { codeVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { parseUniverse } from "./screener";
 
@@ -93,9 +94,12 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     // Always from the hub's archive: one series per company across renames, and the
     // former F&O members (merged, delisted) the screener's store never held.
     const research = await researchData({ universe: request.universe, from: request.from, to: request.to }, pin, { scan: Boolean(signal.usesScan), archive: true });
+    // Sector signals (#30) also read the sector indices and baskets over the same span; they join the data stamp.
+    const sectors = signal.usesSectors && research.symbols.length ? await labSectors(research) : null;
+    const data = sectors?.data ?? research.data;
     const loadMs = Date.now() - started;
     const costs = COST_PRESETS[request.costPreset];
-    const key = JSON.stringify([request, research.data.hash]);
+    const key = JSON.stringify([request, data.hash]);
     const hit = pin ? undefined : results.get(key);
     // A repeat is the variant's latest run again (another run of it may have replaced its card since).
     if (hit) saveLabCard(hit.report, hit.stamp, { preset: request.costPreset, label: costs.label });
@@ -105,7 +109,16 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     const params = resolveParams(signal, request.params);
     const signalStarted = Date.now();
     const values = await signal.build(
-      { dates: research.dates, symbols: research.symbols, bars: research.bars, benchmark: research.benchmark, isMember: research.isMember ?? undefined, scan: research.scan, pause: yieldToEventLoop },
+      {
+        dates: research.dates,
+        symbols: research.symbols,
+        bars: research.bars,
+        benchmark: research.benchmark,
+        isMember: research.isMember ?? undefined,
+        scan: research.scan,
+        pause: yieldToEventLoop,
+        sectors: sectors?.context ?? null,
+      },
       params,
     );
     const signalMs = Date.now() - signalStarted;
@@ -126,10 +139,10 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     });
     const sessions = research.dates.filter((day) => day >= (report.period.from ?? 0) && day <= (report.period.to ?? 0));
     const universeNote = research.universeNote(sessions);
-    report.notes.push(...research.warnings, ...(universeNote ? [universeNote] : []));
+    report.notes.push(...research.warnings, ...(universeNote ? [universeNote] : []), ...(sectors?.notes ?? []));
     const labMs = Date.now() - labStarted;
 
-    const stamp = makeStamp({ kind: "lab", code: codeVersion(LAB_ENGINE), data: research.data, params: { ...request, params }, result: report, createdAt: Date.now() });
+    const stamp = makeStamp({ kind: "lab", code: codeVersion(LAB_ENGINE), data, params: { ...request, params }, result: report, createdAt: Date.now() });
     const trials = recordLabTrials(report, stamp, request.from);
     if (!pin) {
       // The variant's report card (#23) shows its latest run; a replay of an older stamp doesn't replace it.
@@ -140,7 +153,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     log.info("Lab run", { signal: signal.id, universe: request.universe, days: report.period.days, stocks: report.universe.symbols, trials: trials.recorded, loadMs, signalMs, labMs });
     return { status: "ready", report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs, labMs, scanCached: research.scanCached, cached: false }, stamp, trials };
   } catch (error) {
-    if (error instanceof LabError || error instanceof LabInputError || error instanceof BacktestError) return { status: "error", error: error.message };
+    if (error instanceof LabError || error instanceof LabInputError || error instanceof BacktestError || error instanceof LabSectorError) return { status: "error", error: error.message };
     throw error;
   }
 }
