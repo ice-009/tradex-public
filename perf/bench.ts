@@ -219,10 +219,12 @@ async function backtest(): Promise<Record<string, Metric>> {
  * #22: "a few seconds"): the signal's values, quintiles every session, forward
  * returns at 1, 5, 10, 21 sessions and decay 1…21, regime and 60/40 splits,
  * turnover. Screen signals add the backtester's signal scan (benchmarked above).
+ * Residual momentum (#27) adds a rolling 3-year regression per stock; a
+ * checkout without it skips that metric.
  */
 async function lab(): Promise<Record<string, Metric>> {
   const { runLab } = await import("@/core/lab/engine");
-  const { BUILT_IN_SIGNALS, resolveParams, signalMeta } = await import("@/core/lab/signals");
+  const { LAB_SIGNALS, resolveParams, signalMeta } = await import("@/core/lab/signals");
   const { marketStates } = await import("@/core/plan/evidence");
   const { COST_PRESETS } = await import("@/core/backtest/costs");
   const universe = fnoUniverse();
@@ -230,14 +232,15 @@ async function lab(): Promise<Record<string, Metric>> {
   const regimeStates = marketStates(universe.benchmark);
   const ctx = { dates, symbols: universe.symbols, bars: universe.bars, benchmark: universe.benchmark };
   const run = async (id: string) => {
-    const signal = BUILT_IN_SIGNALS.find((entry) => entry.id === id)!;
+    const signal = LAB_SIGNALS.find((entry) => entry.id === id)!;
     const params = resolveParams(signal, {});
     const values = await signal.build(ctx, params);
     return runLab({ signal: signalMeta(signal, params), dates, symbols: universe.symbols, bars: universe.bars, values, costs: COST_PRESETS["futures-2026"].model, regimeStates });
   };
   await run("reversal-1m"); // warm the JIT
   const metrics: Record<string, Metric> = {};
-  for (const id of ["momentum-12-1", "volatility-20d"]) {
+  for (const id of ["momentum-12-1", "volatility-20d", "residual-momentum"]) {
+    if (!LAB_SIGNALS.some((entry) => entry.id === id)) continue;
     const samples: number[] = [];
     let days = 0;
     for (let i = 0; i < 3; i += 1) {
