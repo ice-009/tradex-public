@@ -255,12 +255,12 @@ const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
  * end (a replay: to the stamped last session, for the stamped symbols). The F&O
  * list is point-in-time over the same stretch, through asOf.
  */
-async function loadLong(request: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null): Promise<Loaded & { notes: LongNotes }> {
+async function loadLong(request: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null, warmupDays = WARMUP_DAYS): Promise<Loaded & { notes: LongNotes }> {
   const id = parseUniverse(request.universe);
   const today = istParts().day;
   const to = Math.min(pin?.to ?? request.to ?? today, today);
   const from = clampToArchive(request.from ?? ARCHIVE_START);
-  const readFrom = clampToArchive(from - WARMUP_DAYS * DAY_MS);
+  const readFrom = clampToArchive(from - Math.max(WARMUP_DAYS, warmupDays) * DAY_MS);
   if (readFrom >= to) throw new BacktestError("The period ends before it starts.");
   const window = pin?.membership ?? { from: readFrom, to };
   const timeline = await asOfSpan(window.from, window.to, { results: false, factors: false });
@@ -296,8 +296,8 @@ async function loadLong(request: Pick<BacktestRequest, "universe" | "from" | "to
  * never held (merged or delisted stocks). A period with no `from` must not use
  * it (its first day would move with the calendar).
  */
-const load = (period: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null, archive = false): Promise<Loaded> =>
-  archive || isLongRange(period.from, istParts().day) ? loadLong(period, pin) : loadStored(period.universe, pin);
+const load = (period: Pick<BacktestRequest, "universe" | "from" | "to">, pin: ReplayPin | null, archive = false, warmupDays = WARMUP_DAYS): Promise<Loaded> =>
+  archive || isLongRange(period.from, istParts().day) ? loadLong(period, pin, warmupDays) : loadStored(period.universe, pin);
 
 interface ScanRun extends Scanned {
   key: string;
@@ -369,12 +369,14 @@ export interface ResearchData {
  * (former members included) and the data stamp. With `scan`, also the screens'
  * signal scan, shared with the backtester's cache. With `archive` (and a
  * `from`), any period is read from the hub's archive, so former members the
- * store never held (renamed, merged, delisted) are in it too.
+ * store never held (renamed, merged, delisted) are in it too. `warmupDays`
+ * reads more history before `from` than the backtester's warm-up, for a signal
+ * that needs it (a 3-year regression); the scan path keeps its own warm-up.
  */
 export async function researchData(
   period: { universe: string; from: number | null; to: number | null },
   pin: ReplayPin | null,
-  options: { scan: boolean; archive?: boolean },
+  options: { scan: boolean; archive?: boolean; warmupDays?: number },
 ): Promise<ResearchData> {
   let bars: Map<string, DailyBar[]>;
   let symbols: string[];
@@ -392,7 +394,7 @@ export async function researchData(
     bars = new Map([...run.scan.series].map(([symbol, series]) => [symbol, series.bars]));
     bars.set(BENCHMARK, run.scan.benchmark);
   } else {
-    const loaded = await load(period, pin, archive);
+    const loaded = await load(period, pin, archive, options.warmupDays);
     ({ bars, membership, notes } = loaded);
     symbols = loaded.scanned;
     data = await hashDataset({
