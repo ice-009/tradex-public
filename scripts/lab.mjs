@@ -4,6 +4,7 @@
 // `server-only` (which throws outside a Next.js server build) is replaced by
 // the same stand-in the unit tests use; npm packages stay external. HUB_URL
 // and HUB_KEY come from the environment, or from .env when it exists.
+// `npm run lab -- overlay …` runs scripts/labOverlay.ts (volatility-managed books) instead.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -14,10 +15,11 @@ import * as esbuild from "esbuild";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = path.join(root, "src");
 // Inside the checkout, so the bundle's bare imports resolve from its node_modules.
-const outfile = path.join(root, "node_modules", ".cache", "tradex-lab", "lab.mjs");
+const overlay = process.argv[2] === "overlay";
+const outfile = path.join(root, "node_modules", ".cache", "tradex-lab", overlay ? "labOverlay.mjs" : "lab.mjs");
 
 await esbuild.build({
-  entryPoints: [path.join(root, "scripts", "lab.ts")],
+  entryPoints: [path.join(root, "scripts", overlay ? "labOverlay.ts" : "lab.ts")],
   outfile,
   bundle: true,
   platform: "node",
@@ -39,7 +41,7 @@ await esbuild.build({
 });
 
 const env = path.join(root, ".env");
-const nodeArgs = [...(existsSync(env) ? [`--env-file=${env}`] : []), outfile, ...process.argv.slice(2)];
+const nodeArgs = [...(existsSync(env) ? [`--env-file=${env}`] : []), outfile, ...process.argv.slice(overlay ? 3 : 2)];
 // Run from the checkout: .cache/ (stored bars, the trial record) is the server's.
 const result = spawnSync(process.execPath, nodeArgs, { stdio: "inherit", cwd: root });
 process.exit(result.status ?? 1);

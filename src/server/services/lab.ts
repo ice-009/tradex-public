@@ -6,13 +6,15 @@ import { recordTrials } from "./labTrials";
 import { saveLabCard } from "./labCards";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { DEFAULT_HORIZONS, DEFAULT_QUANTILES, LAB_ENGINE, LabInputError, MAX_HORIZON, runLab, type LabReport } from "@/core/lab/engine";
-import { findSignal, resolveParams, signalMeta } from "@/core/lab/signals";
+import type { SectorContext } from "@/core/lab/sectorSignals";
+import { findSignal, resolveParams, signalMeta, type LabSignal } from "@/core/lab/signals";
 import { marketStates } from "@/core/plan/evidence";
-import { makeStamp, type RunStamp } from "@/core/repro/stamp";
+import { makeStamp, withDataPart, type RunStamp } from "@/core/repro/stamp";
 import { log } from "@/server/log";
 import { storeStart } from "@/core/backtest/phases";
 import { istParts } from "@/core/market/session";
-import { BacktestError, researchData } from "./backtest";
+import { asOf, orElse } from "@/server/providers/asOf";
+import { BacktestError, researchData, type ResearchData } from "./backtest";
 import { LabSectorError, labSectors } from "./labSectors";
 import { codeVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { parseUniverse } from "./screener";
@@ -54,6 +56,11 @@ function recordLabTrials(report: LabReport, stamp: RunStamp, from: number | null
   }
 }
 
+/** Today's industry per stock (asOf: the classification isn't stored historically). */
+export async function industryMap(): Promise<ReadonlyMap<string, string>> {
+  return orElse((await asOf()).industries, new Map<string, string>());
+}
+
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 const dayOrNull = (value: unknown) => (value === null || value === undefined || value === "" ? null : Number.isFinite(Number(value)) ? Number(value) : null);
@@ -84,6 +91,48 @@ export function parseLabRequest(body: unknown): LabRequest {
 
 class LabError extends Error {}
 
+/**
+ * The data a signal's run reads: the period's bars and point-in-time F&O list
+ * (with the signal's extra warm-up), today's industries for a signal that
+ * uses them, and the sector indices and baskets for a sector signal (#30,
+ * ./labSectors.ts), which become part of the run's data stamp. Shared with the
+ * overlay service (./labOverlay.ts).
+ */
+export async function loadSignalData(signal: LabSignal, params: Record<string, number>, period: { universe: string; from: number | null; to: number | null }, pin: ReplayPin | null) {
+  // Always from the hub's archive: one series per company across renames, and the
+  // former F&O members (merged, delisted) the screener's store never held.
+  const research = await researchData({ universe: period.universe, from: period.from, to: period.to }, pin, {
+    scan: Boolean(signal.usesScan),
+    archive: true,
+    warmupDays: signal.warmupDays?.(params),
+  });
+  const industries = signal.usesIndustries?.(params) ? await industryMap() : null;
+  const withIndustries = industries ? withDataPart(research.data, "industries", [...industries].sort((a, b) => (a[0] < b[0] ? -1 : 1))) : research.data;
+  // Sector signals also read each industry's index and basket over the same span.
+  const sectors = signal.usesSectors && research.symbols.length ? await labSectors({ ...research, data: withIndustries }) : null;
+  return { research, industries, sectors, data: sectors?.data ?? withIndustries };
+}
+
+/** A signal's values over loaded data. */
+export const buildSignalValues = (signal: LabSignal, params: Record<string, number>, research: ResearchData, industries: ReadonlyMap<string, string> | null, sectors: SectorContext | null = null) =>
+  signal.build(
+    {
+      dates: research.dates,
+      symbols: research.symbols,
+      bars: research.bars,
+      benchmark: research.benchmark,
+      isMember: research.isMember ?? undefined,
+      scan: research.scan,
+      pause: yieldToEventLoop,
+      industryOf: industries ? (symbol) => industries.get(symbol) ?? null : undefined,
+      sectors,
+    },
+    params,
+  );
+
+export const industryNote = (research: Pick<ResearchData, "symbols">, industries: ReadonlyMap<string, string>) =>
+  `Industries are today's NSE classification (the hub's index lists), known for ${research.symbols.filter((symbol) => industries.has(symbol)).length} of ${research.symbols.length} stocks; stocks without one (mostly former F&O members no longer in an index) get no sector factor.`;
+
 async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabResponse> {
   const signal = findSignal(raw.signal);
   if (!signal) return { status: "error", error: `Unknown signal "${raw.signal}".` };
@@ -91,12 +140,8 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
   const request: LabRequest = { ...raw, from: raw.from ?? storeStart(istParts().day) };
   try {
     const started = Date.now();
-    // Always from the hub's archive: one series per company across renames, and the
-    // former F&O members (merged, delisted) the screener's store never held.
-    const research = await researchData({ universe: request.universe, from: request.from, to: request.to }, pin, { scan: Boolean(signal.usesScan), archive: true });
-    // Sector signals (#30) also read the sector indices and baskets over the same span; they join the data stamp.
-    const sectors = signal.usesSectors && research.symbols.length ? await labSectors(research) : null;
-    const data = sectors?.data ?? research.data;
+    const params = resolveParams(signal, request.params);
+    const { research, industries, sectors, data } = await loadSignalData(signal, params, request, pin);
     const loadMs = Date.now() - started;
     const costs = COST_PRESETS[request.costPreset];
     const key = JSON.stringify([request, data.hash]);
@@ -106,21 +151,8 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     if (hit) return { status: "ready", report: hit.report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs: 0, labMs: 0, scanCached: research.scanCached, cached: true }, stamp: hit.stamp, trials: hit.trials };
     if (!research.symbols.length) throw new LabError("No daily bars for this universe and period yet: they are read from the Market Data Hub.");
 
-    const params = resolveParams(signal, request.params);
     const signalStarted = Date.now();
-    const values = await signal.build(
-      {
-        dates: research.dates,
-        symbols: research.symbols,
-        bars: research.bars,
-        benchmark: research.benchmark,
-        isMember: research.isMember ?? undefined,
-        scan: research.scan,
-        pause: yieldToEventLoop,
-        sectors: sectors?.context ?? null,
-      },
-      params,
-    );
+    const values = await buildSignalValues(signal, params, research, industries, sectors?.context ?? null);
     const signalMs = Date.now() - signalStarted;
     const labStarted = Date.now();
     const report = runLab({
@@ -140,6 +172,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     const sessions = research.dates.filter((day) => day >= (report.period.from ?? 0) && day <= (report.period.to ?? 0));
     const universeNote = research.universeNote(sessions);
     report.notes.push(...research.warnings, ...(universeNote ? [universeNote] : []), ...(sectors?.notes ?? []));
+    if (industries) report.notes.push(industryNote(research, industries));
     const labMs = Date.now() - labStarted;
 
     const stamp = makeStamp({ kind: "lab", code: codeVersion(LAB_ENGINE), data, params: { ...request, params }, result: report, createdAt: Date.now() });

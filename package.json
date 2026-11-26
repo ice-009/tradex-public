@@ -17,7 +17,8 @@
     "perf": "node perf/run.mjs",
     "db:setup": "prisma db push",
     "postinstall": "prisma generate",
-    "lab": "node scripts/lab.mjs"
+    "lab": "node scripts/lab.mjs",
+    "research": "node scripts/research.mjs"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.10.1",

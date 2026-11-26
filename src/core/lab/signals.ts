@@ -3,6 +3,7 @@ import { SCREENS, type ScreenDef } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
 import { MAX_DAILY_MOVE, type LabSignalMeta, type SignalValues } from "./engine";
 import { SECTOR_SIGNALS, type SectorContext } from "./sectorSignals";
+import { MOMENTUM_SIGNALS } from "./momentumSignals";
 
 // The Signal Lab's signals: anything that gives one number per stock per day.
 // Pure.
@@ -42,6 +43,8 @@ export interface SignalContext {
   pause?: () => Promise<void>;
   /** Each stock's sector and the sectors' long series (for signals with `usesSectors`). */
   sectors?: SectorContext | null;
+  /** A stock's industry (today's NSE classification), for signals with `usesIndustries`; null when unknown. */
+  industryOf?: (symbol: string) => string | null;
 }
 
 export interface ParamSpec {
@@ -67,6 +70,10 @@ export interface LabSignal {
   usesScan?: boolean;
   /** Reads the sector series (the service loads them only for these). */
   usesSectors?: boolean;
+  /** Reads `industryOf` with these parameters (the service then loads the industry map). */
+  usesIndustries?: (params: Record<string, number>) => boolean;
+  /** Calendar days of history the signal needs before the first formation day, when more than the backtester's warm-up. */
+  warmupDays?: (params: Record<string, number>) => number;
   build(ctx: SignalContext, params: Record<string, number>): SignalValues | Promise<SignalValues>;
 }
 
@@ -272,7 +279,13 @@ function screenSignal(screen: ScreenDef, mode: "match" | "score"): LabSignal {
   };
 }
 
-export const LAB_SIGNALS: LabSignal[] = [...BUILT_IN_SIGNALS, ...SECTOR_SIGNALS, ...SCREENS.map((screen) => screenSignal(screen, "match")), ...SCREENS.map((screen) => screenSignal(screen, "score"))];
+export const LAB_SIGNALS: LabSignal[] = [
+  ...BUILT_IN_SIGNALS,
+  ...MOMENTUM_SIGNALS,
+  ...SECTOR_SIGNALS,
+  ...SCREENS.map((screen) => screenSignal(screen, "match")),
+  ...SCREENS.map((screen) => screenSignal(screen, "score")),
+];
 
 const BY_ID = new Map(LAB_SIGNALS.map((signal) => [signal.id, signal]));
 
