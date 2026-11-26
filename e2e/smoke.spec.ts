@@ -87,6 +87,17 @@ test("open the plan", async ({ page }) => {
   await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible({ timeout: 60_000 });
   await expect(plan).not.toContainText("couldn't be computed");
   await expect(page.getByText("Show the evidence")).toBeVisible();
+
+  // Capital too small for any lot: no ideas, and the plan says what would fit the closest one.
+  await page.getByTitle("Capital, risk per trade, most open trades").click();
+  const capital = page.locator(".tx-plan-settings input").first();
+  await capital.fill("10000");
+  await expect(plan.locator(".tx-plan-toobig")).toContainText(/The closest: one lot of \S+ .* risks ₹[\d,]+ — it needs ≥ ₹[\d.]+(L|Cr) capital at 1% risk/);
+  await expect(plan.locator(".tx-plan-ideas")).toHaveCount(0);
+  await expect(plan.locator(".tx-plan-leftout")).toBeVisible();
+  await expect(plan.getByRole("button", { name: "Sizing settings" })).toBeVisible();
+  await capital.fill("500000");
+  await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible();
 });
 
 test("scroll a daily chart back past the stored 5 years: older bars load, a renamed stock's history joined (#18, #16)", async ({ page }) => {
