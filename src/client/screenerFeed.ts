@@ -10,7 +10,7 @@ import {
 import type { LiveRecordResponse, ResultsEvent, ScreenerResponse, TrackResult as TrackResponse } from "@/contracts/api";
 import { api } from "@/client/api";
 import { HOLD_BARS } from "@/core/screener/backtest";
-import { scoreSetup, type SetupScore, type StockFacts } from "@/core/screener/score";
+import { scoreSetup, type ScoreGate, type SetupScore, type StockFacts } from "@/core/screener/score";
 import type { TradePlan } from "@/core/screener/screens";
 import { DAY_MS, isMarketOpen, istParts } from "@/core/market/session";
 
@@ -329,12 +329,15 @@ export function resultsInDays(symbol: string, results: ResultsFeed | null): numb
   return Math.round((event.date - today) / DAY_MS);
 }
 
-/** Score a plan for a stock: facts from the server, replay record of its setup, results date. */
+/**
+ * Score a plan for a stock: facts from the server, replay record of its setup, results date.
+ * `gate`: the factors with a passing report card (#29, terminal/useReceipts.ts useScoreGate); absent = ungated.
+ */
 export function scorePlan(
   symbol: string,
   facts: StockFacts,
   plan: TradePlan,
-  options: { screenId?: string; group?: ScreenGroup; warnings?: string[]; track: TrackResponse | null; results: ResultsFeed | null },
+  options: { screenId?: string; group?: ScreenGroup; warnings?: string[]; track: TrackResponse | null; results: ResultsFeed | null; gate?: ScoreGate | null },
 ): SetupScore {
   const record = options.screenId ? options.track?.screens?.[options.screenId] : undefined;
   return scoreSetup(facts, plan, {
@@ -344,11 +347,12 @@ export function scorePlan(
     warnings: options.warnings,
     buysWeakness: options.screenId ? SCREEN_MAP[options.screenId]?.buysWeakness : false,
     regime: feed.data?.regime?.state,
+    gate: options.gate,
   });
 }
 
 /** Score of one screener hit (null when the row has no facts, e.g. an older server). */
-export function scoreHit(hit: SetupHit, track: TrackResponse | null, results: ResultsFeed | null): SetupScore | null {
+export function scoreHit(hit: SetupHit, track: TrackResponse | null, results: ResultsFeed | null, gate?: ScoreGate | null): SetupScore | null {
   if (!hit.row.facts) return null;
   return scorePlan(hit.row.symbol, hit.row.facts, hit.row.plan, {
     screenId: hit.screen.id,
@@ -356,5 +360,6 @@ export function scoreHit(hit: SetupHit, track: TrackResponse | null, results: Re
     warnings: hit.row.warnings,
     track,
     results,
+    gate,
   });
 }

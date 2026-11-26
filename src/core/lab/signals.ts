@@ -3,6 +3,7 @@ import { SCREENS, type ScreenDef } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
 import { MAX_DAILY_MOVE, type LabSignalMeta, type SignalValues } from "./engine";
 import { MOMENTUM_SIGNALS } from "./momentumSignals";
+import { SCORE_SIGNALS } from "./scoreSignals";
 
 // The Signal Lab's signals: anything that gives one number per stock per day.
 // Pure.
@@ -270,7 +271,7 @@ function screenSignal(screen: ScreenDef, mode: "match" | "score"): LabSignal {
   };
 }
 
-export const LAB_SIGNALS: LabSignal[] = [...BUILT_IN_SIGNALS, ...MOMENTUM_SIGNALS, ...SCREENS.map((screen) => screenSignal(screen, "match")), ...SCREENS.map((screen) => screenSignal(screen, "score"))];
+export const LAB_SIGNALS: LabSignal[] = [...BUILT_IN_SIGNALS, ...MOMENTUM_SIGNALS, ...SCORE_SIGNALS, ...SCREENS.map((screen) => screenSignal(screen, "match")), ...SCREENS.map((screen) => screenSignal(screen, "score"))];
 
 const BY_ID = new Map(LAB_SIGNALS.map((signal) => [signal.id, signal]));
 

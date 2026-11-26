@@ -28,6 +28,8 @@ import { useDailyPlan, useMarketState } from "./usePlan";
 import { useLiveTick, useVisibleLiveTick } from "./LivePrice";
 import { Icons } from "./icons";
 import { RunStampBar, type Replay } from "./RunStampBar";
+import { ReceiptLine } from "./Receipt";
+import { useScreenReceipts } from "./useReceipts";
 
 // The Plan tab: today's trades to take (from screens with a tested edge in
 // this market), how many lots, how to get in and out; your open trades with
@@ -501,6 +503,8 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
   const [taking, setTaking] = useState(false);
   const active = useTerminal((state) => state.cells[state.activeCell].symbol === idea.symbol);
   const screen = SCREEN_MAP[idea.screenId];
+  // Receipt (#29): tested period, market, net expectancy, sample, live record and a link to the report card.
+  const receipt = useScreenReceipts()?.[idea.screenId] ?? null;
   const span = spanLabel(evidence.table);
   const live = liveLine(idea.screenId, evidence.live, trades);
   const { size } = idea;
@@ -547,6 +551,7 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
           {live ? ` · ${live}` : ""}
         </span>
       </button>
+      {receipt && <ReceiptLine receipt={receipt} className="tx-plan-receipt" />}
       <span className="tx-plan-actions">
         <button type="button" className="tx-icon-btn" title="Save this plan on the chart as a Long Position" onClick={() => drawPlanOnChart({ screen, row: idea.row, rr: riskReward(idea.row) })}>
           <Icons.long size={15} />

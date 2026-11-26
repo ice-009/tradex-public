@@ -10,6 +10,8 @@ import { GROUP_LABEL, focusSetup, focusedHit, resultsNote, scoreHit, useIdea, us
 import { lotsForRisk } from "@/core/market/futures";
 import { useLotSize } from "@/client/lotsFeed";
 import { OiChip, ScoreBreakdown, ScoreChip } from "./ScoreBits";
+import { ReceiptLine } from "./Receipt";
+import { useFactorReceipts, useScoreGate, useScreenReceipts } from "./useReceipts";
 import { OrderTicket } from "./OrderTicket";
 import { addPlanAlerts } from "./Alerts";
 import { getState, toggleShortlist, useTerminal } from "./store";
@@ -56,6 +58,9 @@ export function SetupCard({ symbol }: { symbol: string }) {
   const riskPct = usePrefs((prefs) => prefs.riskPct);
   const [saved, setSaved] = useState<string | null>(null);
   const [showScore, setShowScore] = useState(false);
+  const gate = useScoreGate();
+  const factorReceipts = useFactorReceipts();
+  const screenReceipts = useScreenReceipts();
   const [ticket, setTicket] = useState(false);
   const [alertsAdded, setAlertsAdded] = useState<number | null>(null);
   const results = useScreenerFeed((feed) => feed.results);
@@ -81,7 +86,8 @@ export function SetupCard({ symbol }: { symbol: string }) {
 
   const record = track?.screens?.[hit.screen.id];
   const facts = hit.row.facts ?? null;
-  const score = scoreHit(hit, track, results);
+  const score = scoreHit(hit, track, results, gate);
+  const receipt = screenReceipts?.[hit.screen.id] ?? null;
   const own = track?.bySymbol?.[hit.screen.id]?.[symbol];
   const ownVerdict = own ? verdictFor(own, record?.planR ?? null) : null;
 
@@ -116,6 +122,8 @@ export function SetupCard({ symbol }: { symbol: string }) {
           </button>
         ))}
       </div>
+
+      {receipt && <ReceiptLine receipt={receipt} className="tx-setup-receipt" />}
 
       <SetupNotices symbol={symbol} warnings={hit.row.warnings ?? []} btst={hit.screen.group === "btst"} />
 
@@ -184,10 +192,10 @@ export function SetupCard({ symbol }: { symbol: string }) {
         <>
           <button type="button" className="tx-score-head" onClick={() => setShowScore((value) => !value)} aria-expanded={showScore}>
             <span className="tx-section-label">Setup score</span>
-            <ScoreChip score={score} size="lg" />
-            <span className="tx-dim">{showScore ? "Hide points ▴" : "Show points ▾"}</span>
+            <ScoreChip score={score} size="lg" receipts={factorReceipts} />
+            <span className="tx-dim">{showScore ? "Hide points ▴" : score.gating === "unproven" ? "Unproven · points ▾" : "Show points ▾"}</span>
           </button>
-          {showScore && <ScoreBreakdown score={score} />}
+          {showScore && <ScoreBreakdown score={score} receipts={factorReceipts} />}
         </>
       )}
 
