@@ -72,19 +72,19 @@ Monthly; means × 12, volatilities and tracking error × √12; beta = slope of 
 | Series | Weights | Period | Months | Corr. | Tracking error | Mean ours | Mean IIMA | Vol ours | Vol IIMA | Beta |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | **WML** | traded value | 1996–2025 | 351 | **0.84** | 14.8% | 13.3% | 13.8% | 26.8% | 25.0% | 0.90 |
-| **WML** | equal | 1996–2025 | 351 | **0.86** | 13.1% | 16.2% | 13.8% | 23.2% | 25.0% | 0.79 |
+| **WML** | equal | 1996–2025 | 351 | **0.86** | 13.0% | 16.3% | 13.8% | 23.2% | 25.0% | 0.79 |
 | WML | traded value | 1996–2000 | 51 | 0.86 | 19.6% | 30.3% | 3.0% | 34.6% | 38.7% | 0.77 |
 | WML | traded value | 2001–2010 | 120 | 0.87 | 14.7% | 7.7% | 17.4% | 30.2% | 28.0% | 0.94 |
-| WML | traded value | 2011–2020 | 120 | 0.84 | 13.4% | 13.1% | 16.3% | 24.5% | 19.1% | 1.08 |
-| WML | traded value | 2021–2025 | 60 | 0.66 | 10.2% | 10.4% | 11.1% | 13.0% | 11.2% | 0.77 |
-| WML | equal | 2021–2025 | 60 | 0.72 | 8.7% | 13.7% | 11.1% | 12.2% | 11.2% | 0.79 |
+| WML | traded value | 2011–2020 | 120 | 0.84 | 13.4% | 13.1% | 16.3% | 24.4% | 19.1% | 1.08 |
+| WML | traded value | 2021–2025 | 60 | 0.66 | 10.1% | 10.5% | 11.1% | 13.0% | 11.2% | 0.77 |
+| WML | equal | 2021–2025 | 60 | 0.73 | 8.7% | 13.8% | 11.1% | 12.1% | 11.2% | 0.79 |
 | **Market − Rf** | traded value | 1996–2025 | 360 | **0.91** | 15.0% | 6.1% | 9.7% | 33.4% | 24.2% | 1.26 |
 | **Market − Rf** | equal | 1996–2025 | 360 | **0.87** | 16.2% | 10.5% | 9.7% | 32.3% | 24.2% | 1.16 |
 | Market − Rf | traded value | 2011–2020 | 120 | 0.95 | 10.3% | −1.2% | 4.0% | 24.7% | 16.7% | 1.40 |
 | Market − Rf | traded value | 2021–2025 | 60 | 0.96 | 4.4% | 12.6% | 12.4% | 16.2% | 14.5% | 1.08 |
-| WB (big winners) | traded value | all | 348 | 0.85 | | 17.1% | 22.9% | | | 0.98 |
+| WB (big winners) | traded value | all | 348 | 0.85 | | 17.2% | 22.9% | | | 0.98 |
 | WS (small winners) | traded value | all | 351 | 0.94 | | 23.9% | 24.6% | | | 0.85 |
-| LB (big losers) | traded value | all | 343 | 0.88 | | 5.0% | 13.1% | | | 1.01 |
+| LB (big losers) | traded value | all | 343 | 0.88 | | 5.0% | 13.1% | | | 1.00 |
 | LS (small losers) | traded value | all | 351 | 0.95 | | 9.6% | 13.7% | | | 0.94 |
 | WS / LS | equal | all | 351 | 0.96 / 0.98 | | | | | | |
 
@@ -175,7 +175,7 @@ market cap, the rebuilt factors track IIMA's closely:
 - the four momentum portfolios 0.85–0.98;
 - IIMA's momentum breakpoints 0.95–0.96.
 
-The long-run WML premium matches too (13.3–16.2% a year against IIMA's 13.8%). The largest monthly gaps are
+The long-run WML premium matches too (13.3–16.3% a year against IIMA's 13.8%). The largest monthly gaps are
 explained by weights (heavily traded names) and the NSE-only 1990s universe, not by bad prices.
 
 Remaining issues are real but local: 48 listed splits/bonuses without a factor (hub #58, several in F&O blue

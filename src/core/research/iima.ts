@@ -378,12 +378,10 @@ export function formMonth(stocks: StockMonths[], formed: number, options: Factor
     // Traded in the formation month itself (a stock suspended then isn't buyable).
     if (end < 0 || end >= stock.adj.length || !Number.isFinite(stock.adj[end])) continue;
     let days = 0;
-    let value = 0;
     const prices: number[] = [];
     const monthly: number[] = [];
     for (let m = Math.max(0, end - 11); m <= end; m += 1) {
       days += stock.days[m];
-      value += stock.value[m];
       if (Number.isFinite(stock.raw[m])) prices.push(stock.raw[m]);
       if (stock.days[m] > 0) monthly.push(stock.value[m] / stock.days[m]);
     }
