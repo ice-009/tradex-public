@@ -64,6 +64,20 @@ test("run a backtest", async ({ page }) => {
   await expect(results.getByRole("heading", { name: "By strategy" })).toBeVisible();
 });
 
+test("test a signal in the Signal Lab (#22)", async ({ page }) => {
+  await openDockTab(page, "Lab");
+  const run = page.getByRole("button", { name: /^Run signal test/ });
+  await expect(run).toBeEnabled();
+  await page.getByLabel("Signal", { exact: true }).selectOption("reversal-1m");
+  await run.click();
+  const results = page.locator(".tx-lab-results");
+  await expect(results).toBeVisible({ timeout: 90_000 });
+  await expect(results.getByRole("heading", { name: /Long–short spread/ })).toBeVisible();
+  await expect(results.getByRole("heading", { name: /Decay/ })).toBeVisible();
+  await expect(results.getByRole("heading", { name: /Turnover/ })).toBeVisible();
+  await expect(results.locator(".tx-stamp")).toContainText("Stamp");
+});
+
 test("open the plan", async ({ page }) => {
   await openDockTab(page, "Plan");
   const plan = page.locator(".tx-plan-section").first();

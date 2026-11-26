@@ -64,6 +64,7 @@ Without Docker, add the label `update-screenshots` to your PR: the **Re-render c
 | `chart.panZoom.50k.p95` | 95th-percentile frame while panning and zooming across 50,000 5-minute bars | 8 ms |
 | `screener.scan.fno` | A full screener pass over the F&O list (220 stocks × 5 years, with live bars) | 2 s |
 | `backtest.5y.fno` | Signal scan + portfolio simulation, every screen, 5 years × the F&O list | 10 s |
+| `lab.5y.fno.momentum-12-1`, `lab.5y.fno.volatility-20d` | A Signal Lab run of a built-in signal (values, quintiles, 1–21 session returns, splits, decay, turnover), 5 years × the F&O list | 3 s |
 
 The chart runs in Node on a no-op canvas, so it measures the engine's own work per frame (layout, scaling, indicators, building paths), not the browser's rasterising; the 8 ms frame budget leaves the other half of a 60 Hz frame for that.
 

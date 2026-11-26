@@ -26,8 +26,8 @@ const REFERENCE_READS = [
   { regex: "(^|/)providers/hub/client$", importNames: ["HubClient"], message: AS_OF },
 ];
 /** The screener, plan and backtest engines and the services that run them. */
-const POINT_IN_TIME_ENGINE = ["src/core/screener/**", "src/core/plan/**", "src/core/backtest/**"];
-const POINT_IN_TIME_SERVICES = ["screener", "evidence", "backtest", "btstRecord", "analyze", "trades"].map((name) => `src/server/services/${name}.ts`);
+const POINT_IN_TIME_ENGINE = ["src/core/screener/**", "src/core/plan/**", "src/core/backtest/**", "src/core/lab/**"];
+const POINT_IN_TIME_SERVICES = ["screener", "evidence", "backtest", "btstRecord", "analyze", "trades", "lab"].map((name) => `src/server/services/${name}.ts`);
 
 const eslintConfig = defineConfig([
   ...nextVitals,

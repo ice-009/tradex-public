@@ -212,11 +212,50 @@ async function backtest(): Promise<Record<string, Metric>> {
   };
 }
 
+// ------------------------------------------------------------------ signal lab
+
+/**
+ * A Signal Lab run of each built-in signal over 5 years × the F&O list (issue
+ * #22: "a few seconds"): the signal's values, quintiles every session, forward
+ * returns at 1, 5, 10, 21 sessions and decay 1…21, regime and 60/40 splits,
+ * turnover. Screen signals add the backtester's signal scan (benchmarked above).
+ */
+async function lab(): Promise<Record<string, Metric>> {
+  const { runLab } = await import("@/core/lab/engine");
+  const { BUILT_IN_SIGNALS, resolveParams, signalMeta } = await import("@/core/lab/signals");
+  const { marketStates } = await import("@/core/plan/evidence");
+  const { COST_PRESETS } = await import("@/core/backtest/costs");
+  const universe = fnoUniverse();
+  const dates = [...new Set([...universe.bars.values()].flatMap((bars) => bars.map((bar) => bar.t)))].sort((a, b) => a - b);
+  const regimeStates = marketStates(universe.benchmark);
+  const ctx = { dates, symbols: universe.symbols, bars: universe.bars, benchmark: universe.benchmark };
+  const run = async (id: string) => {
+    const signal = BUILT_IN_SIGNALS.find((entry) => entry.id === id)!;
+    const params = resolveParams(signal, {});
+    const values = await signal.build(ctx, params);
+    return runLab({ signal: signalMeta(signal, params), dates, symbols: universe.symbols, bars: universe.bars, values, costs: COST_PRESETS["futures-2026"].model, regimeStates });
+  };
+  await run("reversal-1m"); // warm the JIT
+  const metrics: Record<string, Metric> = {};
+  for (const id of ["momentum-12-1", "volatility-20d"]) {
+    const samples: number[] = [];
+    let days = 0;
+    for (let i = 0; i < 3; i += 1) {
+      const [ms, report] = await timeAsync(() => run(id));
+      samples.push(ms);
+      days = report.period.days;
+    }
+    metrics[`lab.5y.fno.${id}`] = { ms: round(median(samples)), budget: 3_000, compare: true, info: { symbols: FNO_SYMBOLS, sessions: SESSIONS_5Y, rankedDays: days } };
+  }
+  return metrics;
+}
+
 export const BENCHMARKS: Record<string, () => Promise<Record<string, Metric>>> = {
   "chart-first-paint": chartFirstPaint,
   "chart-pan-zoom": chartPanZoom,
   screener: screenerScan,
   backtest,
+  lab,
 };
 
 // Entry point when bundled by run.mjs: `node bundle.mjs <benchmark>` prints one JSON line.
