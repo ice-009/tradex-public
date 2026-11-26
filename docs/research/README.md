@@ -14,6 +14,7 @@ results only, because the site was unreachable from the development environment.
 | [patterns.md](patterns.md) | Automatic chart patterns and S/R zones: detection rules, false-positive checks on random walks, plan levels (pattern stop, measured target, chandelier trail) (`src/core/indicators/patterns.ts`) |
 | [platform-review.md](platform-review.md) | Review of the live terminal vs TradingView / Kite / Fyers / Chartink: chart-label and axis fixes, alerts, order ticket (GTT OCO, NSE tick sizes), backlog |
 | [drawings.md](drawings.md) | Behaviour of the drawing tools, incl. Long/Short position (`src/chart/drawings.ts`) |
+| [iima-factor-check.md](iima-factor-check.md) | Our momentum and market factors, rebuilt from the hub's NSE archive, vs IIM Ahmedabad's: correlations, the months that differ, data bugs found (`npm run research -- iima-check`) |
 
 Primary sources used throughout: Zerodha Varsity (Indian-market usage: CPR, pivots,
 Supertrend, VWAP, EMA pairs), StockCharts ChartSchool (formulas and worked examples —
