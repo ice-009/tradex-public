@@ -14,6 +14,7 @@ import { useLotSize } from "@/client/lotsFeed";
 import { HOLD_BARS } from "@/core/screener/backtest";
 import { drawPlanOnChart } from "./SetupCard";
 import { ScoreChip } from "./ScoreBits";
+import { useFactorReceipts, useScoreGate } from "./useReceipts";
 import { OrderTicket } from "./OrderTicket";
 import { SymbolLogo } from "./Watchlist";
 import { usePrefs } from "./uiPrefs";
@@ -76,6 +77,9 @@ export function ComparePanel() {
     };
   }, [key, refreshKey]);
 
+  // Receipts (#29): the same gate as the screener's scores.
+  const gate = useScoreGate();
+  const factorReceipts = useFactorReceipts();
   const ranked = useMemo<Candidate[]>(() => {
     if (!stocks) return [];
     const out: Candidate[] = [];
@@ -83,7 +87,7 @@ export function ComparePanel() {
       if (stock.missing || !stock.facts || !stock.plan) continue;
       const idea = ideas.get(stock.symbol);
       const options = [
-        { plan: stock.plan, source: null, score: scorePlan(stock.symbol, stock.facts, stock.plan, { warnings: stock.warnings, track, results }) },
+        { plan: stock.plan, source: null, score: scorePlan(stock.symbol, stock.facts, stock.plan, { warnings: stock.warnings, track, results, gate }) },
         ...(idea?.hits ?? []).map((hit) => ({
           plan: hit.row.plan,
           source: { screenId: hit.screen.id, name: hit.screen.name, group: hit.screen.group },
@@ -93,6 +97,7 @@ export function ComparePanel() {
             warnings: hit.row.warnings,
             track,
             results,
+            gate,
           }),
         })),
       ];
@@ -100,7 +105,7 @@ export function ComparePanel() {
       out.push({ symbol: stock.symbol, name: stock.name, stock, ...best, setups: idea?.hits.length ?? 0 });
     }
     return out.sort((a, b) => b.score.total - a.score.total);
-  }, [stocks, ideas, track, results]);
+  }, [stocks, ideas, track, results, gate]);
 
   const missing = stocks?.filter((stock) => stock.missing).map((stock) => stock.symbol) ?? [];
   const factorKeys = ranked[0]?.score.parts.map((part) => ({ key: part.key, label: part.label, max: part.max })) ?? [];
@@ -167,7 +172,7 @@ export function ComparePanel() {
                         <SymbolLogo symbol={candidate.symbol} />
                         {candidate.symbol}
                       </button>
-                      <ScoreChip score={candidate.score} size="lg" />
+                      <ScoreChip score={candidate.score} size="lg" receipts={factorReceipts} />
                     </div>
                   </th>
                 ))}

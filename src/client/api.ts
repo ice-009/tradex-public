@@ -30,6 +30,7 @@ import type {
   PresetList,
   PresetsResponse,
   QuotesResponse,
+  ReceiptsResponse,
   ReplayRequest,
   ResultsResponse,
   ScreenerResponse,
@@ -119,6 +120,8 @@ export const api = {
   labCards: (signal?: AbortSignal) => getJson<LabCardsResponse>("/api/lab/cards", undefined, signal),
   /** One signal's report card: its stored variants and the latest report of `variant` (default: the newest). */
   labCard: (signalId: string, variant?: string, signal?: AbortSignal) => getJson<LabCardResponse>("/api/lab/card", { signal: signalId, variant }, signal),
+  /** Every score factor's and screen's report card in brief, and the factors that pass (the receipts, #29). */
+  receipts: (signal?: AbortSignal) => getJson<ReceiptsResponse>("/api/lab/receipts", undefined, signal),
 
   /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
   evidence: (period?: { from: number; to: number | null }) =>

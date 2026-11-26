@@ -1,0 +1,27 @@
+/* Receipts (#29): a one-line proof with a link to the report card. */
+
+.tx-receipt { display: block; min-width: 0; color: var(--text-subtle); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; line-height: 1.4; }
+.tx-receipt-card { color: var(--accent); text-decoration: none; white-space: nowrap; margin-right: var(--sp-1); }
+.tx-receipt-card:hover, .tx-receipt-card:focus-visible { text-decoration: underline; }
+.tx-receipt.is-unproven .tx-receipt-text { opacity: 0.75; }
+.tx-receipt-mark { display: inline-block; margin-right: var(--sp-1); font-weight: var(--fw-semibold); }
+.tx-receipt.is-proven .tx-receipt-mark { color: var(--pos); }
+.tx-receipt.is-unproven .tx-receipt-mark { color: var(--text-subtle); }
+
+.tx-receipt-link { color: var(--text-subtle); text-decoration: none; margin-left: 4px; font-size: var(--fs-2xs); }
+.tx-receipt-link:hover, .tx-receipt-link:focus-visible { color: var(--accent); }
+
+/* A score made only of unproven factors: shown for comparison, not as evidence. */
+.tx-score.is-unproven { opacity: 0.7; }
+.tx-score.is-unproven b { outline: 1px dashed currentColor; outline-offset: -1px; background: transparent; }
+
+/* Factor rows of the breakdown: unproven ones are greyed out (and left out of a gated total). */
+.tx-breakdown-row .tx-receipt { grid-column: 1 / -1; }
+.tx-breakdown-row.is-unproven .tx-breakdown-label,
+.tx-breakdown-row.is-unproven .tx-breakdown-pts,
+.tx-breakdown-row.is-unproven .tx-breakdown-detail { color: var(--text-subtle); opacity: 0.6; }
+.tx-breakdown-row.is-unproven .tx-breakdown-bar i { background: var(--text-subtle); }
+.tx-breakdown-note { margin: 0; color: var(--text-subtle); font-size: var(--fs-xs); }
+
+.tx-setup-receipt { margin: var(--sp-2) 0 0; }
+.tx-plan-receipt { flex: 1 1 100%; margin-top: 2px; overflow-wrap: anywhere; }

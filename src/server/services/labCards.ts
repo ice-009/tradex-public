@@ -56,6 +56,12 @@ const leading = (entry: StoredLabReport) => {
   return all.find((verdict) => verdict.horizon === primary) ?? signalVerdict(entry.report);
 };
 
+/** One variant's stored report and its verdict at its primary horizon (null: that variant was never run), for the receipts (#29). */
+export function variantCard(signalId: string, variantKey: string): { entry: StoredLabReport; verdict: SignalVerdict } | null {
+  const entry = readSignalReports(signalId).find((item) => item.variantKey === variantKey);
+  return entry ? { entry, verdict: leading(entry) } : null;
+}
+
 /** Every signal, with its newest stored report's verdict at its primary horizon. */
 export function labCardIndex(): LabCardsResponse {
   const latest = new Map(readLatestReports().map((entry) => [entry.signalId, entry]));

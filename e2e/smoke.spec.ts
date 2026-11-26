@@ -113,6 +113,10 @@ test("open the plan", async ({ page }) => {
   await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible({ timeout: 60_000 });
   await expect(plan).not.toContainText("couldn't be computed");
   await expect(page.getByText("Show the evidence")).toBeVisible();
+  // Every idea carries its receipt (#29): the tested period and expectancy, and a link to its screen's report card.
+  const receipt = plan.locator(".tx-plan-ideas li").first().locator(".tx-receipt");
+  await expect(receipt).toContainText(/R\/trade/);
+  await expect(receipt.getByRole("link", { name: /^Report card: / })).toHaveAttribute("href", /^\/lab\/screen%3A/);
 
   // Capital too small for any lot: no ideas, and the plan says what would fit the closest one.
   await page.getByTitle("Capital, risk per trade, most open trades").click();

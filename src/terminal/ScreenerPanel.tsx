@@ -9,6 +9,10 @@ import { GROUP_LABEL, focusedHit, refreshScreener, riskReward, scoreHit, setIdea
 import { openIdea } from "./ideaActions";
 import { drawPlanOnChart } from "./SetupCard";
 import { OiChip, ScoreChip } from "./ScoreBits";
+import { ReceiptLink } from "./Receipt";
+import { useFactorReceipts, useScoreGate, useScreenReceipts } from "./useReceipts";
+import type { Receipt } from "@/core/lab/receipt";
+import type { FactorKey } from "@/core/screener/score";
 import type { SetupScore } from "@/core/screener/score";
 import { ResultsBadge } from "./MarketPanel";
 import { Icons } from "./icons";
@@ -85,12 +89,16 @@ export function ScreenerPanel() {
   // Until the evidence is in, every screen shows; after that, screens with no edge only on request.
   const showAll = prefs.showAllScreens || !evidence;
   const visible = useMemo(() => new Set(SCREENS.filter((entry) => showAll || hasEdge(evidence?.[entry.id])).map((entry) => entry.id)), [showAll, evidence]);
+  // Receipts (#29): the score counts only factors with a passing report card (none: "unproven", same order).
+  const gate = useScoreGate();
+  const factorReceipts = useFactorReceipts();
+  const screenReceipts = useScreenReceipts();
   // One setup score per (stock, setup) shown — cached until the feed changes.
   const scores = useMemo(() => {
     const map = new Map<string, SetupScore | null>();
-    for (const idea of ideas.values()) for (const hit of idea.hits) map.set(`${idea.symbol}:${hit.screen.id}`, scoreHit(hit, track, results));
+    for (const idea of ideas.values()) for (const hit of idea.hits) map.set(`${idea.symbol}:${hit.screen.id}`, scoreHit(hit, track, results, gate));
     return map;
-  }, [ideas, track, results]);
+  }, [ideas, track, results, gate]);
   const loading = useScreenerFeed((feed) => feed.loading);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "setupScore", dir: -1 });
   const [query, setQuery] = useState("");
@@ -462,6 +470,8 @@ export function ScreenerPanel() {
                   allView={allView}
                   active={symbol === activeSymbol}
                   score={scores.get(`${symbol}:${hit.screen.id}`) ?? null}
+                  factorReceipts={factorReceipts}
+                  receipt={screenReceipts?.[hit.screen.id] ?? null}
                   record={records?.[hit.screen.id]}
                   shortlisted={shortlisted.has(symbol)}
                   firstScanAt={firstScanAt}
@@ -574,7 +584,35 @@ function liveStatus(asOf: NonNullable<ScreenerResponse["asOf"]>): string {
   return ` · live · quotes ${age} s old${pace ? `, refresh ~${pace}` : ""}${asOf.fromTicks ? ` · ${asOf.fromTicks} on ticks` : ""}`;
 }
 
-function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, record, shortlisted, firstScanAt, now }: { symbol: string; idea: TradeIdea; hit: SetupHit; row: ScreenerRow; allView: boolean; active: boolean; score: SetupScore | null; record?: TrackRecord; shortlisted: boolean; firstScanAt: number; now: number }) {
+function ScreenerRowView({
+  symbol,
+  idea,
+  hit,
+  row,
+  allView,
+  active,
+  score,
+  factorReceipts,
+  receipt,
+  record,
+  shortlisted,
+  firstScanAt,
+  now,
+}: {
+  symbol: string;
+  idea: TradeIdea;
+  hit: SetupHit;
+  row: ScreenerRow;
+  allView: boolean;
+  active: boolean;
+  score: SetupScore | null;
+  factorReceipts: Record<FactorKey, Receipt> | null;
+  receipt: Receipt | null;
+  record?: TrackRecord;
+  shortlisted: boolean;
+  firstScanAt: number;
+  now: number;
+}) {
   const { ref, tick } = useVisibleLiveTick<HTMLTableRowElement>(symbol);
   const rr = riskReward(row);
   const buyStop = isBuyStop(row.plan, row.close);
@@ -634,8 +672,9 @@ function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, recor
       <td className="is-down">{formatPrice(row.plan.stop)}</td>
       <td className="is-up">{row.plan.target !== null ? formatPrice(row.plan.target) : "trail"}</td>
       <td>{rr !== null ? rr.toFixed(1) : "—"}</td>
-      <td>
-        <ScoreChip score={score} />
+      <td className="col-score">
+        <ScoreChip score={score} receipts={factorReceipts} />
+        {receipt && <ReceiptLink receipt={receipt} />}
       </td>
       <td className="col-track">
         <TrackCell record={record} />

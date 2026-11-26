@@ -18,11 +18,12 @@ import type { LabReport } from "@/core/lab/engine";
 import type { IdeaTrialSummary } from "@/core/lab/trials";
 import type { SignalGroup } from "@/core/lab/signals";
 import type { SignalVerdict } from "@/core/lab/verdict";
+import type { CardSummary, WorksIn } from "@/core/lab/receipt";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
 import type { TradeTrack } from "@/core/plan/tracker";
-import type { StockFacts } from "@/core/screener/score";
+import type { FactorKey, StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
 import type { MarketRegime } from "@/core/screener/regime";
 
@@ -260,6 +261,22 @@ export interface LabCardResponse {
     /** The verdict at each of the report's horizons, in its order. */
     verdicts: SignalVerdict[];
   } | null;
+}
+
+// ------------------------------------------------------------------ GET /api/lab/receipts
+
+/**
+ * The report-card half of every receipt (#29, src/core/lab/receipt.ts): each
+ * score factor's and each screen's default variant as last run in the Lab
+ * (null: never run), and the factors whose card passes — the verdict works
+ * (somewhere) and the variant survives the multiple-testing record. The setup
+ * score counts only those (ScoreOptions.gate).
+ */
+export interface ReceiptsResponse {
+  factors: Record<FactorKey, CardSummary | null>;
+  screens: Record<string, CardSummary | null>;
+  passing: Array<{ key: FactorKey; worksIn: WorksIn }>;
+  computedAt: number;
 }
 
 // ------------------------------------------------------------------ GET /api/plan/evidence
