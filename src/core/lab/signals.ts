@@ -2,6 +2,7 @@ import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/s
 import { SCREENS, type ScreenDef } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
 import { MAX_DAILY_MOVE, type LabSignalMeta, type SignalValues } from "./engine";
+import { MOMENTUM_SIGNALS } from "./momentumSignals";
 
 // The Signal Lab's signals: anything that gives one number per stock per day.
 // Pure.
@@ -35,6 +36,8 @@ export interface SignalContext {
   scan?: SignalScan | null;
   /** Called between sessions of a scan so a server stays responsive. */
   pause?: () => Promise<void>;
+  /** A stock's industry (today's NSE classification), for signals with `usesIndustries`; null when unknown. */
+  industryOf?: (symbol: string) => string | null;
 }
 
 export interface ParamSpec {
@@ -58,6 +61,10 @@ export interface LabSignal {
   params: ParamSpec[];
   /** Reads the screens' signal scan (the service hands it the backtest's cached one). */
   usesScan?: boolean;
+  /** Reads `industryOf` with these parameters (the service then loads the industry map). */
+  usesIndustries?: (params: Record<string, number>) => boolean;
+  /** Calendar days of history the signal needs before the first formation day, when more than the backtester's warm-up. */
+  warmupDays?: (params: Record<string, number>) => number;
   build(ctx: SignalContext, params: Record<string, number>): SignalValues | Promise<SignalValues>;
 }
 
@@ -263,7 +270,7 @@ function screenSignal(screen: ScreenDef, mode: "match" | "score"): LabSignal {
   };
 }
 
-export const LAB_SIGNALS: LabSignal[] = [...BUILT_IN_SIGNALS, ...SCREENS.map((screen) => screenSignal(screen, "match")), ...SCREENS.map((screen) => screenSignal(screen, "score"))];
+export const LAB_SIGNALS: LabSignal[] = [...BUILT_IN_SIGNALS, ...MOMENTUM_SIGNALS, ...SCREENS.map((screen) => screenSignal(screen, "match")), ...SCREENS.map((screen) => screenSignal(screen, "score"))];
 
 const BY_ID = new Map(LAB_SIGNALS.map((signal) => [signal.id, signal]));
 
