@@ -446,6 +446,10 @@ export interface LabRequest {
   /** Buckets (2–10; 5 = quintiles). */
   quantiles: number;
   costPreset: CostPresetId;
+  /** Rank by minus the signal (its lowest values in the top bucket). Absent = false. */
+  reverse?: boolean;
+  /** Forward returns to the close (default, absent) or to the open k sessions later ("close-open": the BTST exit). */
+  forward?: "close-close" | "close-open";
 }
 
 export type LabResponse =

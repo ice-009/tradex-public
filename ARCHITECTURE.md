@@ -344,9 +344,9 @@ The **Lab** tab in the bottom dock (and `npm run lab`) is a test bench for any s
 | Step | Rule |
 |---|---|
 | Universe | Each formation day: stocks on that day's F&O list (via `asOf`), traded that day, with a value. Days with fewer than 20 are skipped. |
-| Ranking | Into quintiles by value (Q1 lowest, Q5 highest; `quantiles.ts`). Ties share a bucket; a signal with no more distinct values than buckets (a screen's 1/0) is spread by value, so "matched" is always Q5 and "the rest" Q1. |
-| Forward returns | close(t + h) / close(t) − 1 on the stock's own bars, h = 1, 5, 10, 21 (any of 1–63). A stock whose bars stop before the data's (delisted, merged) is closed at its last close. A window holding a session that moved more than ±50% close to close is a data error (a missed split or bonus) and is left out; the report counts them. |
-| Costs | A futures round trip per position (`costs.ts` presets, ~₹5 lakh position): ~0.17% with the 2026 rates. The long–short spread pays two. "Net @ turnover" charges only the stocks replaced at each h-session rebalance. |
+| Ranking | Into quintiles by value (Q1 lowest, Q5 highest; `quantiles.ts`). Ties share a bucket; a signal with no more distinct values than buckets (a screen's 1/0) is spread by value, so "matched" is always Q5 and "the rest" Q1. `reverse` (`--reverse`) ranks by minus the value, which is how you test the long side of a signal whose expected sign is negative (MAX, volatility). It is part of the variant key. |
+| Forward returns | close(t + h) / close(t) − 1 on the stock's own bars, h = 1, 5, 10, 21 (any of 1–63). With `forward: "close-open"` (`--forward close-open`) it is open(t + h) / close(t) − 1 instead: sold at the open h sessions later, so h = 1 is the BTST trade. This is also part of the variant key. A stock whose bars stop before the data's (delisted, merged) is closed at its last close. A window holding a session that moved more than ±50% close to close is a data error (a missed split or bonus) and is left out; in close → open mode so is one holding an open that gapped more than ±50%. The report counts them. |
+| Costs | A futures round trip per position (`costs.ts` presets, ~₹5 lakh position): ~0.17% with the 2026 rates. The long–short spread pays two. "Net @ turnover" charges only the stocks replaced at each h-session rebalance (not reported for close → open, where every position is sold at the open). |
 | Spread and t | Q5 − Q1 mean per day; t-stats are Newey–West with lag h − 1, because a new h-session window starts every day. IC: daily rank correlation of value and return. |
 | Splits | NIFTY above / below its 200-day average on the formation day (`marketStates`), and the evidence's first 60% / last 40% of days (`splitDay`). **Edge** = the evidence's PASS rule on the net spread: > 0 in both parts and t > 2. |
 | Decay | The spread at every horizon 1–21, and of each session alone. |
@@ -372,4 +372,8 @@ The verdict (`src/core/lab/verdict.ts`, rules in its header) is worked out when 
 npm run lab -- --list
 npm run lab -- --signal momentum-12-1 --from 2021-01-01
 npm run lab -- --signal screen:pos-52w-high --horizons 1,5,10,21 --json out.json
+npm run lab -- --signal max-21d --param top=5 --reverse --from 2010-01-01          # issue #26
+npm run lab -- --signal overnight-return --forward close-open --horizons 1 --from 2010-01-01   # issue #28
 ```
+
+Results so far: [lottery-max-volatility.md](docs/research/lottery-max-volatility.md) (#26) and [overnight-intraday.md](docs/research/overnight-intraday.md) (#28).

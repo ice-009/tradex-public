@@ -9,6 +9,8 @@
 //   npm run lab -- --signal momentum-12-1 --from 2021-01-01
 //   npm run lab -- --signal screen:pos-52w-high --horizons 1,5,10,21 --costs futures-2026
 //   npm run lab -- --signal reversal-1m --param lookback=10 --from 2010-01-01 --to 2015-12-31 --json out.json
+//   npm run lab -- --signal max-21d --reverse --from 2010-01-01
+//   npm run lab -- --signal overnight-return --forward close-open --horizons 1 --from 2010-01-01
 
 import { writeFileSync } from "node:fs";
 import { COST_PRESETS } from "@/core/backtest/costs";
@@ -31,6 +33,8 @@ const USAGE = `Usage: npm run lab -- --signal <id> [options]
   --horizons 1,5,10,21 forward horizons in sessions
   --quantiles 5        buckets
   --costs <preset>     ${Object.keys(COST_PRESETS).join(", ")} (default futures-2026)
+  --reverse            rank by minus the signal: its lowest values in the top bucket (the long side of a negative signal)
+  --forward <mode>     close-close (default) or close-open: forward return to the open k sessions later (k = 1: the BTST exit)
   --json <file>        also write the full response (report + stamp) as JSON
   --list               list the signals`;
 
@@ -39,7 +43,7 @@ function parseArgs(argv: string[]) {
   const params: Record<string, number> = {};
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
-    if (key === "--list" || key === "--help" || key === "-h") {
+    if (key === "--list" || key === "--help" || key === "-h" || key === "--reverse") {
       args[key.replace(/^-+/, "")] = "1";
       continue;
     }
@@ -87,7 +91,10 @@ async function main() {
     horizons: args.horizons ? args.horizons.split(",").map(Number) : undefined,
     quantiles: args.quantiles ? Number(args.quantiles) : undefined,
     costPreset: args.costs,
+    reverse: Boolean(args.reverse),
+    forward: args.forward,
   });
+  if (args.forward && args.forward !== "close-close" && args.forward !== "close-open") throw new Error(`--forward is close-close or close-open, not ${args.forward}.`);
 
   const started = Date.now();
   process.stderr.write(`Running ${request.signal} on ${request.universe} (daily bars from the Market Data Hub's archive)…\n`);
