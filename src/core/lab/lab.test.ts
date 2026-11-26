@@ -196,6 +196,17 @@ describe("runLab", () => {
     const shuffle = rng(99);
     const random = runLab({ ...input, values: () => shuffle() });
     expect(Math.abs(random.byHorizon[0].spread.net.t!)).toBeLessThan(3);
+
+    // The report card's equity series is the deflated Sharpe ratio's sample: every h-th day's net spread.
+    for (const h of report.byHorizon) {
+      expect(h.series.net).toHaveLength(h.dsr.n);
+      expect(h.series.days).toHaveLength(h.dsr.n);
+      expect(h.series.days[1] - h.series.days[0]).toBe(h.horizon * DAY);
+      expect(seriesStats(h.series.net, 0).sharpe).toBeCloseTo(h.dsr.sharpe!, 12);
+    }
+    // Decay's ±2 se band: the Newey–West se of the net spread at that horizon.
+    expect(report.decay[4].netSe!).toBeGreaterThan(0);
+    expect(report.decay[4].net! / report.decay[4].netSe!).toBeCloseTo(report.byHorizon[1].spread.net.t!, 9);
     // A fresh random ranking every day replaces ~80% of each quintile.
     expect(random.dailyTurnover.long!).toBeGreaterThan(0.7);
     expect(random.dailyTurnover.long!).toBeLessThan(0.9);

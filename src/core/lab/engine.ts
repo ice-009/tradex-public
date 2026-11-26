@@ -4,7 +4,7 @@ import { variantKeyOf } from "./trials";
 import { tradeQty } from "@/core/screener/liveRecord";
 import type { DailyBar } from "@/core/types";
 import { quantileBuckets } from "./quantiles";
-import { everyNth, mean, neweyWestT, seriesStats, spearman, type SeriesStats } from "./stats";
+import { everyNth, mean, neweyWestSE, neweyWestT, seriesStats, spearman, type SeriesStats } from "./stats";
 
 // The Signal Lab (issue #22): a test bench for any signal — one number per
 // stock per day. Pure: the service (src/server/services/lab.ts) and the CLI
@@ -162,6 +162,12 @@ export interface HorizonReport {
    * kurtosis (not excess).
    */
   dsr: { sharpe: number | null; n: number; skewness: number | null; kurtosis: number | null; step: number };
+  /**
+   * That same non-overlapping sample as a series: each formation day (every h-th
+   * ranked day with both legs priced) and its net h-session spread, oldest first.
+   * Summed, it is the report card's equity curve (#23).
+   */
+  series: { days: number[]; net: number[] };
   /** Net spread > 0 in both parts of the 60/40 split, Newey–West t > 2 and at least 30 days: the evidence's PASS rule. */
   passes: boolean;
 }
@@ -172,6 +178,8 @@ export interface DecayPoint {
   gross: number | null;
   net: number | null;
   t: number | null;
+  /** Newey–West standard error (lag h − 1) of the mean net spread: the report card's ±2 se band. */
+  netSe: number | null;
   /** Spread of the horizon-th session's return alone (close h − 1 → close h), and its t (lag 0). */
   marginal: number | null;
   marginalT: number | null;
@@ -538,6 +546,7 @@ export function runLab(input: LabInput): LabReport {
       split: { splitDate, first, last },
       turnover,
       dsr: { sharpe: sample.sharpe, n: sample.n, skewness: sample.skewness, kurtosis: sample.kurtosis, step: k },
+      series: { days: everyNth(spreadDay[k], k), net: everyNth(spreadNet[k], k) },
       passes: spread.net.n >= MIN_TRADES && (first.net.mean ?? 0) > 0 && (last.net.mean ?? 0) > 0 && spread.net.t !== null && spread.net.t > MIN_T,
     };
   });
@@ -550,6 +559,7 @@ export function runLab(input: LabInput): LabReport {
       gross,
       net: mean(spreadNet[k]),
       t: spreadGross[k].length >= 3 ? neweyWestT(spreadGross[k], k - 1) : null,
+      netSe: spreadNet[k].length >= 3 ? neweyWestSE(spreadNet[k], k - 1) : null,
       marginal: mean(marginal[k]),
       marginalT: marginal[k].length >= 3 ? neweyWestT(marginal[k], 0) : null,
     };
