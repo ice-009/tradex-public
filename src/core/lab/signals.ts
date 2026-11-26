@@ -1,7 +1,7 @@
 import { WARMUP_SESSIONS, scanSignals, type SignalScan } from "@/core/backtest/signals";
 import { SCREENS, type ScreenDef } from "@/core/screener/screens";
 import type { DailyBar } from "@/core/types";
-import type { LabSignalMeta, SignalValues } from "./engine";
+import { MAX_DAILY_MOVE, type LabSignalMeta, type SignalValues } from "./engine";
 
 // The Signal Lab's signals: anything that gives one number per stock per day.
 // Pure.
@@ -84,6 +84,68 @@ export function perBar(ctx: SignalContext, compute: (bars: readonly DailyBar[], 
 
 const sessions = (key: string, label: string, value: number, min: number, max: number): ParamSpec => ({ key, label, default: value, min, max, integer: true });
 
+/** Mean of the `top` largest daily (close-to-close) returns in the `window` sessions ending at bar i; top = 1 is MAX. */
+export function topDailyReturns(bars: readonly DailyBar[], i: number, window: number, top: number): number | null {
+  if (i < window) return null;
+  const k = Math.min(top, window);
+  const best: number[] = [];
+  for (let j = i - window + 1; j <= i; j += 1) {
+    const r = bars[j].c / bars[j - 1].c - 1;
+    if (best.length < k) best.push(r);
+    else if (r > best[k - 1]) best[k - 1] = r;
+    else continue;
+    best.sort((a, b) => b - a);
+  }
+  return best.reduce((sum, r) => sum + r, 0) / k;
+}
+
+/**
+ * A session's return split at the open: overnight = log(open / previous close),
+ * intraday = log(close / open); together the close-to-close log return. NaN
+ * where a price is missing or a part moves beyond ±MAX_DAILY_MOVE (an
+ * unadjusted open, a bad print).
+ */
+export function sessionParts(bars: readonly DailyBar[], i: number): { overnight: number; intraday: number } {
+  const { o, c } = bars[i];
+  const prev = i > 0 ? bars[i - 1].c : NaN;
+  if (!(o > 0) || !(c > 0) || !(prev > 0) || Math.abs(o / prev - 1) > MAX_DAILY_MOVE || Math.abs(c / o - 1) > MAX_DAILY_MOVE) return { overnight: NaN, intraday: NaN };
+  return { overnight: Math.log(o / prev), intraday: Math.log(c / o) };
+}
+
+type SessionPart = "overnight" | "intraday";
+interface PartSums {
+  /** sum[i] = the part's log returns of bars 1 … i. */
+  sum: Float64Array;
+  /** bad[i] = sessions 1 … i that couldn't be split. */
+  bad: Int32Array;
+}
+const partCache: Record<SessionPart, WeakMap<readonly DailyBar[], PartSums>> = { overnight: new WeakMap(), intraday: new WeakMap() };
+
+/** Running sums of a stock's overnight or intraday log returns, cached per bar array. */
+function partSums(bars: readonly DailyBar[], part: SessionPart): PartSums {
+  let entry = partCache[part].get(bars);
+  if (!entry) {
+    const sum = new Float64Array(bars.length);
+    const bad = new Int32Array(bars.length);
+    for (let i = 1; i < bars.length; i += 1) {
+      const r = sessionParts(bars, i)[part];
+      sum[i] = sum[i - 1] + (Number.isFinite(r) ? r : 0);
+      bad[i] = bad[i - 1] + (Number.isFinite(r) ? 0 : 1);
+    }
+    entry = { sum, bad };
+    partCache[part].set(bars, entry);
+  }
+  return entry;
+}
+
+/** Sum of the last `lookback` sessions' overnight (or intraday) log returns at bar i; null with too little history or a session in the window that can't be split. */
+export function pastPart(bars: readonly DailyBar[], i: number, lookback: number, part: SessionPart): number | null {
+  if (i < lookback) return null;
+  const { sum, bad } = partSums(bars, part);
+  if (bad[i] !== bad[i - lookback]) return null;
+  return sum[i] - sum[i - lookback];
+}
+
 /** Built-in numeric signals. Add yours here. */
 export const BUILT_IN_SIGNALS: LabSignal[] = [
   {
@@ -130,15 +192,30 @@ export const BUILT_IN_SIGNALS: LabSignal[] = [
     name: "MAX (largest daily gain, 21 sessions)",
     group: "built-in",
     kind: "numeric",
-    summary: "The largest one-day return of the last 21 sessions (Bali–Cakici–Whitelaw's MAX): lottery-like stocks. A negative spread means they underperform.",
-    params: [sessions("window", "Window (sessions)", 21, 5, 63)],
-    build: (ctx, { window }) =>
-      perBar(ctx, (bars, i) => {
-        if (i < window) return null;
-        let max = -Infinity;
-        for (let j = i - window + 1; j <= i; j += 1) max = Math.max(max, bars[j].c / bars[j - 1].c - 1);
-        return max;
-      }),
+    summary:
+      "The largest one-day return of the last 21 sessions (Bali–Cakici–Whitelaw's MAX): lottery-like stocks. With top > 1, the mean of the `top` largest (MAX(5), their robustness check). A negative spread means they underperform: run it reversed to test the long side (issue #26).",
+    params: [sessions("window", "Window (sessions)", 21, 5, 63), sessions("top", "Largest days averaged", 1, 1, 10)],
+    build: (ctx, { window, top }) => perBar(ctx, (bars, i) => topDailyReturns(bars, i, window, top)),
+  },
+  {
+    id: "overnight-return",
+    name: "Past overnight return",
+    group: "built-in",
+    kind: "numeric",
+    summary:
+      "Sum of the last N sessions' overnight log returns (previous close → open). High = stocks that gained overnight; a positive spread on close → open forward returns is overnight momentum (Lou, Polk & Skouras 2019; issue #28).",
+    params: [sessions("lookback", "Look back (sessions)", 21, 1, 252)],
+    build: (ctx, { lookback }) => perBar(ctx, (bars, i) => pastPart(bars, i, lookback, "overnight")),
+  },
+  {
+    id: "intraday-return",
+    name: "Past intraday return",
+    group: "built-in",
+    kind: "numeric",
+    summary:
+      "Sum of the last N sessions' intraday log returns (open → close). High = stocks that gained in trading hours; on close → open forward returns a positive spread is intraday momentum carrying overnight, a negative one the cross-period reversal (Lou, Polk & Skouras 2019; issue #28).",
+    params: [sessions("lookback", "Look back (sessions)", 21, 1, 252)],
+    build: (ctx, { lookback }) => perBar(ctx, (bars, i) => pastPart(bars, i, lookback, "intraday")),
   },
 ];
 

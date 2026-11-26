@@ -2,12 +2,15 @@
 // same report as the Lab panel. Run through scripts/lab.mjs (`npm run lab`),
 // which bundles this file with the app's `@/` paths. Needs HUB_URL and HUB_KEY
 // (read from .env when present); reads daily bars from the hub's archive like
-// the server, and records every run in the trial record (#24, .cache/market.db).
+// the server, records every run in the trial record (#24, .cache/market.db) and
+// saves it as the variant's report card (#23), whose verdict it prints last.
 //
 //   npm run lab -- --list
 //   npm run lab -- --signal momentum-12-1 --from 2021-01-01
 //   npm run lab -- --signal screen:pos-52w-high --horizons 1,5,10,21 --costs futures-2026
 //   npm run lab -- --signal reversal-1m --param lookback=10 --from 2010-01-01 --to 2015-12-31 --json out.json
+//   npm run lab -- --signal max-21d --reverse --from 2010-01-01
+//   npm run lab -- --signal overnight-return --forward close-open --horizons 1 --from 2010-01-01
 
 import { writeFileSync } from "node:fs";
 import { COST_PRESETS } from "@/core/backtest/costs";
@@ -16,6 +19,7 @@ import { formatLabReport, num } from "@/core/lab/format";
 import { LAB_SIGNALS, findSignal } from "@/core/lab/signals";
 import { shortHash } from "@/core/repro/stamp";
 import { parseLabRequest, runLabRequest } from "@/server/services/lab";
+import { labCard } from "@/server/services/labCards";
 import { trialSummary } from "@/server/services/labTrials";
 
 const USAGE = `Usage: npm run lab -- --signal <id> [options]
@@ -29,6 +33,8 @@ const USAGE = `Usage: npm run lab -- --signal <id> [options]
   --horizons 1,5,10,21 forward horizons in sessions
   --quantiles 5        buckets
   --costs <preset>     ${Object.keys(COST_PRESETS).join(", ")} (default futures-2026)
+  --reverse            rank by minus the signal: its lowest values in the top bucket (the long side of a negative signal)
+  --forward <mode>     close-close (default) or close-open: forward return to the open k sessions later (k = 1: the BTST exit)
   --json <file>        also write the full response (report + stamp) as JSON
   --list               list the signals`;
 
@@ -37,7 +43,7 @@ function parseArgs(argv: string[]) {
   const params: Record<string, number> = {};
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
-    if (key === "--list" || key === "--help" || key === "-h") {
+    if (key === "--list" || key === "--help" || key === "-h" || key === "--reverse") {
       args[key.replace(/^-+/, "")] = "1";
       continue;
     }
@@ -85,7 +91,10 @@ async function main() {
     horizons: args.horizons ? args.horizons.split(",").map(Number) : undefined,
     quantiles: args.quantiles ? Number(args.quantiles) : undefined,
     costPreset: args.costs,
+    reverse: Boolean(args.reverse),
+    forward: args.forward,
   });
+  if (args.forward && args.forward !== "close-close" && args.forward !== "close-open") throw new Error(`--forward is close-close or close-open, not ${args.forward}.`);
 
   const started = Date.now();
   process.stderr.write(`Running ${request.signal} on ${request.universe} (daily bars from the Market Data Hub's archive)…\n`);
@@ -105,6 +114,13 @@ async function main() {
       `Trials: ${trials.recorded} recorded for idea ${trials.ideaId} (${summary.n} distinct, ${summary.runs} runs; luck benchmark Sharpe ${num(summary.sr0Annual)}/yr)` +
         (best ? `; best ${best.variantKey} @ ${best.horizon}d: deflated Sharpe ${num(best.verdict.dsr, 3)} — ${best.verdict.reason}` : ""),
     );
+  }
+  const card = labCard(report.signal.id, report.signal.variantKey)?.card;
+  const verdict = card?.verdicts.find((entry) => entry.horizon === card.primary);
+  if (verdict) {
+    console.log("");
+    console.log(`Verdict (report card, /lab/${encodeURIComponent(report.signal.id)}): ${verdict.label.toUpperCase()} at ${verdict.horizon}d — ${verdict.headline}`);
+    for (const reason of verdict.reasons) console.log(`  · ${reason}`);
   }
   console.log(`Time: load ${(runtime.loadMs / 1000).toFixed(1)} s, signal ${(runtime.signalMs / 1000).toFixed(1)} s, lab ${(runtime.labMs / 1000).toFixed(2)} s; total ${((Date.now() - started) / 1000).toFixed(1)} s.`);
   if (args.json) {

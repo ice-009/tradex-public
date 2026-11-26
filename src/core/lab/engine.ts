@@ -4,7 +4,7 @@ import { variantKeyOf } from "./trials";
 import { tradeQty } from "@/core/screener/liveRecord";
 import type { DailyBar } from "@/core/types";
 import { quantileBuckets } from "./quantiles";
-import { everyNth, mean, neweyWestT, seriesStats, spearman, type SeriesStats } from "./stats";
+import { everyNth, mean, neweyWestSE, neweyWestT, seriesStats, spearman, type SeriesStats } from "./stats";
 
 // The Signal Lab (issue #22): a test bench for any signal — one number per
 // stock per day. Pure: the service (src/server/services/lab.ts) and the CLI
@@ -18,7 +18,9 @@ import { everyNth, mean, neweyWestT, seriesStats, spearman, type SeriesStats } f
 //  2. They are ranked into `quantiles` buckets by value (quantiles.ts): Q1 the
 //     lowest values, Q5 the highest. Ties share a bucket.
 //  3. Each stock's forward return over k sessions is close(t + k) / close(t) − 1
-//     on its own bars. A stock whose bars stop before the data does (delisted,
+//     on its own bars — or, with `forward: "close-open"`, open(t + k) / close(t)
+//     − 1: bought at the close, sold at the open k sessions later (k = 1 is the
+//     BTST trade, the overnight return). A stock whose bars stop before the data does (delisted,
 //     suspended, merged) is closed at its last close — so delisted stocks count
 //     with what they really did, not dropped. With too little future left in the
 //     data, the observation is left out of that horizon. So is a window holding
@@ -35,6 +37,10 @@ import { everyNth, mean, neweyWestT, seriesStats, spearman, type SeriesStats } f
 // every day, consecutive spreads overlap by h − 1 sessions: t-stats are
 // Newey–West with lag h − 1 (stats.ts). The deflated-Sharpe inputs come from a
 // non-overlapping sample (every h-th day).
+//
+// `reverse` ranks by minus the signal (its lowest values in the top bucket):
+// for a signal whose expected sign is negative (MAX, volatility), the long leg
+// is then Q5 and the net spread is what trading that side would have earned.
 //
 // Splits: by market regime on the formation day (NIFTY above/below its 200-day
 // average, `regimeStates`, as the plan's evidence) and the evidence's
@@ -67,6 +73,10 @@ export const STOPPED_AFTER = 5;
 /** Sessions a year, for annualising Sharpe ratios. */
 const SESSIONS_PER_YEAR = 252;
 
+/** What a forward return is measured to: the close k sessions later (default), or the open k sessions later (BTST exit). */
+export type ForwardReturn = "close-close" | "close-open";
+export const FORWARD_RETURNS: readonly ForwardReturn[] = ["close-close", "close-open"];
+
 /** A signal's value for a stock at a session's close; null = no value (not enough history, not applicable). */
 export type SignalValues = (day: number, symbol: string) => number | null;
 
@@ -75,6 +85,10 @@ export interface LabSignalMeta {
   name: string;
   kind: "numeric" | "binary";
   params: Record<string, number>;
+  /** Ranked by minus the value: the lowest values in the top bucket (default false). */
+  reversed?: boolean;
+  /** Forward return measured close → close (default) or close → open k sessions later. */
+  forward?: ForwardReturn;
 }
 
 export interface LabInput {
@@ -89,6 +103,12 @@ export interface LabInput {
   costs: CostModel;
   /** Forward horizons in sessions (default 1, 5, 10, 21). */
   horizons?: readonly number[];
+  /**
+   * "close-close" (default): close(t + k) / close(t) − 1. "close-open":
+   * open(t + k) / close(t) − 1, the BTST exit at the next open (k = 1).
+   * Set on `signal.forward`; this wins when both are given.
+   */
+  forward?: ForwardReturn;
   /** Decay is measured for every horizon 1 … decayTo (default 21). */
   decayTo?: number;
   /** NIFTY vs its 200-day average per session (evidence.ts marketStates). */
@@ -144,7 +164,9 @@ export interface HorizonReport {
   sharpeAnnual: number | null;
   /**
    * Mean spread if each leg is held between rebalances every h sessions and
-   * costs are paid only on the stocks replaced (turnover at lag h).
+   * costs are paid only on the stocks replaced (turnover at lag h). Null for
+   * close → open forward returns: those positions are closed at every open, so
+   * each rebalance pays a full round trip (the net spread).
    */
   netAtTurnover: number | null;
   /** Average round-trip cost of the long and the short leg (fraction of price). */
@@ -162,6 +184,12 @@ export interface HorizonReport {
    * kurtosis (not excess).
    */
   dsr: { sharpe: number | null; n: number; skewness: number | null; kurtosis: number | null; step: number };
+  /**
+   * That same non-overlapping sample as a series: each formation day (every h-th
+   * ranked day with both legs priced) and its net h-session spread, oldest first.
+   * Summed, it is the report card's equity curve (#23).
+   */
+  series: { days: number[]; net: number[] };
   /** Net spread > 0 in both parts of the 60/40 split, Newey–West t > 2 and at least 30 days: the evidence's PASS rule. */
   passes: boolean;
 }
@@ -172,6 +200,8 @@ export interface DecayPoint {
   gross: number | null;
   net: number | null;
   t: number | null;
+  /** Newey–West standard error (lag h − 1) of the mean net spread: the report card's ±2 se band. */
+  netSe: number | null;
   /** Spread of the horizon-th session's return alone (close h − 1 → close h), and its t (lag 0). */
   marginal: number | null;
   marginalT: number | null;
@@ -211,8 +241,20 @@ export interface LabReport {
   notes: string[];
 }
 
+/**
+ * A run's parameters as the trial record keys them: the signal's own, plus
+ * `reverse: 1` and `forward: "close-open"` when set (left out at their
+ * defaults, so a plain run keeps its key).
+ */
+export const variantParams = (params: Record<string, number>, options: { reversed?: boolean; forward?: ForwardReturn } = {}): Record<string, number | string> => ({
+  ...params,
+  ...(options.reversed ? { reverse: 1 } : {}),
+  ...(options.forward === "close-open" ? { forward: "close-open" } : {}),
+});
+
 /** One trial's identity: the signal's id and its parameters in canonical form (the trial record's key, trials.ts). */
-export const variantKey = (id: string, params: Record<string, number>) => variantKeyOf(id, params);
+export const variantKey = (id: string, params: Record<string, number>, options: { reversed?: boolean; forward?: ForwardReturn } = {}) =>
+  variantKeyOf(id, variantParams(params, options));
 
 /** Round-trip cost of a position at `price` (slippage both legs + charges), as a fraction of the price. */
 export function roundTripFraction(price: number, costs: CostModel, qty = tradeQty(price, null)): number {
@@ -226,6 +268,10 @@ export class LabInputError extends Error {}
 
 interface Prepared {
   closes: Float64Array;
+  /** Opens (close-open forward returns only). */
+  opens: Float64Array | null;
+  /** Sessions up to each bar whose open gapped beyond `maxDailyMove` from the previous close, or has no open (close-open only). */
+  badOpenPrefix: Int32Array | null;
   index: Map<number, number>;
   /** Sessions up to each bar whose close-to-close move is beyond `maxDailyMove` (data errors). */
   badPrefix: Int32Array;
@@ -243,7 +289,16 @@ export function runLab(input: LabInput): LabReport {
   const decayTo = Math.max(1, Math.min(MAX_HORIZON, Math.round(input.decayTo ?? DEFAULT_DECAY)));
   const K = Math.max(horizons.at(-1)!, decayTo);
   const minStocks = Math.max(q, Math.round(input.minStocks ?? DEFAULT_MIN_STOCKS));
-  const { costs, values } = input;
+  const { costs } = input;
+  const forward: ForwardReturn = input.forward ?? input.signal.forward ?? "close-close";
+  const toOpen = forward === "close-open";
+  const reversed = Boolean(input.signal.reversed);
+  const values: SignalValues = reversed
+    ? (day, symbol) => {
+        const value = input.values(day, symbol);
+        return value === null ? null : -value;
+      }
+    : input.values;
   const from = input.from ?? -Infinity;
   const to = input.to ?? Infinity;
   // A series ending more than STOPPED_AFTER sessions before the data does has stopped trading;
@@ -259,6 +314,8 @@ export function runLab(input: LabInput): LabReport {
     if (!bars?.length) return null;
     const closes = new Float64Array(bars.length);
     const badPrefix = new Int32Array(bars.length);
+    const opens = toOpen ? new Float64Array(bars.length) : null;
+    const badOpenPrefix = toOpen ? new Int32Array(bars.length) : null;
     const index = new Map<number, number>();
     for (let i = 0; i < bars.length; i += 1) {
       closes[i] = bars[i].c;
@@ -266,9 +323,17 @@ export function runLab(input: LabInput): LabReport {
       const move = i > 0 ? closes[i] / closes[i - 1] - 1 : 0;
       const bad = i > 0 && (!(closes[i] > 0) || !(closes[i - 1] > 0) || Math.abs(move) > maxMove);
       badPrefix[i] = (i > 0 ? badPrefix[i - 1] : 0) + (bad ? 1 : 0);
-      if (bad && bars[i].t >= from && bars[i].t <= to) badBars.set(symbol, (badBars.get(symbol) ?? 0) + 1);
+      let badOpen = false;
+      if (opens && badOpenPrefix) {
+        // The open must be priced and adjusted like the closes: a gap beyond maxDailyMove
+        // from the previous close is a data error (an unadjusted open, a bad print).
+        opens[i] = bars[i].o;
+        badOpen = !(opens[i] > 0) || (i > 0 && (!(closes[i - 1] > 0) || Math.abs(opens[i] / closes[i - 1] - 1) > maxMove));
+        badOpenPrefix[i] = (i > 0 ? badOpenPrefix[i - 1] : 0) + (badOpen ? 1 : 0);
+      }
+      if ((bad || badOpen) && bars[i].t >= from && bars[i].t <= to) badBars.set(symbol, (badBars.get(symbol) ?? 0) + 1);
     }
-    return { closes, index, badPrefix, stopped: bars[bars.length - 1].t < stoppedBefore };
+    return { closes, opens, badOpenPrefix, index, badPrefix, stopped: bars[bars.length - 1].t < stoppedBefore };
   });
 
   // Formation days, and per day: bucket (−1 = not ranked) and side (1 long, 2 short) of each stock.
@@ -379,15 +444,28 @@ export function runLab(input: LabInput): LabReport {
         const c0 = series.closes[i];
         // A session moving more than maxDailyMove inside the window is a data error
         // (a missed split or bonus, a bad print): the observation is left out, not clipped.
-        if (series.badPrefix[Math.min(i + k, last)] !== series.badPrefix[i]) {
+        // Close → open k: the closes up to t + k − 1 and the opens up to t + k.
+        const opens = series.opens;
+        const badOpen = series.badOpenPrefix;
+        if (
+          opens && badOpen
+            ? series.badPrefix[Math.min(i + k - 1, last)] !== series.badPrefix[i] || badOpen[Math.min(i + k, last)] !== badOpen[i]
+            : series.badPrefix[Math.min(i + k, last)] !== series.badPrefix[i]
+        ) {
           hasDataError[j] = 1;
           continue;
         }
         let r: number;
         let m: number;
         if (i + k <= last) {
-          r = series.closes[i + k] / c0 - 1;
-          m = series.closes[i + k] / series.closes[i + k - 1] - 1;
+          if (opens) {
+            r = opens[i + k] / c0 - 1;
+            // The k-th session's part: close → open for k = 1, open → open after.
+            m = k === 1 ? r : opens[i + k] / opens[i + k - 1] - 1;
+          } else {
+            r = series.closes[i + k] / c0 - 1;
+            m = series.closes[i + k] / series.closes[i + k - 1] - 1;
+          }
         } else if (series.stopped) {
           // Stopped trading before the data ends: closed at its last close, flat afterwards.
           r = series.closes[last] / c0 - 1;
@@ -507,8 +585,9 @@ export function runLab(input: LabInput): LabReport {
     const turnover = turnoverAt(k);
     const longCost = mean(legCost[k].long);
     const shortCost = mean(legCost[k].short);
+    // Close → open: every position is sold at the open, so each rebalance is a full round trip (no turnover saving).
     const netAtTurnover =
-      spread.gross.mean !== null && longCost !== null && shortCost !== null && turnover.long !== null && turnover.short !== null
+      !toOpen && spread.gross.mean !== null && longCost !== null && shortCost !== null && turnover.long !== null && turnover.short !== null
         ? spread.gross.mean - turnover.long * longCost - turnover.short * shortCost
         : null;
     const sample = seriesStats(everyNth(spreadNet[k], k), 0);
@@ -538,6 +617,7 @@ export function runLab(input: LabInput): LabReport {
       split: { splitDate, first, last },
       turnover,
       dsr: { sharpe: sample.sharpe, n: sample.n, skewness: sample.skewness, kurtosis: sample.kurtosis, step: k },
+      series: { days: everyNth(spreadDay[k], k), net: everyNth(spreadNet[k], k) },
       passes: spread.net.n >= MIN_TRADES && (first.net.mean ?? 0) > 0 && (last.net.mean ?? 0) > 0 && spread.net.t !== null && spread.net.t > MIN_T,
     };
   });
@@ -550,6 +630,7 @@ export function runLab(input: LabInput): LabReport {
       gross,
       net: mean(spreadNet[k]),
       t: spreadGross[k].length >= 3 ? neweyWestT(spreadGross[k], k - 1) : null,
+      netSe: spreadNet[k].length >= 3 ? neweyWestSE(spreadNet[k], k - 1) : null,
       marginal: mean(marginal[k]),
       marginalT: marginal[k].length >= 3 ? neweyWestT(marginal[k], 0) : null,
     };
@@ -557,6 +638,8 @@ export function runLab(input: LabInput): LabReport {
 
   const occupiedBuckets = occupiedSum / ranked.length;
   const notes: string[] = [];
+  if (toOpen) notes.push("Forward returns are close → open: bought at the formation day's close, sold at the open k sessions later (k = 1 is the BTST trade). The decay's marginal return is the overnight gap for k = 1 and open to open after.");
+  if (reversed) notes.push("Reversed: ranked by minus the signal, so Q5 holds its lowest values and the spread is low minus high.");
   if (occupiedBuckets < q - 0.5) {
     notes.push(
       `The signal takes few distinct values (${occupiedBuckets.toFixed(1)} of ${q} buckets occupied on an average day), so tied stocks share a bucket and the spread is the top occupied bucket minus the bottom one${input.signal.kind === "binary" ? ": the stocks the screen matched minus the rest" : ""}.`,
@@ -567,7 +650,7 @@ export function runLab(input: LabInput): LabReport {
   const errorBars = errorSymbols.reduce((sum, entry) => sum + entry.bars, 0);
   if (errorBars) {
     notes.push(
-      `${errorBars} session${errorBars === 1 ? "" : "s"} moved more than ±${Math.round(maxMove * 100)}% close to close (${errorSymbols
+      `${errorBars} session${errorBars === 1 ? "" : "s"} moved more than ±${Math.round(maxMove * 100)}% close to close${toOpen ? " or previous close to open" : ""} (${errorSymbols
         .slice(0, 6)
         .map((entry) => entry.symbol)
         .join(", ")}${errorSymbols.length > 6 ? ", …" : ""}): treated as data errors (a split or bonus the adjustment missed, a bad print), so the ${dataErrors} observation${dataErrors === 1 ? "" : "s"} whose forward window held one ${dataErrors === 1 ? "was" : "were"} left out. Signal values computed across such a session may be wrong too.`,
@@ -577,7 +660,12 @@ export function runLab(input: LabInput): LabReport {
 
   return {
     engine: LAB_ENGINE,
-    signal: { ...input.signal, variantKey: variantKey(input.signal.id, input.signal.params) },
+    signal: {
+      ...input.signal,
+      ...(reversed ? { reversed: true } : {}),
+      ...(toOpen ? { forward } : {}),
+      variantKey: variantKey(input.signal.id, input.signal.params, { reversed, forward }),
+    },
     quantiles: q,
     horizons,
     period: { from: rankedDays[0], to: rankedDays.at(-1)!, days: ranked.length, sessions: D, skippedDays },

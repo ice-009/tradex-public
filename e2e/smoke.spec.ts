@@ -76,6 +76,32 @@ test("test a signal in the Signal Lab (#22)", async ({ page }) => {
   await expect(results.getByRole("heading", { name: /Decay/ })).toBeVisible();
   await expect(results.getByRole("heading", { name: /Turnover/ })).toBeVisible();
   await expect(results.locator(".tx-stamp")).toContainText("Stamp");
+  await expect(results.getByRole("link", { name: /Open report card/ })).toHaveAttribute("href", /^\/lab\/reversal-1m\?variant=/);
+});
+
+test("open a signal's report card (#23)", async ({ page }) => {
+  await page.goto("/lab");
+  const row = page.locator("tr", { has: page.getByRole("link", { name: "1-month reversal", exact: true }) });
+  await expect(row).toBeVisible();
+  await row.getByRole("link", { name: "1-month reversal", exact: true }).click();
+  await expect(page).toHaveURL(/\/lab\/reversal-1m/);
+  // Stored by the Lab test above; run here when this test runs alone.
+  const runNow = page.getByRole("button", { name: "Run it now" });
+  const verdict = page.locator(".tx-card-verdict");
+  await expect(runNow.or(verdict)).toBeVisible();
+  if (await runNow.isVisible()) await runNow.click();
+  await expect(verdict).toBeVisible({ timeout: 90_000 });
+  await expect(verdict.locator(".tx-card-badge")).toHaveText(/Works|No edge|Too little data/);
+  await expect(page.getByRole("heading", { name: /Equity curve of the long–short spread/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: /Cumulative net spread at \d+ sessions/ }).or(page.getByText(/Too few non-overlapping/))).toBeVisible();
+  await expect(page.getByRole("img", { name: /Net spread by horizon/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /By market regime/ })).toBeVisible();
+  await expect(page.locator(".tx-stamp")).toContainText("Stamp");
+  await expect(page.locator(".tx-trials")).toBeVisible();
+  await page.getByRole("group", { name: "Horizon" }).getByRole("button", { name: "1d", exact: true }).click();
+  await expect(verdict).toContainText("at 1 session");
+  await page.getByRole("link", { name: "Report cards" }).click();
+  await expect(page.locator("tr", { has: page.getByRole("link", { name: "1-month reversal", exact: true }) }).locator(".tx-card-badge")).toBeVisible();
 });
 
 test("open the plan", async ({ page }) => {
@@ -87,6 +113,17 @@ test("open the plan", async ({ page }) => {
   await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible({ timeout: 60_000 });
   await expect(plan).not.toContainText("couldn't be computed");
   await expect(page.getByText("Show the evidence")).toBeVisible();
+
+  // Capital too small for any lot: no ideas, and the plan says what would fit the closest one.
+  await page.getByTitle("Capital, risk per trade, most open trades").click();
+  const capital = page.locator(".tx-plan-settings input").first();
+  await capital.fill("10000");
+  await expect(plan.locator(".tx-plan-toobig")).toContainText(/The closest: one lot of \S+ .* risks ₹[\d,]+ — it needs ≥ ₹[\d.]+(L|Cr) capital at 1% risk/);
+  await expect(plan.locator(".tx-plan-ideas")).toHaveCount(0);
+  await expect(plan.locator(".tx-plan-leftout")).toBeVisible();
+  await expect(plan.getByRole("button", { name: "Sizing settings" })).toBeVisible();
+  await capital.fill("500000");
+  await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible();
 });
 
 test("scroll a daily chart back past the stored 5 years: older bars load, a renamed stock's history joined (#18, #16)", async ({ page }) => {

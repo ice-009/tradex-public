@@ -131,3 +131,5 @@
   margin: 6px 0;
   font-size: 12px;
 }
+.tx-plan-leftout ul { margin: 2px 0 0; padding-left: 16px; }
+.tx-plan-leftout li { margin: 1px 0; }

@@ -8,7 +8,7 @@ import type { DailyBar } from "@/core/types";
 import { LabInputError, roundTripFraction, runLab, variantKey, type LabInput, type SignalValues } from "./engine";
 import { formatLabReport } from "./format";
 import { quantileBuckets } from "./quantiles";
-import { BUILT_IN_SIGNALS, LAB_SIGNALS, findSignal, resolveParams, signalMeta } from "./signals";
+import { BUILT_IN_SIGNALS, LAB_SIGNALS, findSignal, resolveParams, sessionParts, signalMeta, topDailyReturns } from "./signals";
 import { averageRanks, everyNth, neweyWestSE, neweyWestT, seriesStats, spearman } from "./stats";
 import { ideaIdOf, labTrialInputs } from "./trialInputs";
 import { summarizeIdea, trialInputError } from "./trials";
@@ -196,6 +196,17 @@ describe("runLab", () => {
     const shuffle = rng(99);
     const random = runLab({ ...input, values: () => shuffle() });
     expect(Math.abs(random.byHorizon[0].spread.net.t!)).toBeLessThan(3);
+
+    // The report card's equity series is the deflated Sharpe ratio's sample: every h-th day's net spread.
+    for (const h of report.byHorizon) {
+      expect(h.series.net).toHaveLength(h.dsr.n);
+      expect(h.series.days).toHaveLength(h.dsr.n);
+      expect(h.series.days[1] - h.series.days[0]).toBe(h.horizon * DAY);
+      expect(seriesStats(h.series.net, 0).sharpe).toBeCloseTo(h.dsr.sharpe!, 12);
+    }
+    // Decay's ±2 se band: the Newey–West se of the net spread at that horizon.
+    expect(report.decay[4].netSe!).toBeGreaterThan(0);
+    expect(report.decay[4].net! / report.decay[4].netSe!).toBeCloseTo(report.byHorizon[1].spread.net.t!, 9);
     // A fresh random ranking every day replaces ~80% of each quintile.
     expect(random.dailyTurnover.long!).toBeGreaterThan(0.7);
     expect(random.dailyTurnover.long!).toBeLessThan(0.9);
@@ -332,6 +343,80 @@ describe("runLab", () => {
   });
 });
 
+describe("forward returns to the open and reversed ranking (#26, #28)", () => {
+  /** Stock s gaps up g = (s − 20) × 0.0005 every night and gives it back in the day (open → close −g). */
+  function splitFixture(sessions = 200) {
+    const dates = days(sessions);
+    const symbols = Array.from({ length: 40 }, (_, s) => `S${String(s).padStart(2, "0")}`);
+    const bars = new Map<string, DailyBar[]>();
+    symbols.forEach((symbol, s) => {
+      const g = (s - 20) * 0.0005;
+      const list: DailyBar[] = [];
+      let close = 100;
+      for (let i = 0; i < sessions; i += 1) {
+        const open = i === 0 ? close : close * (1 + g);
+        close = i === 0 ? close : open * (1 - g);
+        list.push({ t: dates[i], o: open, h: Math.max(open, close), l: Math.min(open, close), c: close, v: 1e6 });
+      }
+      bars.set(symbol, list);
+    });
+    const input: LabInput = { signal: { id: "test", name: "Test", kind: "numeric", params: {} }, dates, symbols, bars, values: (_day, symbol) => Number(symbol.slice(1)), costs: NONE, minStocks: 10 };
+    return { input, dates, symbols, bars };
+  }
+  const legMean = (from: number, f: (g: number) => number) => Array.from({ length: 8 }, (_, i) => f((from + i - 20) * 0.0005)).reduce((a, b) => a + b, 0) / 8;
+
+  it("measures close → open k sessions later: k = 1 is the overnight gap (the BTST trade)", () => {
+    const { input } = splitFixture();
+    const toClose = runLab(input);
+    const toOpen = runLab({ ...input, forward: "close-open" });
+    // Close to close each stock moves (1 + g)(1 − g) − 1 = −g² a day; close to the next open, +g.
+    expect(toClose.byHorizon[0].spread.gross.mean).toBeCloseTo(legMean(32, (g) => -g * g) - legMean(0, (g) => -g * g), 12);
+    expect(toOpen.byHorizon[0].spread.gross.mean).toBeCloseTo(0.016, 12);
+    // Close → open 5 sessions later: four full days and one more night.
+    expect(toOpen.byHorizon[1].spread.gross.mean).toBeCloseTo(legMean(32, (g) => (1 - g * g) ** 4 * (1 + g) - 1) - legMean(0, (g) => (1 - g * g) ** 4 * (1 + g) - 1), 12);
+    // Marginal: the gap for k = 1, open to open after.
+    expect(toOpen.decay[0].marginal).toBeCloseTo(0.016, 12);
+    expect(toOpen.decay[1].marginal).toBeCloseTo(legMean(32, (g) => (1 - g) * (1 + g) - 1) - legMean(0, (g) => (1 - g) * (1 + g) - 1), 12);
+    expect(toOpen.signal.forward).toBe("close-open");
+    expect(toOpen.signal.variantKey).toBe('test {"forward":"close-open"}');
+    expect(toClose.signal.variantKey).toBe("test {}");
+    expect(toOpen.notes.join(" ")).toContain("close → open");
+    // Sold at every open: no turnover saving to claim.
+    expect(toOpen.byHorizon[0].netAtTurnover).toBeNull();
+    expect(toClose.byHorizon[0].netAtTurnover).not.toBeNull();
+    // The same request on the signal meta.
+    expect(runLab({ ...input, signal: { ...input.signal, forward: "close-open" } }).byHorizon[0].spread.gross.mean).toBeCloseTo(0.016, 12);
+  });
+
+  it("leaves out a close → open window holding a broken open (a close → close one doesn't read it)", () => {
+    const { input, bars } = splitFixture();
+    const list = bars.get("S35")!;
+    list[100] = { ...list[100], o: list[100].o * 3 };
+    const toOpen = runLab({ ...input, forward: "close-open", horizons: [1] });
+    const toClose = runLab({ ...input, horizons: [1] });
+    // The broken open sits in the 1-session windows from day 99 and in the decay's longer ones.
+    expect(toOpen.dataErrors.observations).toBeGreaterThan(0);
+    expect(toOpen.dataErrors.symbols).toEqual([{ symbol: "S35", bars: 1 }]);
+    expect(toClose.dataErrors.observations).toBe(0);
+    expect(toOpen.byHorizon[0].spread.gross.mean).toBeCloseTo(0.016, 5); // S35 out of Q5 on the days its window holds the broken open
+  });
+
+  it("reverses the ranking: lowest values on top, the spread turns over, the variant is its own trial", () => {
+    const { input } = fixture();
+    const plain = runLab(input);
+    const reversed = runLab({ ...input, signal: { ...input.signal, reversed: true } });
+    expect(reversed.byHorizon[0].spread.gross.mean).toBeCloseTo(-plain.byHorizon[0].spread.gross.mean!, 12);
+    expect(reversed.byHorizon[0].quantiles[4].gross).toBeCloseTo(plain.byHorizon[0].quantiles[0].gross!, 12);
+    expect(reversed.signal.reversed).toBe(true);
+    expect(reversed.signal.variantKey).toBe('test {"reverse":1}');
+    expect(variantKey("max-21d", { window: 21, top: 1 }, { reversed: true, forward: "close-open" })).toBe('max-21d {"forward":"close-open","reverse":1,"top":1,"window":21}');
+    const { trials } = labTrialInputs(reversed, { stampHash: "r", from: null });
+    expect(trials[0].params).toEqual({ reverse: 1 });
+    expect(trials[0].ideaId).toBe("test");
+    expect(formatLabReport(reversed)[0]).toContain("reversed");
+  });
+});
+
 describe("signals", () => {
   const dates = days(300);
   const bars = new Map<string, DailyBar[]>([
@@ -359,6 +444,51 @@ describe("signals", () => {
     expect(max(dates[302 - 1], "SPIKE")).toBeNull();
   });
 
+  it("MAX(top) averages the largest daily returns of the window (#26)", () => {
+    const returns = Array.from({ length: 40 }, (_, i) => [0.05, 0.04, 0.03, 0.02, 0.01, 0.06][i % 6] * (i % 2 ? -1 : 1));
+    const spiky = new Map([["X", barsFrom(returns, 100, dates.slice(0, 41))]]);
+    const max = (top: number) => findSignal("max-21d")!.build({ ...ctx, bars: spiky }, resolveParams(findSignal("max-21d")!, { top })) as SignalValues;
+    // Gains in the window are 0.05, 0.03, 0.01 repeating (every other session; the losses are the odd ones).
+    const window = returns.slice(40 - 21, 40).sort((a, b) => b - a);
+    expect(max(1)(dates[40], "X")).toBeCloseTo(window[0], 12);
+    expect(max(5)(dates[40], "X")).toBeCloseTo(window.slice(0, 5).reduce((a, b) => a + b, 0) / 5, 12);
+    expect(topDailyReturns(spiky.get("X")!, 20, 21, 1)).toBeNull();
+    // The default stays MAX: the largest single day.
+    expect(resolveParams(findSignal("max-21d")!, {})).toEqual({ window: 21, top: 1 });
+  });
+
+  it("splits each session at the open: overnight + intraday = close to close (#28)", () => {
+    const list: DailyBar[] = [];
+    let close = 100;
+    for (let i = 0; i < 40; i += 1) {
+      const open = close * (1 + (i % 3 === 0 ? 0.01 : -0.004));
+      const next = open * (1 + (i % 2 ? 0.006 : -0.002));
+      list.push({ t: dates[i], o: open, h: Math.max(open, next), l: Math.min(open, next), c: next, v: 1 });
+      close = next;
+    }
+    const split = new Map([["X", list]]);
+    const overnight = findSignal("overnight-return")!.build({ ...ctx, bars: split }, { lookback: 10 }) as SignalValues;
+    const intraday = findSignal("intraday-return")!.build({ ...ctx, bars: split }, { lookback: 10 }) as SignalValues;
+    const at = 30;
+    let on = 0;
+    let id = 0;
+    for (let j = at - 9; j <= at; j += 1) {
+      on += Math.log(list[j].o / list[j - 1].c);
+      id += Math.log(list[j].c / list[j].o);
+      expect(sessionParts(list, j).overnight + sessionParts(list, j).intraday).toBeCloseTo(Math.log(list[j].c / list[j - 1].c), 12);
+    }
+    expect(overnight(dates[at], "X")).toBeCloseTo(on, 12);
+    expect(intraday(dates[at], "X")).toBeCloseTo(id, 12);
+    expect(overnight(dates[at], "X")! + intraday(dates[at], "X")!).toBeCloseTo(Math.log(list[at].c / list[at - 10].c), 12);
+    expect(overnight(dates[9], "X")).toBeNull();
+    // An open that gapped beyond ±50% (unadjusted, a bad print) leaves the windows holding it without a value.
+    const broken = list.map((bar, i) => (i === 25 ? { ...bar, o: bar.o * 3 } : bar));
+    const brokenValues = findSignal("overnight-return")!.build({ ...ctx, bars: new Map([["X", broken]]) }, { lookback: 10 }) as SignalValues;
+    expect(brokenValues(dates[30], "X")).toBeNull();
+    expect(brokenValues(dates[35], "X")).not.toBeNull();
+    expect(Number.isNaN(sessionParts(broken, 25).overnight)).toBe(true);
+  });
+
   it("clamps parameters and keys each variant", () => {
     const momentum = findSignal("momentum-12-1")!;
     expect(resolveParams(momentum, { lookback: "9999", skip: 2.6, junk: 1 })).toEqual({ lookback: 504, skip: 3 });
@@ -370,7 +500,7 @@ describe("signals", () => {
   });
 
   it("turns every screen into a match signal and a score signal", () => {
-    expect(BUILT_IN_SIGNALS.map((signal) => signal.id)).toEqual(["momentum-12-1", "reversal-1m", "volatility-20d", "max-21d"]);
+    expect(BUILT_IN_SIGNALS.map((signal) => signal.id)).toEqual(["momentum-12-1", "reversal-1m", "volatility-20d", "max-21d", "overnight-return", "intraday-return"]);
     expect(LAB_SIGNALS.filter((signal) => signal.group === "screen").length).toBe(LAB_SIGNALS.filter((signal) => signal.group === "screen-score").length);
     expect(new Set(LAB_SIGNALS.map((signal) => signal.id)).size).toBe(LAB_SIGNALS.length);
   });
