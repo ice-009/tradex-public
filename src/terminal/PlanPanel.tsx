@@ -7,9 +7,10 @@ import { MARKET_PHASES, phaseById } from "@/core/backtest/phases";
 import { formatPrice } from "@/core/format";
 import { istParts } from "@/core/market/session";
 import type { Plan, PlanIdea } from "@/core/plan/builder";
-import { MIN_T, VERDICT_LABEL, bucketFor, signedR, type EvidenceBucket, type EvidenceTable, type MarketState } from "@/core/plan/evidence";
+import { MIN_T, MIN_TRADES, VERDICT_LABEL, bucketFor, signedR, type EvidenceBucket, type EvidenceTable, type MarketState } from "@/core/plan/evidence";
 import { exitShort, trailSessions } from "@/core/plan/instructions";
-import { isPlanPreview, stoppedWorking } from "@/core/plan/preview";
+import { EXCLUSION_ORDER, MAX_RISK_PCT, excludedScreens, lakhs, sizeHint, type Exclusion, type ExclusionReason } from "@/core/plan/explain";
+import { isPlanPreview } from "@/core/plan/preview";
 import { EXIT_REASONS, realisedR, slippageR, type ExitReason } from "@/core/plan/journal";
 import { withLivePrice, type TradeTrack } from "@/core/plan/tracker";
 import { BTST_WINDOW } from "@/core/screener/btstAlerts";
@@ -95,7 +96,7 @@ export function PlanPanel() {
 
       <div className="tx-plan-body">
         <div className="tx-plan-col">
-          <TodaysPlan plan={plan} state={state} evidence={ready} trades={trades} live={Boolean(data?.asOf?.live)} eodDate={data?.asOf?.eodDate ?? null} />
+          <TodaysPlan plan={plan} state={state} evidence={ready} trades={trades} live={Boolean(data?.asOf?.live)} eodDate={data?.asOf?.eodDate ?? null} onSizing={() => setSettingsOpen(true)} />
         </div>
         <div className="tx-plan-col">
           <OpenTrades trades={trades} error={tradesError} />
@@ -163,7 +164,7 @@ function PlanSettings() {
       </label>
       <label>
         <span>Risk per trade %</span>
-        <input className="tx-input tx-input-num" type="number" min={0.1} max={5} step={0.1} value={riskPct} onChange={(event) => { const n = number(event.target.value, 0.1, 5); if (n !== null) setSizing({ riskPct: n }); }} />
+        <input className="tx-input tx-input-num" type="number" min={0.1} max={MAX_RISK_PCT} step={0.1} value={riskPct} onChange={(event) => { const n = number(event.target.value, 0.1, MAX_RISK_PCT); if (n !== null) setSizing({ riskPct: n }); }} />
       </label>
       <label>
         <span>Most open trades</span>
@@ -190,15 +191,33 @@ function useNow(): number {
   return now;
 }
 
-function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Plan | null; state: MarketState | null; evidence: Extract<EvidenceResponse, { status: "ready" }> | null; trades: TradesResponse | null; live: boolean; eodDate: number | null }) {
+function TodaysPlan({
+  plan,
+  state,
+  evidence,
+  trades,
+  live,
+  eodDate,
+  onSizing,
+}: {
+  plan: Plan | null;
+  state: MarketState | null;
+  evidence: Extract<EvidenceResponse, { status: "ready" }> | null;
+  trades: TradesResponse | null;
+  live: boolean;
+  eodDate: number | null;
+  /** Opens the sizing settings (capital, risk %). */
+  onSizing: () => void;
+}) {
   const [showMore, setShowMore] = useState(false);
   const universe = useTerminal((s) => s.screener.universe);
   const evidenceStatus = usePlanFeed((feed) => feed.evidence?.status);
   const sized = plan?.ideas.length ?? 0;
-  const riskBudget = plan?.riskBudget ?? 0;
   const now = useNow();
-  const preview = isPlanPreview(live, now) && Boolean(plan && (plan.ideas.length || plan.unsized.length));
-  const stopped = evidence && plan ? stoppedWorking(evidence.table.screens, state, plan.eligible) : [];
+  const inSession = isPlanPreview(live, now);
+  const preview = inSession && Boolean(plan && (plan.ideas.length || plan.unsized.length));
+  const excluded = evidence && plan ? excludedScreens(evidence.table.screens, state, plan.eligible) : [];
+  const btstEligible = Boolean(plan?.eligible.some((id) => SCREEN_MAP[id]?.group === "btst"));
   return (
     <section className="tx-plan-section">
       <div className="tx-plan-title">
@@ -232,12 +251,10 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
       ) : !plan.ideas.length && !plan.unsized.length ? (
         <div className="tx-plan-empty">
           None of the setups that work in this market ({plan.eligible.map((id) => SCREEN_MAP[id]?.name).join(", ")}) match right now. The screener re-checks during the session.
+          {inSession && btstEligible ? " The BTST setups judge the day's close, so most of their matches appear only in the last hour: the plan is final at 3:10 PM." : ""}
         </div>
       ) : !plan.ideas.length ? (
-        <div className="tx-plan-empty">
-          None of today&apos;s {plan.unsized.length} matches fits a {rupees(riskBudget)} risk per trade: one futures lot of each loses more than that at its stop. Leave the slots empty, or
-          raise capital or risk % (gear icon) if that really is your size.
-        </div>
+        <TooBig plan={plan} onSizing={onSizing} />
       ) : (
         <ol className="tx-plan-ideas">
           {plan.ideas.map((idea, i) => (
@@ -246,12 +263,7 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
         </ol>
       )}
       {plan && plan.unsized.length > 0 && <UnsizedList plan={plan} />}
-      {stopped.length > 0 && (
-        <p className="tx-scr-note" title="A screen joins the plan only while it made money in both the first 60% and the last 40% of the tested years, in this market state.">
-          Left out because they lost money lately (last 12 months):{" "}
-          {stopped.map((entry) => `${entry.name} ${signedR(entry.recentR)}`).join(", ")}. They come back once their recent trades recover.
-        </p>
-      )}
+      {excluded.length > 0 && plan && <LeftOut excluded={excluded} expanded={!plan.ideas.length} />}
       {plan && plan.invalid.length > 0 && <InvalidList plan={plan} />}
       {plan && !live && eodDate && plan.ideas.length > 0 && (
         <p className="tx-scr-note">These matched at the close of {day(eodDate)}. During the session they are re-checked on live prices: take what still matches at 3:15–3:25 PM.</p>
@@ -292,6 +304,126 @@ function TodaysPlan({ plan, state, evidence, trades, live, eodDate }: { plan: Pl
         </p>
       )}
     </section>
+  );
+}
+
+/** Every match is too big for the risk per trade: what would fit the closest one, and a way to the sizing settings. */
+function TooBig({ plan, onSizing }: { plan: Plan; onSizing: () => void }) {
+  const capital = usePrefs((prefs) => prefs.capital);
+  const riskPct = usePrefs((prefs) => prefs.riskPct);
+  const maxOpen = usePrefs((prefs) => prefs.maxOpen);
+  const maxLeverage = usePrefs((prefs) => prefs.maxLeverage);
+  const hint = sizeHint(plan, { capital, riskPct, maxOpen, maxLeverage });
+  const count = plan.unsized.length;
+  const leverageBound = Boolean(hint && hint.lotNotional + plan.openNotional > capital * maxLeverage);
+  return (
+    <div className="tx-plan-empty tx-plan-toobig">
+      None of today&apos;s {count} match{count === 1 ? "" : "es"} fits a {rupees(plan.riskBudget)} risk per trade ({riskPct}% of {lakhs(capital)}): one futures lot of {count === 1 ? "it" : "each"} loses more
+      than that at its stop{plan.unsized.some((idea) => idea.size.status === "no-room") ? ", or doesn't fit under the leverage cap" : ""}.
+      {hint && (
+        <>
+          {" "}
+          The closest: one lot of <b>{hint.symbol}</b> ({hint.lot} shares, {lakhs(hint.lotNotional)}) risks <b>{rupees(hint.oneLotRisk)}</b> — it needs <b>≥ {lakhs(hint.capital)}</b> capital at{" "}
+          {riskPct}% risk
+          {hint.riskPct !== null ? (
+            <>
+              , or <b>{hint.riskPct}%</b> risk on {lakhs(capital)}
+            </>
+          ) : leverageBound ? (
+            ` (one lot is more than your ${maxLeverage}× leverage cap allows on ${lakhs(capital)})`
+          ) : (
+            ` (on ${lakhs(capital)} it would take over ${MAX_RISK_PCT}% risk)`
+          )}
+          .
+        </>
+      )}{" "}
+      Leave the slots empty, or change your sizing if that really is your size.{" "}
+      <button type="button" className="tx-scr-clear" onClick={onSizing}>
+        Sizing settings
+      </button>
+    </div>
+  );
+}
+
+const RULE_TITLE = `A setup joins the plan only while, in this market state, it has at least ${MIN_TRADES} tested trades, made money in both the first 60% and the last 40% of them, and has a t-stat over ${MIN_T}.`;
+
+const EXCLUSION_TEXT: Record<ExclusionReason, string> = {
+  "lost-lately": "Made money, then lost it in their last 40% of signals",
+  noisy: `Made money, but too unevenly to trust (t-stat not over ${MIN_T})`,
+  "lost-early": "Lost money in their first 60% of signals (they must make money in both parts)",
+  few: `Too few signals in this market to judge (under ${MIN_TRADES})`,
+  "one-state": "Work in one market state only, and the state is unknown",
+  lost: "Lost money over the test",
+};
+
+function exclusionShort(entry: Exclusion): string {
+  switch (entry.reason) {
+    case "lost-lately":
+      return `${entry.name} ${signedR(entry.last)}${entry.splitDate ? ` since ${monthYear(entry.splitDate)}` : ""}`;
+    case "noisy":
+      return `${entry.name} t ${entry.t === null ? "—" : entry.t.toFixed(1)}`;
+    case "lost-early":
+      return `${entry.name} ${signedR(entry.first)}`;
+    case "few":
+      return `${entry.name} (${entry.n})`;
+    case "lost":
+      return `${entry.name} ${signedR(entry.mean)}`;
+    default:
+      return entry.name;
+  }
+}
+
+const exclusionTitle = (entry: Exclusion) =>
+  `${entry.n} trades · mean ${signedR(entry.mean)} · first 60% ${signedR(entry.first)} · last 40% ${signedR(entry.last)}${entry.splitDate ? ` (from ${monthYear(entry.splitDate)})` : ""} · last 12 months ${signedR(entry.recent)} · t ${entry.t === null ? "—" : entry.t.toFixed(1)}`;
+
+function ExclusionList({ list }: { list: Exclusion[] }) {
+  return (
+    <>
+      {list.map((entry, i) => (
+        <span key={entry.id} title={exclusionTitle(entry)}>
+          {i ? ", " : ""}
+          {exclusionShort(entry)}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** The setups the evidence rule leaves out in this market state, and why: in full when the plan has no ideas. */
+function LeftOut({ excluded, expanded }: { excluded: Exclusion[]; expanded: boolean }) {
+  const [open, setOpen] = useState(false);
+  const lately = excluded.filter((entry) => entry.reason === "lost-lately");
+  if (!expanded && !open) {
+    return (
+      <p className="tx-scr-note" title={RULE_TITLE}>
+        {lately.length > 0 && (
+          <>
+            Left out because they lost money lately (their last 40% of signals): <ExclusionList list={lately} />. They come back once their recent trades recover.{" "}
+          </>
+        )}
+        <button type="button" className="tx-scr-clear" onClick={() => setOpen(true)}>
+          Why {excluded.length} setups are left out
+        </button>
+      </p>
+    );
+  }
+  const groups = EXCLUSION_ORDER.map((reason) => [reason, excluded.filter((entry) => entry.reason === reason)] as const).filter(([, list]) => list.length > 0);
+  return (
+    <div className="tx-scr-note tx-plan-leftout" title={RULE_TITLE}>
+      <span>Left out of the plan in this market ({excluded.length} setups), by the test rule:</span>
+      <ul>
+        {groups.map(([reason, list]) => (
+          <li key={reason}>
+            {EXCLUSION_TEXT[reason]}: <ExclusionList list={list} />.
+          </li>
+        ))}
+      </ul>
+      {!expanded && (
+        <button type="button" className="tx-scr-clear" onClick={() => setOpen(false)}>
+          Hide
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -21,3 +21,8 @@
 .tx-lab-line { fill: none; stroke: var(--accent); stroke-width: 2; }
 .tx-lab-bar.is-pos { fill: var(--pos); opacity: 0.55; }
 .tx-lab-bar.is-neg { fill: var(--neg); opacity: 0.55; }
+
+/* Links to the report cards (#23). */
+.tx-lab-cardlinks { display: flex; gap: 12px; margin: 0; font-size: 12px; }
+.tx-lab-cardlinks a { color: var(--accent-text); text-decoration: none; }
+.tx-lab-cardlinks a:hover { text-decoration: underline; }

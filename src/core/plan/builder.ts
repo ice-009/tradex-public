@@ -101,6 +101,8 @@ export interface Plan {
   state: MarketState | null;
   riskBudget: number;
   openCount: number;
+  /** Entry notional of the open trades, ₹ (it counts against the leverage cap). */
+  openNotional: number;
   freeSlots: number;
   /** Screens allowed in this state, best expected R first. */
   eligible: string[];
@@ -205,7 +207,8 @@ export function buildPlan(input: PlanInput): Plan {
       a.symbol.localeCompare(b.symbol),
   );
 
-  let room = settings.capital * settings.maxLeverage - open.reduce((sum, position) => sum + position.notional, 0);
+  const openNotional = open.reduce((sum, position) => sum + position.notional, 0);
+  let room = settings.capital * settings.maxLeverage - openNotional;
   let taken = 0;
   const ideas: PlanIdea[] = [];
   const unsized: PlanIdea[] = [];
@@ -224,5 +227,5 @@ export function buildPlan(input: PlanInput): Plan {
   }
   for (const list of Object.values(skipped)) list.sort();
   invalid.sort((a, b) => b.expectedR - a.expectedR || a.symbol.localeCompare(b.symbol));
-  return { state, riskBudget, openCount: open.length, freeSlots, eligible, ideas, unsized, more, invalid, skipped };
+  return { state, riskBudget, openCount: open.length, openNotional, freeSlots, eligible, ideas, unsized, more, invalid, skipped };
 }

@@ -20,6 +20,8 @@ import type {
   EvidenceReplayResponse,
   EvidenceResponse,
   HighLowResponse,
+  LabCardResponse,
+  LabCardsResponse,
   LabRequest,
   LabResponse,
   LabTrialsResponse,
@@ -113,6 +115,10 @@ export const api = {
 
   /** The Signal Lab's trial record for an idea: variants tried, deflated Sharpe ratios, promotion verdict. */
   labTrials: (idea: string, signal?: AbortSignal) => getJson<LabTrialsResponse>("/api/lab/trials", { idea }, signal),
+  /** Every Lab signal with its latest stored report's verdict (the report cards index, #23). */
+  labCards: (signal?: AbortSignal) => getJson<LabCardsResponse>("/api/lab/cards", undefined, signal),
+  /** One signal's report card: its stored variants and the latest report of `variant` (default: the newest). */
+  labCard: (signalId: string, variant?: string, signal?: AbortSignal) => getJson<LabCardResponse>("/api/lab/card", { signal: signalId, variant }, signal),
 
   /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
   evidence: (period?: { from: number; to: number | null }) =>

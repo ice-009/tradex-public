@@ -4,12 +4,13 @@ import type { LabResponse } from "@/contracts/api";
 import type { HorizonReport, LabReport, SpreadPair } from "@/core/lab/engine";
 import { isoDay, num, pct, share, turnoverRows, verdictOf } from "@/core/lab/format";
 import { api } from "@/client/api";
+import { cardHref } from "./labLinks";
 import { LabTrials } from "./LabTrials";
 import { RunStampBar, type Replay } from "./RunStampBar";
 
 // A Signal Lab report (src/core/lab/engine.ts), as tables — the same numbers
 // the CLI prints (src/core/lab/format.ts). Charts are kept to one: the decay
-// of the spread by horizon. The report card with more charts is #23.
+// of the spread by horizon; the report card (LabCards.tsx, #23) has the rest.
 
 type Ready = Extract<LabResponse, { status: "ready" }>;
 
@@ -46,6 +47,15 @@ export function LabResults({ data }: { data: Ready }) {
         {params ? ` (${params})` : ""} · {isoDay(period.from)} – {isoDay(period.to)} · <b>{period.days}</b> ranked sessions · {universe.symbols} stocks, {universe.perDay.mean.toFixed(0)} a
         day · Q{report.quantiles} = highest values · costs {pct(report.costPerTrade, 3)} a round trip ({data.costs.label}) · {report.observations.toLocaleString("en-IN")} observations
         {data.runtime.cached ? " · cached" : ""}
+      </p>
+
+      <p className="tx-lab-cardlinks">
+        <a href={cardHref(signal.id, signal.variantKey)} target="_blank" rel="noreferrer" title="This run's report card: the verdict, the spread's equity curve, decay, regimes, costs and the trial record (opens in a new tab)">
+          Open report card ↗
+        </a>
+        <a href="/lab" target="_blank" rel="noreferrer" title="Every signal's latest verdict (opens in a new tab)">
+          All report cards ↗
+        </a>
       </p>
 
       <RunStampBar key={`${stamp.hash}:${stamp.resultHash}`} stamp={stamp} result={report} replay={replay(data)} slow="Reading and computing again from scratch (no cache)." />

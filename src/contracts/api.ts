@@ -16,6 +16,8 @@ import type { LiveScreenRecord, LiveTrade } from "@/core/screener/liveRecord";
 import type { EvidenceTable } from "@/core/plan/evidence";
 import type { LabReport } from "@/core/lab/engine";
 import type { IdeaTrialSummary } from "@/core/lab/trials";
+import type { SignalGroup } from "@/core/lab/signals";
+import type { SignalVerdict } from "@/core/lab/verdict";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
@@ -210,6 +212,55 @@ export interface LiveRecordResponse {
  * promotion verdict (src/core/lab/trials.ts). Ratios that can't be computed are null.
  */
 export type LabTrialsResponse = IdeaTrialSummary;
+
+// ------------------------------------------------------------------ GET /api/lab/cards, GET /api/lab/card?signal=&variant=
+
+/** A Lab signal as the report cards list it (src/core/lab/signals.ts). */
+export interface LabSignalInfo {
+  id: string;
+  name: string;
+  group: SignalGroup;
+  kind: "numeric" | "binary";
+  summary: string;
+}
+
+/** A stored report's identity: one per signal variant (its latest run). */
+export interface LabCardVariant {
+  variantKey: string;
+  params: Record<string, number>;
+  runAt: number;
+  period: LabReport["period"];
+  /** The universe the run ranked (its stamp's request). */
+  universe: string;
+}
+
+/** The report cards index: every signal, with its newest stored report's verdict (null: never run). */
+export interface LabCardsResponse {
+  cards: Array<{
+    signal: LabSignalInfo;
+    latest: (LabCardVariant & { verdict: SignalVerdict; variants: number }) | null;
+  }>;
+}
+
+/**
+ * One signal's report card (#23): the stored variants, and the chosen one's
+ * latest report with its stamp and a verdict at every horizon (src/core/lab/verdict.ts),
+ * judged against the trial record as it stands now.
+ */
+export interface LabCardResponse {
+  signal: LabSignalInfo;
+  variants: LabCardVariant[];
+  card: {
+    variant: LabCardVariant;
+    report: LabReport;
+    stamp: RunStamp;
+    costs: { preset: string; label: string };
+    /** The horizon the card leads with (verdict.ts primaryHorizon). */
+    primary: number | null;
+    /** The verdict at each of the report's horizons, in its order. */
+    verdicts: SignalVerdict[];
+  } | null;
+}
 
 // ------------------------------------------------------------------ GET /api/plan/evidence
 
