@@ -45,7 +45,7 @@
     "eslint": "^10",
     "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
-    "typescript": "^5",
+    "typescript": "^7",
     "vitest": "^3.2.7"
   },
   "description": "Open-source trading terminal for Indian (NSE) stock futures: charts, screeners, setup scores, backtests and a source-independent market-data engine.",
