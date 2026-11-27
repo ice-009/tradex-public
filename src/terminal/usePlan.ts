@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { buildPlan, type Plan, type PlanInput } from "@/core/plan/builder";
+import { buildPlan, rankCandidates, type Plan, type PlanInput, type RankedCandidates } from "@/core/plan/builder";
 import type { MarketState } from "@/core/plan/evidence";
 import { useLotSizes } from "@/client/lotsFeed";
 import { usePlanFeed } from "@/client/planFeed";
@@ -55,4 +55,28 @@ export function useDailyPlan(): Plan | null {
   }, [input]);
   const prices = useLivePrices(symbols);
   return useMemo(() => (input ? buildPlan({ ...input, prices }) : null), [input, prices]);
+}
+
+/**
+ * Today's ranking before sizing, with no trades open — what the server seals
+ * (src/core/plan/seal.ts) — on live prices, to compare with the sealed plan.
+ * `watch`: symbols to check on their live price (the sealed ideas); the top of
+ * the live ranking is checked too.
+ */
+export function useLiveRanking(watch: string[]): (RankedCandidates & { state: MarketState | null }) | null {
+  const data = useScreenerFeed((feed) => feed.data);
+  const evidence = usePlanFeed((feed) => feed.evidence);
+  const lots = useLotSizes().lots;
+  const state = useMarketState();
+  const input = useMemo((): Omit<PlanInput, "settings"> | null => {
+    if (evidence?.status !== "ready" || data?.status !== "ready" || !data.results) return null;
+    return { results: data.results, evidence: evidence.table.screens, state, banned: new Set(data.ban?.available ? data.ban.symbols : []), open: [], lots };
+  }, [data, evidence, lots, state]);
+  const symbols = useMemo(() => {
+    if (!input) return watch;
+    const ranked = rankCandidates(input);
+    return [...watch, ...ranked.candidates.slice(0, 15).map((idea) => idea.symbol)];
+  }, [input, watch]);
+  const prices = useLivePrices(symbols);
+  return useMemo(() => (input ? { ...rankCandidates({ ...input, prices }), state } : null), [input, prices, state]);
 }

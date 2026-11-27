@@ -5,6 +5,11 @@ import { log } from "@/server/log";
 
 export function registerNode() {
   log.info("Tradex server started", { node: process.version, logLevel: log.level, hub: Boolean(process.env.HUB_URL?.trim() && process.env.HUB_KEY?.trim()) });
+  // The sealed daily plan (#33): a timer in this process, so a day is sealed whether or not anyone has the terminal open.
+  // Not during `next build` (it loads the server to collect pages), and loaded only once the server has started.
+  if (process.env.NEXT_PHASE !== "phase-production-build") {
+    void import("@/server/services/planLedger").then((ledger) => ledger.startPlanLedgerJob()).catch((error) => log.error("Sealed plan: job failed to start", { error }));
+  }
 }
 
 export function logRequestError(...[error, request, context]: Parameters<Instrumentation.onRequestError>) {
