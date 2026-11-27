@@ -1,10 +1,10 @@
 import "server-only";
 
 import { DAY_MS, istParts } from "@/core/market/session";
-import { MAX_FILE_GAP_DAYS, referenceTimeline, type PointInTime, type ReferenceHistory, type ReferenceTimeline, type UniverseMember } from "@/core/reference/pointInTime";
+import { MAX_FILE_GAP_DAYS, known, laterFactor, referenceTimeline, unknown, type Known, type PointInTime, type ReferenceHistory, type ReferenceTimeline, type UniverseMember } from "@/core/reference/pointInTime";
 import { foMembership } from "@/server/providers/foData";
 import { getFnoBan, getIndexCatalog, getLotSizes, getResultsCalendar } from "@/server/providers/reference";
-import { banHistory, lotHistory, priceFactors, renames, resultsBetween, resultsWindow } from "@/server/providers/referenceHistory";
+import { banHistory, lotHistory, priceFactors, renames, resultsBetween, resultsWindow, tradingCalendar } from "@/server/providers/referenceHistory";
 import { UNIVERSES, getUniverse } from "@/server/providers/universe";
 
 // The point-in-time engine's one door (issue #19). The screener, the plan and
@@ -100,4 +100,24 @@ export async function asOfSpan(from: number, to: number, options: SpanOptions = 
 /** What was known on `day` (a day key; today by default). Split/bonus factors only for `options.symbols`. */
 export async function asOf(day: number = istParts().day, options: Pick<SpanOptions, "symbols"> = {}): Promise<PointInTime> {
   return (await asOfSpan(day, day, { factors: false, ...options })).at(day);
+}
+
+/** NSE's trading days (day keys, ascending, 1994 on) from the hub's calendar; null when the hub can't say. */
+export function tradingDays(): Promise<readonly number[] | null> {
+  return tradingCalendar();
+}
+
+/**
+ * How far each stock's prices had been adjusted by `day` (a lighter asOf(day).priceScale for
+ * charts and quotes): what a today-adjusted price on or before `day` is multiplied by to be
+ * adjusted only for the splits and bonuses with an ex-date on or before it.
+ */
+export async function priceScales(day: number, symbols: readonly string[]): Promise<Map<string, Known<number>>> {
+  const factors = symbols.length ? await priceFactors(symbols) : new Map<string, readonly { day: number; factor: number }[]>();
+  return new Map(
+    symbols.map((symbol): [string, Known<number>] => {
+      const list = factors.get(symbol);
+      return [symbol, list ? known(1 / laterFactor(list, day), day, "Market Data Hub split/bonus factors") : unknown<number>(`Split/bonus factors for ${symbol} weren't loaded.`)];
+    }),
+  );
 }

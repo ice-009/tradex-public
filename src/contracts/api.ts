@@ -35,6 +35,42 @@ export interface ApiError {
   requestId?: string;
 }
 
+// ------------------------------------------------------------------ the Time Machine (issue #31)
+//
+// Every data endpoint the terminal reads takes `asOf=YYYY-MM-DD`: the answer is
+// as it was at that day's close (the last session on or before it), with no
+// bar, quote, reference value or trade from after it. Without it (or with today
+// or later) the answer is live.
+
+/** GET /api/time-machine?asOf=YYYY-MM-DD: which session the terminal shows, and what is known about that day. */
+export type TimeMachineResponse =
+  | { status: "live" }
+  | {
+      status: "past";
+      /** The session shown (day key: UTC midnight of the IST date). */
+      day: number;
+      /** YYYY-MM-DD of `day` (the URL form). */
+      date: string;
+      /** "23 Mar 2020". */
+      label: string;
+      /** The day asked for (YYYY-MM-DD). */
+      requested: string;
+      /** The day asked for wasn't a session: `day` is the last one before it. */
+      snapped: boolean;
+      /** Snapping, or holidays not checked; null when there is nothing to say. */
+      note: string | null;
+      /** What was known that day (F&O list, lot sizes, ban list, results, sector map) and what wasn't. */
+      facts: Array<{ name: string; known: boolean; text: string }>;
+    };
+
+/** The Time Machine day an answer is computed for. */
+export interface AsOfInfo {
+  /** The session (day key). */
+  day: number;
+  /** What differs from the live answer, or isn't known for that day. */
+  notes: string[];
+}
+
 // ------------------------------------------------------------------ GET /api/chart?symbol&interval&range
 
 /** One candle on the wire (date is an ISO string). */
@@ -71,6 +107,8 @@ export interface ChartResponse {
    * Ask with &from&to for the bars before the oldest one shown (src/core/market/olderBars.ts).
    */
   hasOlder?: boolean;
+  /** Time Machine: bars end at this day's close; prices adjusted only for the splits and bonuses by then (`priceScale` × today's adjusted). */
+  asOf?: AsOfInfo & { priceScale: number | null };
 }
 
 // ------------------------------------------------------------------ GET /api/quotes?symbols=A,B
@@ -89,10 +127,14 @@ export interface Quote {
   source?: string;
   /** Not a live price (the hub's last stored price): never fire alerts or compute a basis from it. */
   delayed?: boolean;
+  /** Time Machine: the session this close is from (day key); the quote is never live. */
+  asOf?: number;
 }
 
 export interface QuotesResponse {
   quotes: Quote[];
+  /** Time Machine: the day the closes are as of. */
+  asOf?: AsOfInfo;
 }
 
 // ------------------------------------------------------------------ GET /api/broker/stream?symbols=A,B (Server-Sent Events)
@@ -181,6 +223,8 @@ export interface ScreenerResponse {
   regime?: MarketRegime;
   /** NSE's F&O ban list for today, from the hub (best-effort; available=false when the hub hasn't answered). */
   ban?: { available: boolean; tradeDate: number | null; symbols: string[] };
+  /** Time Machine: the screens ran on bars up to this day's close, with that day's F&O list, ban list and sector map. */
+  timeMachine?: AsOfInfo;
 }
 
 // ------------------------------------------------------------------ GET /api/screener/track?universe
@@ -288,6 +332,8 @@ export type EvidenceResponse =
       live: Record<string, LiveScreenRecord> | null;
       /** What the table was computed from and the hash of the table. POST it to /api/plan/evidence/replay to compute it again. */
       stamp: RunStamp;
+      /** Time Machine: the five years ending this day, counting only trades that closed by it. */
+      asOf?: number;
     }
   | { status: "error"; error: string };
 
@@ -519,6 +565,8 @@ export interface ResultsResponse {
   available: boolean;
   fetchedAt: number;
   events: ResultsEvent[];
+  /** Time Machine: results dated in the week up to this day only (which later dates had been announced isn't stored). */
+  asOf?: AsOfInfo;
 }
 
 // ------------------------------------------------------------------ GET /api/highlow?after=seq
@@ -545,9 +593,11 @@ export interface HighLowResponse {
 
 export interface LotsResponse {
   lots: Record<string, number>;
-  /** "hub": from the Market Data Hub; "disk": its last copy saved here; "none": not known yet. */
-  source: "hub" | "disk" | "none";
+  /** "hub": from the Market Data Hub; "disk": its last copy saved here; "none": not known yet; "as-of": a Time Machine day's. */
+  source: "hub" | "disk" | "none" | "as-of";
   fetchedAt: number;
+  /** Time Machine: lot sizes as traded that day (in that day's shares), or the stand-in and why. */
+  asOf?: AsOfInfo;
 }
 
 // ------------------------------------------------------------------ GET /api/futures?symbol

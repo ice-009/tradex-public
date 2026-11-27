@@ -2,11 +2,16 @@ import { useEffect, useSyncExternalStore } from "react";
 import type { EvidenceResponse, TradeCloseRequest, TradeCreateRequest, TradesResponse, TradeUpdateRequest } from "@/contracts/api";
 import type { ScreenEvidence } from "@/core/plan/evidence";
 import { api } from "@/client/api";
+import { inTimeMachine, useAsOfKey } from "@/client/timeMachine";
 
 // Shared state for the daily plan: the strategy evidence (which screens have
 // an edge in which market) and your trade journal. The Plan tab, the Explore
 // tab's "works in any market / uptrends only / no edge" labels and the dock
 // badge all read it.
+//
+// In the Time Machine the evidence is the table that day's plan had (the five
+// years ending it, src/server/services/evidence.ts) and the journal isn't
+// loaded: your trades are live records, from after the day shown.
 
 /** While the server replays the history (~10 s on first run each day). */
 const COMPUTING_POLL_MS = 2_000;
@@ -52,6 +57,10 @@ export function useEvidenceScreens(): Record<string, ScreenEvidence> | null {
 }
 
 export async function reloadTrades() {
+  if (inTimeMachine()) {
+    setFeed({ trades: null, tradesError: null });
+    return;
+  }
   try {
     setFeed({ trades: await api.trades(), tradesError: null });
   } catch (error) {
@@ -61,9 +70,12 @@ export async function reloadTrades() {
 
 /** Mount once (in the workspace): loads the evidence (polling while it is computed) and the journal. */
 export function usePlanPolling() {
+  // A new Time Machine day (or back to live) is a new table.
+  const asOf = useAsOfKey();
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    setFeed({ evidence: null });
     const loadEvidence = async () => {
       let next = EVIDENCE_REFRESH_MS;
       try {
@@ -86,12 +98,14 @@ export function usePlanPolling() {
       if (timer) clearTimeout(timer);
       clearInterval(tradesTimer);
     };
-  }, []);
+  }, [asOf]);
 }
 
 // ------------------------------------------------------------------ journal actions (each reloads the journal)
 
 export async function takeTrade(body: TradeCreateRequest) {
+  // Paper trading inside a replay is #32; the journal holds real trades only.
+  if (inTimeMachine()) throw new Error("The Time Machine shows a past day: trades can't be added to your journal from it.");
   await api.createTrade(body);
   await reloadTrades();
 }

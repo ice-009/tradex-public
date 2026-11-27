@@ -15,6 +15,7 @@ import { log } from "@/server/log";
 //   price factors     GET /v1/adjustments/batch    split/bonus factors per stock               cached 6 h per stock
 //   ticker changes    GET /v1/symbols/changes      NSE's renames                               cached 12 h
 //   results by span   GET /v1/results-calendar     results dates over a past span              cached 6 h
+//   trading calendar  GET /v1/calendar             NSE's sessions since 1994 (hub #17)          cached 12 h
 //
 // A hub that predates an endpoint (market-data-hub#46) or can't answer gives
 // null, and asOf says the data isn't known rather than using today's.
@@ -24,6 +25,9 @@ const BAN_TTL_MS = 30 * 60 * 1000;
 const FACTORS_TTL_MS = 6 * 60 * 60 * 1000;
 const RENAMES_TTL_MS = 12 * 60 * 60 * 1000;
 const RESULTS_TTL_MS = 6 * 60 * 60 * 1000;
+const CALENDAR_TTL_MS = 12 * 60 * 60 * 1000;
+/** NSE's first session in its archive (3 Nov 1994): the calendar is read from here. */
+const CALENDAR_FROM = Date.UTC(1994, 10, 1);
 const RETRY_MS = 10 * 60 * 1000;
 const isoDay = (day: number) => new Date(day).toISOString().slice(0, 10);
 
@@ -51,6 +55,7 @@ const globalForHistory = globalThis as unknown as {
   refRenames?: Slot<Rename[]>;
   refFactors?: Map<string, { at: number; factors: PriceFactor[] }>;
   refResults?: Map<string, Slot<ResultsEvent[]>>;
+  refCalendar?: Slot<number[]>;
 };
 const slot = <T>(): Slot<T> => ({ value: null, at: 0, ok: false, pending: null });
 const lotsSlot: Slot<LotHistory> = (globalForHistory.refLots ??= slot());
@@ -58,6 +63,7 @@ const banSlot: Slot<BanHistory> = (globalForHistory.refBan ??= slot());
 const renamesSlot: Slot<Rename[]> = (globalForHistory.refRenames ??= slot());
 const factorCache = (globalForHistory.refFactors ??= new Map());
 const resultsSlots = (globalForHistory.refResults ??= new Map());
+const calendarSlot: Slot<number[]> = (globalForHistory.refCalendar ??= slot());
 
 /** The cached value, re-read when older than `ttl` (or RETRY_MS after a failure); waits only for the first answer. */
 function read<T>(state: Slot<T>, ttl: number, what: string, load: () => Promise<T>): Promise<T | null> {
@@ -138,6 +144,16 @@ export async function priceFactors(symbols: readonly string[]): Promise<Map<stri
     log.warn("Split/bonus factors from the Market Data Hub failed", { error: (error as Error).message });
   }
   return out;
+}
+
+/** NSE's trading days (day keys, ascending) from 1994 to a month ahead; null when the hub can't say (one with no /v1/calendar). */
+export function tradingCalendar(): Promise<number[] | null> {
+  const hub = hubClient();
+  if (!hub) return Promise.resolve(null);
+  return read(calendarSlot, CALENDAR_TTL_MS, "Trading calendar", async () => {
+    const answer = await hub.calendar(isoDay(CALENDAR_FROM), isoDay(Date.now() + 31 * DAY_MS));
+    return (answer.tradingDays ?? []).map((date) => Date.parse(`${date}T00:00:00Z`)).filter(Number.isFinite).sort((a, b) => a - b);
+  });
 }
 
 /** Results dates between two days (as stored by the hub today); null when it can't say. */

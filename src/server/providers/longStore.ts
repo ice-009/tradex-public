@@ -9,7 +9,7 @@ import { LongBars } from "@/server/providers/longBars";
 // periods older than the screener's 5-year store, read from the hub per run.
 
 /** Batch candles from..to for app symbols: sent as hub tickers, answered back under the app's symbols. */
-async function batch(symbols: string[], from: number, to: number): Promise<HubCandlesBatch> {
+export async function longBatch(symbols: string[], from: number, to: number): Promise<HubCandlesBatch> {
   const hub = hubClient();
   if (!hub) throw new Error(HUB_REQUIRED);
   const appSymbols = new Map<string, string[]>();
@@ -25,5 +25,5 @@ async function batch(symbols: string[], from: number, to: number): Promise<HubCa
 }
 
 const globalForLong = globalThis as unknown as { longBars?: LongBars };
-if (!(globalForLong.longBars instanceof LongBars)) globalForLong.longBars = new LongBars({ batch });
+if (!(globalForLong.longBars instanceof LongBars)) globalForLong.longBars = new LongBars({ batch: longBatch });
 export const longBars: LongBars = globalForLong.longBars;

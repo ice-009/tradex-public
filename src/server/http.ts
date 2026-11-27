@@ -27,6 +27,16 @@ export async function sessionEmail(): Promise<string | null> {
 
 export const unauthorized = () => NextResponse.json<ApiError>({ error: "Unauthorized" }, { status: 401 });
 
+/** A request the server can't answer as asked (a bad parameter): thrown from a service, answered with `status` and the message. */
+export class RequestError extends Error {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
+
 const REQUEST_ID = /^[A-Za-z0-9._:-]{8,64}$/;
 
 /** The caller's X-Request-Id when it looks like an id, otherwise a new one. */
@@ -59,9 +69,14 @@ function instrumented<Args extends unknown[]>(
         const who = await check(request);
         response = who ? await handler(who, ...args) : unauthorized();
       } catch (error) {
-        threw = true;
-        log.error(`${name} failed`, { requestId, route: name, method, path, error });
-        response = NextResponse.json({ ...(failBody?.() ?? ({ error: failMessage } satisfies ApiError)), requestId }, { status: 500 });
+        if (error instanceof RequestError) {
+          // A bad parameter: the caller's mistake, said in the body (logged below as a 4xx).
+          response = NextResponse.json({ ...(failBody?.() ?? {}), error: error.message, requestId }, { status: error.status });
+        } else {
+          threw = true;
+          log.error(`${name} failed`, { requestId, route: name, method, path, error });
+          response = NextResponse.json({ ...(failBody?.() ?? ({ error: failMessage } satisfies ApiError)), requestId }, { status: 500 });
+        }
       }
       const ms = Math.round(performance.now() - started);
       try {

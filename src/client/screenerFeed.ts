@@ -13,12 +13,20 @@ import { HOLD_BARS } from "@/core/screener/backtest";
 import { scoreSetup, type SetupScore, type StockFacts } from "@/core/screener/score";
 import type { TradePlan } from "@/core/screener/screens";
 import { DAY_MS, isMarketOpen, istParts } from "@/core/market/session";
+import { inTimeMachine, timeMachineDay, useAsOfKey } from "@/client/timeMachine";
 
 export { isMarketOpen };
 
 // One shared screener feed for the whole terminal. The screener panel, the
 // watchlist badges, the setup card and the chart's plan overlay all read the
 // same response, so a stock's setups are visible wherever that stock appears.
+//
+// In the Time Machine every request carries the day (src/client/api.ts): the
+// screens ran as of its close, "today" for results dates is that day, and
+// nothing polls for live prices or the BTST live record.
+
+/** "Today" for the feed: the Time Machine's day, else today's IST date. */
+const feedToday = () => timeMachineDay() ?? istParts().day;
 
 /** During market hours: the server refreshes quotes at a budget-paced rate and applies live ticks in between, so polling it often costs no API calls. */
 const LIVE_REFRESH_MS = 10_000;
@@ -138,9 +146,9 @@ let resultsLoadedAt = 0;
 const LIVE_RECORD_REFRESH_MS = 5 * 60 * 1000;
 let liveRecordLoadedAt = 0;
 
-/** Fetch the BTST live record (at most every 5 minutes; it is the same for every universe). */
+/** Fetch the BTST live record (at most every 5 minutes; it is the same for every universe). Not in the Time Machine: it is a live recording. */
 async function loadLiveRecord() {
-  if (Date.now() - liveRecordLoadedAt < LIVE_RECORD_REFRESH_MS) return;
+  if (inTimeMachine() || Date.now() - liveRecordLoadedAt < LIVE_RECORD_REFRESH_MS) return;
   liveRecordLoadedAt = Date.now();
   try {
     setFeed({ liveRecord: await api.liveRecord() });
@@ -155,7 +163,7 @@ export async function loadResultsCalendar(force = false) {
   resultsLoadedAt = Date.now();
   try {
     const json = await api.results();
-    const today = istParts().day;
+    const today = feedToday();
     const bySymbol = new Map<string, ResultsEvent>();
     for (const event of json.events ?? []) {
       const current = bySymbol.get(event.symbol);
@@ -172,7 +180,7 @@ export async function loadResultsCalendar(force = false) {
 /** "Results today", "Results in 3 days", "Results 2 days ago" — null when there's nothing close. */
 export function resultsNote(event: ResultsEvent | undefined, withinDays = 10): { text: string; soon: boolean } | null {
   if (!event) return null;
-  const today = istParts().day;
+  const today = feedToday();
   const days = Math.round((event.date - today) / DAY_MS);
   if (Math.abs(days) > withinDays) return null;
   const when = new Date(event.date).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -242,6 +250,8 @@ export function refreshScreener() {
  * polling: fast while history syncs, once a minute during market hours.
  */
 export function useScreenerPolling(universe: string) {
+  // The Time Machine's day: a new day is a new feed.
+  const asOf = useAsOfKey();
   const key = useSyncExternalStore(
     (listener) => {
       refreshListeners.add(listener);
@@ -256,7 +266,8 @@ export function useScreenerPolling(universe: string) {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    if (feed.universe !== universe) setFeed({ universe, data: null, ideas: new Map(), order: [], track: null });
+    const feedKey = `${universe}@${asOf}`;
+    if (feed.universe !== feedKey) setFeed({ universe: feedKey, data: null, ideas: new Map(), order: [], track: null, ...(asOf ? { liveRecord: null } : {}) });
     let trackFor = "";
 
     // The replay only changes with a new EOD session; fetch it once per universe + session.
@@ -272,7 +283,8 @@ export function useScreenerPolling(universe: string) {
       }
     };
 
-    void loadResultsCalendar();
+    void loadResultsCalendar(resultsFor !== asOf);
+    resultsFor = asOf;
     const run = async () => {
       setFeed({ loading: true });
       try {
@@ -288,7 +300,7 @@ export function useScreenerPolling(universe: string) {
             ? SYNC_POLL_MS
             : json.status === "error"
               ? ERROR_RETRY_MS
-              : isMarketOpen()
+              : isMarketOpen() && !asOf
                 ? LIVE_REFRESH_MS
                 : null;
         if (next) timer = setTimeout(run, next);
@@ -306,8 +318,11 @@ export function useScreenerPolling(universe: string) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [universe, key]);
+  }, [universe, key, asOf]);
 }
+
+/** The day the results calendar was last loaded for ("" live), so a new Time Machine day reloads it. */
+let resultsFor: string | null = null;
 
 // ------------------------------------------------------------------ display helpers
 
@@ -325,7 +340,7 @@ export function screenById(id: string): ScreenDef | undefined {
 export function resultsInDays(symbol: string, results: ResultsFeed | null): number | null {
   const event = results?.bySymbol.get(symbol);
   if (!event) return null;
-  const today = istParts().day;
+  const today = feedToday();
   return Math.round((event.date - today) / DAY_MS);
 }
 

@@ -6,11 +6,12 @@ import type { EvidenceReplayResponse, EvidenceResponse } from "@/contracts/api";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { lotHistoryPart, pointInTimeLots } from "@/core/backtest/lots";
 import { scanSignals } from "@/core/backtest/signals";
-import { WARMUP_DAYS, clampToArchive, isLongRange, storeStart } from "@/core/backtest/phases";
+import { STORE_DAYS, WARMUP_DAYS, clampToArchive, isLongRange, storeStart } from "@/core/backtest/phases";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { marketStates, replaySignals, roundTripPct, summarizeEvidence, type EvidenceTable } from "@/core/plan/evidence";
 import { spliceBenchmark } from "@/core/market/longHistory";
 import { DAY_MS, istParts } from "@/core/market/session";
+import { dayLabel, evidenceWindowStart } from "@/core/reference/timeMachine";
 import { hashDataset, makeStamp, withDataPart, type RunStamp } from "@/core/repro/stamp";
 import type { DailyBar } from "@/core/types";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
@@ -23,6 +24,7 @@ import { BENCHMARK } from "@/server/services/screener";
 import { hubEndOfDay } from "@/server/providers/hub";
 import { log } from "@/server/log";
 import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
+import { pastBars, type PastDay } from "./timeMachine";
 
 // Strategy evidence for the daily plan (rules in src/core/plan/evidence.ts):
 // every screen replayed over the F&O list's daily history — the five years the
@@ -47,6 +49,14 @@ import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./ru
 // through the point-in-time engine (asOf, src/server/providers/asOf.ts): a
 // signal counts only if the stock had futures that session, and its costs use
 // that session's lot where known (src/core/backtest/lots.ts).
+//
+// The Time Machine (issue #31, `strategyEvidence(null, past)`) computes the
+// table a past day's plan would have had: the same five years, ending that
+// day, on bars up to its close only — so every trade counted had closed by
+// then (a signal needs its whole holding period inside the bars) — with the
+// F&O lists and lots as known by then (the day's own list and lots stand in
+// where an earlier session's aren't known, never today's). Kept in memory per
+// day; the browser polls "computing" meanwhile, as for the plan's own table.
 //
 // The table carries a run stamp (src/core/repro/stamp.ts): the hash of the bars,
 // F&O lists and lot sizes it read, the commit and the parameters, and the hash
@@ -94,6 +104,8 @@ interface KeyInfo {
    * warnings. Absent for the plan's default (the store's 5 years).
    */
   range?: { from: number; to: number; barsOf: (symbol: string) => DailyBar[]; notes: string[] };
+  /** Time Machine: the past day the table is as of (stand-ins are that day's, never today's). */
+  asOf?: number;
 }
 
 const globalForEvidence = globalThis as unknown as { planEvidence?: State };
@@ -110,11 +122,16 @@ function lastFinalDay(now = Date.now()): number {
 /** A symbol's stored bars up to `lastDay`. */
 const barsThrough = (symbol: string, lastDay: number) => screenerStore.getBars(symbol).filter((bar) => bar.t <= lastDay);
 
-/** Today's F&O list and the list of each session in `window`, as asOf knows them. */
-async function membershipOver(window: { from: number; to: number }) {
+/**
+ * Today's F&O list and the list of each session in `window`, as asOf knows them.
+ * `asOf` (Time Machine): that day's list takes today's place as the stand-in for
+ * sessions with no list, so nothing from after the day is read.
+ */
+async function membershipOver(window: { from: number; to: number }, asOf?: number) {
   const timeline = await asOfSpan(window.from, window.to, { results: false, factors: false });
-  const today = orElse(timeline.at(timeline.history.today).universe("fno"), []).map((member) => member.symbol);
-  return { today, byDay: timeline.history.fo.byDay, listOn: listOnOf(timeline) };
+  const stand = asOf === undefined ? timeline.at(timeline.history.today).universe("fno") : timeline.at(asOf).universe("fno");
+  const today = orElse(stand, []).map((member) => member.symbol);
+  return { today, byDay: timeline.history.fo.byDay, listOn: listOnOf(timeline), standInKnown: stand.known };
 }
 
 const listOnOf = (timeline: ReferenceTimeline) => (day: number) => {
@@ -199,9 +216,10 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
     },
   });
   // Each session's lot (in the bars' shares) where known, else today's; through asOf.
+  // Time Machine: else that day's lot (in the bars' shares), else ~₹5 lakh of shares — never today's.
   const timeline = await asOfSpan(info.window.from, info.window.to, { symbols, results: false });
-  const lots = orElse(timeline.at(timeline.history.today).lots, {});
-  const pitLots = pointInTimeLots(timeline, lots);
+  const lots = info.asOf === undefined ? orElse(timeline.at(timeline.history.today).lots, {}) : lotsInBarShares(timeline.at(info.asOf), symbols);
+  const pitLots = pointInTimeLots(timeline, lots, info.asOf === undefined ? undefined : `${dayLabel(info.asOf)}'s lot sizes`);
   const states = marketStates(benchmark);
   // A chosen period counts its own sessions only: what comes before is warm-up.
   const first = Math.max(scan.firstSignalDate ?? 0, info.range?.from ?? 0);
@@ -210,7 +228,7 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   if (info.range && dates.length < 2) throw new Error("The period has fewer than two sessions with enough history to replay.");
   const table = summarizeEvidence(trades, { dates, symbols: scan.symbols, lastState: states.get(benchmark.at(-1)!.t) ?? null });
   const noHistory = pit ? pit.symbols.filter((symbol) => !info.today.includes(symbol) && !(bars.get(symbol)?.length ?? 0)) : [];
-  const lotNote = Object.keys(lots).length ? pitLots.note(dates) : "Lot sizes couldn't be loaded: costs assume ~₹5 lakh of shares.";
+  const lotNote = Object.keys(lots).length ? pitLots.note(dates) : info.asOf !== undefined ? `Lot sizes for ${dayLabel(info.asOf)} aren't known (NSE's F&O files carry them from 8 Jul 2024): costs assume ~₹5 lakh of shares where a session's own lot isn't known.` : "Lot sizes couldn't be loaded: costs assume ~₹5 lakh of shares.";
   const note = [`${universeNote({ sessions: dates, byDay: info.byDay, listOn: info.listOn, noHistory })} ${lotNote}`, ...(info.range?.notes ?? [])].join(" ");
   const hashed = await hashDataset({
     bars,
@@ -224,7 +242,7 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   });
   const data = withDataPart(hashed, "lotHistory", Object.keys(lots).length ? lotHistoryPart(timeline.history, symbols) : null);
   const computedAt = Date.now();
-  const stamp = makeStamp({ kind: "evidence", code: codeVersion(ENGINE), data, params: { universe: "fno", costPreset: COST_PRESET, ...(info.range ? { from: info.range.from, to: info.range.to } : {}) }, result: { table, note }, createdAt: computedAt });
+  const stamp = makeStamp({ kind: "evidence", code: codeVersion(ENGINE), data, params: { universe: "fno", costPreset: COST_PRESET, ...(info.range ? { from: info.range.from, to: info.range.to } : {}), ...(info.asOf !== undefined ? { asOf: info.asOf } : {}) }, result: { table, note }, createdAt: computedAt });
   const ms = computedAt - started;
   log.info("Strategy evidence computed", { stocks: scan.symbols, sessions: scan.dates.length, trades: trades.length, ms });
   return { key: info.key, table, computedAt, ms, note, stamp };
@@ -354,7 +372,11 @@ function rangeEvidence(range: EvidenceRange): EvidenceResponse {
  * with its progress. Without a range: the plan's table over the store's 5
  * years. With one: that period's (a market phase, or any dates back to 1994).
  */
-export async function strategyEvidence(range: EvidenceRange | null = null): Promise<EvidenceResponse> {
+export async function strategyEvidence(range: EvidenceRange | null = null, past: PastDay | null = null): Promise<EvidenceResponse> {
+  if (past) {
+    if (range && (range.from !== null || range.to !== null)) return { status: "error", error: "A chosen period's evidence isn't available in the Time Machine: it could reach past the day shown." };
+    return pastEvidence(past.day);
+  }
   if (range && (range.from !== null || range.to !== null)) return rangeEvidence(range);
   const info = await keyInfo();
   if (state.current?.key !== info.key) {
@@ -398,11 +420,91 @@ export async function replayEvidence(body: unknown): Promise<EvidenceReplayRespo
   try {
     const from = Number(stamp.params.from);
     const to = Number(stamp.params.to);
-    // A chosen period's table replays that period; the plan's, the store's 5 years.
-    const info = Number.isFinite(from) && Number.isFinite(to) ? await rangeInfo({ from, to }, pinOf(stamp)) : await pinnedInfo(pinOf(stamp));
+    const asOf = Number(stamp.params.asOf);
+    // A past day's table (Time Machine) replays that day; a chosen period's, that period; the plan's, the store's 5 years.
+    const info = Number.isFinite(asOf) ? await pastInfo(asOf, pinOf(stamp)) : Number.isFinite(from) && Number.isFinite(to) ? await rangeInfo({ from, to }, pinOf(stamp)) : await pinnedInfo(pinOf(stamp));
     const result = await compute(info, { done: 0, total: 0 });
     return { status: "ready", table: result.table, universeNote: result.note, ms: result.ms, stamp: result.stamp };
   } catch (error) {
     return { status: "error", error: (error as Error).message };
   }
+}
+
+// ------------------------------------------------------------------ a past day (Time Machine)
+
+/** Past days' tables kept in memory (most recently asked last). */
+const MAX_PAST_DAYS = 6;
+const globalForPast = globalThis as unknown as { planEvidencePast?: Map<number, RangeState> };
+const pastTables = (globalForPast.planEvidencePast ??= new Map());
+
+/** A day's lots in the bars' (today-adjusted) shares, for the stocks it knows them for; {} when that day's lots aren't known. */
+function lotsInBarShares(snapshot: ReturnType<ReferenceTimeline["at"]>, symbols: readonly string[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const symbol of symbols) {
+    const lot = snapshot.lotInTodayShares(symbol);
+    if (lot.known) out[symbol] = lot.value;
+  }
+  return out;
+}
+
+/**
+ * What a past day's table is computed from: the five years ending that day
+ * (and the features' warm-up before them), every stock that was on an F&O
+ * list in that time, its bars up to the day's close read from the hub's long
+ * history, and NIFTY (its equal-weight stand-in before 2012).
+ */
+async function pastInfo(day: number, pin: ReplayPin | null): Promise<KeyInfo> {
+  const from = evidenceWindowStart(day, STORE_DAYS);
+  const readFrom = clampToArchive(from - WARMUP_DAYS * DAY_MS);
+  const window = pin?.membership ?? { from: readFrom, to: day };
+  const { today: dayList, byDay, listOn, standInKnown } = await membershipOver(window, day);
+  let symbols = byDay.size ? pointInTimeUniverse({ byDay, today: dayList, listOn }).symbols : [...dayList].sort();
+  if (pin) {
+    const allowed = new Set(pin.symbols);
+    symbols = symbols.filter((symbol) => allowed.has(symbol));
+  }
+  if (!symbols.length) throw new Error(`No F&O list is known for ${dayLabel(day)} or the five years before it.`);
+  const set = await pastBars(day, [...symbols, BENCHMARK, BENCHMARK_STAND_IN], readFrom).promise;
+  const benchmark = spliceBenchmark(set.bars.get(BENCHMARK) ?? [], set.bars.get(BENCHMARK_STAND_IN) ?? []);
+  const notes = [...set.notes];
+  if (benchmark.standInUntil !== null) notes.push(`NIFTY's history up to ${dayLabel(benchmark.standInUntil)} isn't in NSE's index file: the market state uses the hub's equal-weight NIFTY 50 basket there (built from today's members).`);
+  if (!standInKnown) notes.push(`The F&O list of ${dayLabel(day)} isn't known, so sessions without a list of their own have none to stand in.`);
+  const barsOf = (symbol: string) => (symbol === BENCHMARK ? benchmark.bars : (set.bars.get(symbol) ?? []));
+  return { key: `asof:${day}`, symbols, byDay, listOn, today: dayList, lastDay: day, window, range: { from, to: day, barsOf, notes }, asOf: day };
+}
+
+/** A past day's table: computed in the background on first ask, kept in memory per day. */
+function pastEvidence(day: number): EvidenceResponse {
+  let entry = pastTables.get(day);
+  const failedLongAgo = entry?.error && Date.now() - entry.error.at >= RETRY_AFTER_ERROR_MS;
+  if (!entry || (failedLongAgo && !entry.pending)) {
+    const fresh: RangeState = { current: null, pending: { startedAt: Date.now(), done: 0, total: 0 }, error: null };
+    entry = fresh;
+    pastTables.set(day, fresh);
+    while (pastTables.size > MAX_PAST_DAYS) pastTables.delete(pastTables.keys().next().value!);
+    void pastInfo(day, null)
+      .then((info) => compute(info, fresh.pending!))
+      .then((result) => {
+        fresh.current = result;
+      })
+      .catch((error: Error) => {
+        log.error("Strategy evidence for a past day failed", { error, day: new Date(day).toISOString().slice(0, 10) });
+        fresh.error = { message: error.message, at: Date.now() };
+      })
+      .finally(() => {
+        fresh.pending = null;
+      });
+  } else {
+    pastTables.delete(day);
+    pastTables.set(day, entry);
+  }
+  if (entry.error && !entry.current) return { status: "error", error: entry.error.message };
+  if (!entry.current) {
+    const { startedAt, done, total } = entry.pending ?? { startedAt: Date.now(), done: 0, total: 0 };
+    return { status: "computing", startedAt, progress: { done, total } };
+  }
+  const preset = COST_PRESETS[COST_PRESET];
+  const current = entry.current;
+  // No live record: it is what the BTST setups did after the day too.
+  return { status: "ready", table: current.table, computedAt: current.computedAt, ms: current.ms, updating: false, universeNote: current.note, costs: { preset: COST_PRESET, label: preset.label, roundTripPct: roundTripPct(preset.model) }, live: null, stamp: current.stamp, asOf: day };
 }

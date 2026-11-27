@@ -9,6 +9,8 @@ import type { BaseInterval } from "@/server/data/types";
 import { END_OF_DAY_INTRADAY } from "@/server/data/sources/hub";
 import { hubEndOfDayNow } from "@/server/providers/hub";
 import { corporateActionMarkers } from "@/server/services/corporateActions";
+import { barsThrough, dayLabel } from "@/core/reference/timeMachine";
+import { scalesOn, type PastDay } from "@/server/services/timeMachine";
 
 // Candle history for a chart from the Market Data Hub (src/server/data). With
 // no hub configured, or the hub unreachable, the chart gets labelled sample
@@ -19,10 +21,19 @@ import { corporateActionMarkers } from "@/server/services/corporateActions";
 // Hub prices are adjusted for splits and bonuses (DEFAULT_ADJUST,
 // market-data-hub#20); daily and longer charts also get markers at the
 // ex-dates in range, so an adjusted gap-free series still shows where one was.
+//
+// The Time Machine (`past`, issue #31): the chart ends at that day's close —
+// no later bar, daily or intraday — and its prices are adjusted only for the
+// splits and bonuses with an ex-date on or before it (asOf's price scale), so
+// a stock shows the price it traded at then. Indicators run on these bars only.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The hub keeps a year of intraday candles (30 days of 1-minute ones). */
+const INTRADAY_DAYS = 365;
+/** Index symbols: never adjusted, so no split/bonus note for them. */
+const INDEX = /^(NIFTY|BANKNIFTY|FINNIFTY|MIDCPNIFTY|INDIAVIX|SENSEX)/;
 
-export async function getChart(email: string, params: { symbol?: string | null; interval?: string | null; range?: string | null; from?: string | null; to?: string | null }): Promise<ChartResponse> {
+export async function getChart(email: string, params: { symbol?: string | null; interval?: string | null; range?: string | null; from?: string | null; to?: string | null }, past: PastDay | null = null): Promise<ChartResponse> {
   const symbol = String(params.symbol ?? "TCS").trim().toUpperCase();
   const interval: ChartInterval = isChartInterval(params.interval ?? "") ? (params.interval as ChartInterval) : "15m";
   const range = clampRangeForInterval(interval, isChartRange(params.range ?? "") ? (params.range as ChartRange) : "5d");
@@ -33,7 +44,13 @@ export async function getChart(email: string, params: { symbol?: string | null; 
   const base: BaseInterval = aggregate ? "1d" : (interval as BaseInterval);
   // Older bars for a daily-based chart scrolled to its left edge: from..to (epoch ms), back to NSE's first session.
   const older = base === "1d" ? olderWindow(params.from, params.to) : null;
-  const from = older?.from ?? Date.now() - CHART_RANGE_DAYS[range] * DAY_MS;
+  // A past day's chart ends at its close and reaches back its range from there.
+  const end = past ? past.day : Date.now();
+  const from = older?.from ?? end - CHART_RANGE_DAYS[range] * DAY_MS;
+  if (past && base !== "1d" && Date.now() - past.day > INTRADAY_DAYS * DAY_MS) {
+    const error = `The Market Data Hub keeps a year of intraday candles: ${dayLabel(past.day)} is before them. Pick D, W or M.`;
+    return { symbol, interval, range, source: "broker", sourceId: null, sourceReason: null, error, priceSeries: [], asOf: { day: past.day, notes: [], priceScale: null } };
+  }
 
   const engine = dataEngine();
   const hubs = engine.sources.filter((source) => source.kind === "broker" && source.history);
@@ -53,13 +70,17 @@ export async function getChart(email: string, params: { symbol?: string | null; 
     answer = await engine.history({ symbol, interval: base, from, email });
     answer = { ...answer, skipped: [...skipped, ...answer.skipped] };
   }
-  const all = aggregate ? aggregateDaily(answer.candles, aggregate) : answer.candles;
+  // Time Machine: nothing after the day's close, re-expressed as adjusted then (before weekly/monthly bars are built).
+  const through = past ? await asOfCandles(symbol, answer.candles, past) : null;
+  const daily = through?.candles ?? answer.candles;
+  const all = aggregate ? aggregateDaily(daily, aggregate) : daily;
   // An older chunk is only the bars before what the chart already has.
   const candles = older ? all.filter((candle) => Date.parse(candle.date) < older.to) : all;
   const first = engine.sources.find((source) => source.history?.supports(base));
   const fromHub = answer.source?.id === "hub";
   const markers = fromHub && base === "1d" ? await corporateActionMarkers(symbol, Math.min(from, candles[0] ? Date.parse(candles[0].date) : from)) : [];
-  const corporateActions = older ? markers.filter((marker) => marker.time < older.to) : markers;
+  // A past day's chart marks only the splits and bonuses that had happened by then.
+  const corporateActions = markers.filter((marker) => (!older || marker.time < older.to) && (!past || marker.time <= past.day));
   return {
     symbol,
     interval,
@@ -80,5 +101,17 @@ export async function getChart(email: string, params: { symbol?: string | null; 
     corporateActions,
     // Daily-based hub charts: older bars may exist when these reach back to (about) where they were asked from.
     hasOlder: fromHub && base === "1d" && hasOlderBars(all, from),
+    ...(through ? { asOf: through.info } : {}),
   };
+}
+
+/** Candles up to a past day's close, with prices adjusted only for the splits and bonuses by then. */
+async function asOfCandles(symbol: string, candles: ChartResponse["priceSeries"], past: PastDay) {
+  const kept = barsThrough(candles, past.day, (candle) => Date.parse(candle.date));
+  const index = INDEX.test(symbol);
+  const { scaleOf, note } = index ? { scaleOf: () => 1, note: null } : await scalesOn(past.day, [symbol]);
+  const scale = scaleOf(symbol);
+  const scaled = scale === 1 ? kept : kept.map((candle) => ({ ...candle, open: candle.open * scale, high: candle.high * scale, low: candle.low * scale, close: candle.close * scale, volume: candle.volume / scale }));
+  const notes = [past.note, note].filter((line): line is string => Boolean(line));
+  return { candles: scaled, info: { day: past.day, notes, priceScale: note ? null : scale } };
 }

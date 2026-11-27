@@ -34,6 +34,7 @@ import type {
   ResultsResponse,
   ScreenerResponse,
   SymbolsResponse,
+  TimeMachineResponse,
   TrackResult,
   TradeCloseRequest,
   TradeCreateRequest,
@@ -41,6 +42,7 @@ import type {
   TradesResponse,
   TradeUpdateRequest,
 } from "@/contracts/api";
+import { asOfParam } from "@/client/timeMachine";
 
 export class ApiError extends Error {
   constructor(
@@ -96,19 +98,32 @@ async function postStatusJson<T extends { status: string }>(path: string, body: 
 
 const csv = (symbols: string[]) => symbols.join(",");
 
+/**
+ * The Time Machine's day (src/client/timeMachine.ts) for endpoints that answer
+ * as of a past day: added to every one of them here, so no caller can forget it.
+ */
+const asOf = () => asOfParam();
+const withAsOf = (params: Record<string, string>): Record<string, string> => {
+  const day = asOf();
+  return day ? { ...params, asOf: day } : params;
+};
+
 export const api = {
   /** Candles for a chart; `older` asks daily-based intervals for the bars from `from` up to (not including) `to`, epoch ms. */
   chart: (symbol: string, interval: string, range: string, signal?: AbortSignal, older?: { from: number; to: number }) =>
-    getJson<ChartResponse>("/api/chart", { symbol, interval, range, from: older?.from, to: older?.to }, signal),
+    getJson<ChartResponse>("/api/chart", { symbol, interval, range, from: older?.from, to: older?.to, asOf: asOf() }, signal),
 
   /** `fresh`: a just-now price (costs an API call); otherwise a recent cached one is fine. */
-  quotes: (symbols: string[], fresh = false) => getJson<QuotesResponse>("/api/quotes", { symbols: csv(symbols), fresh: fresh ? 1 : undefined }),
+  quotes: (symbols: string[], fresh = false) => getJson<QuotesResponse>("/api/quotes", { symbols: csv(symbols), fresh: fresh ? 1 : undefined, asOf: asOf() }),
 
   symbols: (query: string, signal?: AbortSignal) => getJson<SymbolsResponse>("/api/symbols", { q: query }, signal),
 
-  screener: (universe: string) => getStatusJson<ScreenerResponse>("/api/screener", { universe }),
+  screener: (universe: string) => getStatusJson<ScreenerResponse>("/api/screener", withAsOf({ universe })),
 
-  track: (universe: string) => getStatusJson<TrackResult>("/api/screener/track", { universe }),
+  track: (universe: string) => getStatusJson<TrackResult>("/api/screener/track", withAsOf({ universe })),
+
+  /** The Time Machine: which session `asOf` (YYYY-MM-DD) means and what was known that day. */
+  timeMachine: (day: string) => getJson<TimeMachineResponse>("/api/time-machine", { asOf: day }),
 
   /** What the BTST setups did live (recorded at 3:10–3:25 PM, settled at the next open). */
   liveRecord: () => getJson<LiveRecordResponse>("/api/screener/live-record"),
@@ -122,7 +137,7 @@ export const api = {
 
   /** Which screens have an edge in which market state (computed in the background on the server: poll while "computing"). */
   evidence: (period?: { from: number; to: number | null }) =>
-    getStatusJson<EvidenceResponse>("/api/plan/evidence", period ? { from: String(period.from), ...(period.to === null ? {} : { to: String(period.to) }) } : {}),
+    getStatusJson<EvidenceResponse>("/api/plan/evidence", withAsOf(period ? { from: String(period.from), ...(period.to === null ? {} : { to: String(period.to) }) } : {})),
 
   /** "Re-run this": compute a stamped evidence table again from scratch (~10 s). */
   replayEvidence: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<EvidenceReplayResponse>("/api/plan/evidence/replay", body, signal),
@@ -151,11 +166,11 @@ export const api = {
 
   analyze: (symbols: string[]) => getJson<AnalyzeResponse>("/api/analyze", { symbols: csv(symbols) }),
 
-  results: () => getJson<ResultsResponse>("/api/results"),
+  results: () => getJson<ResultsResponse>("/api/results", { asOf: asOf() }),
 
   highLow: (after: number) => getJson<HighLowResponse>("/api/highlow", { after }),
 
-  lots: () => getJson<LotsResponse>("/api/lots"),
+  lots: () => getJson<LotsResponse>("/api/lots", { asOf: asOf() }),
 
   /** A stock's listed futures contracts (near and next month, as hub tickers) and lot size. */
   futures: (symbol: string) => getJson<FuturesResponse>("/api/futures", { symbol }),
