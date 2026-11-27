@@ -10,7 +10,7 @@ import { END_OF_DAY_INTRADAY } from "@/server/data/sources/hub";
 import { hubEndOfDayNow } from "@/server/providers/hub";
 import { corporateActionMarkers } from "@/server/services/corporateActions";
 import { barsThrough, dayLabel } from "@/core/reference/timeMachine";
-import { scalesOn, type PastDay } from "@/server/services/timeMachine";
+import { dailyCandlesThrough, scalesOn, type PastDay } from "@/server/services/timeMachine";
 
 // Candle history for a chart from the Market Data Hub (src/server/data). With
 // no hub configured, or the hub unreachable, the chart gets labelled sample
@@ -60,7 +60,10 @@ export async function getChart(email: string, params: { symbol?: string | null; 
     const error = endOfDay && base !== "1d" ? `${END_OF_DAY_INTRADAY} Pick D, W or M.` : `The Market Data Hub doesn't serve ${interval} candles.`;
     return { symbol, interval, range, source: "broker", sourceId: null, sourceReason: null, error, priceSeries: [] };
   }
-  let answer = await engine.history({ symbol, interval: base, from, email, ...(ready ? { kinds: ["broker"] as const } : {}) });
+  // A past day's daily chart is read up to that day (as the Time Machine's screener and quotes are), not to today:
+  // the hub lines up its NSE archive with the broker's prices only when a request reaches into the broker's window.
+  const pastDaily = past && ready && base === "1d" && hubs[0] ? { candles: await dailyCandlesThrough(past.day, symbol, from), source: { id: hubs[0].id, label: hubs[0].label, kind: hubs[0].kind }, skipped: [] as string[] } : null;
+  let answer = pastDaily ?? (await engine.history({ symbol, interval: base, from, email, ...(ready ? { kinds: ["broker"] as const } : {}) }));
   if (!answer.source && ready) {
     // The hub failed. Unreachable (now resting): fall back to labelled sample data. Reachable: say what went wrong.
     if (await hubReady()) {

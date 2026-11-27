@@ -2323,3 +2323,19 @@ button.tx-api-meter:hover { background: var(--surface-2); color: var(--text); }
 .tx-regime.is-caution i { background: var(--warn); }
 .tx-regime.is-risk-off { color: var(--neg); }
 .tx-regime.is-risk-off i { background: var(--neg); }
+
+/* ---------- Time Machine (src/terminal/TimeMachine.tsx, issue #31) ---------- */
+.tx-status-past { color: var(--warn); }
+.tx-status-past .tx-status-dot { background: var(--warn); }
+.tx-tm-picker { display: flex; align-items: center; gap: 4px; margin-right: var(--sp-2, 8px); }
+.tx-tm-label { font-size: var(--fs-sm, 12px); color: var(--text-subtle); }
+.tx-tm-date { height: 26px; padding: 0 6px; font-size: var(--fs-sm, 12px); color-scheme: dark; }
+.tx-tm-picker.is-on .tx-tm-date { border-color: var(--warn-border); background: var(--warn-soft); }
+.tx-tm-banner { background: var(--warn-soft); border-bottom-color: var(--warn-border); }
+.tx-tm-facts { flex-basis: 100%; margin: 0; padding: 0 0 0 18px; display: grid; gap: 2px; }
+.tx-tm-facts .is-unknown { color: var(--text-subtle); }
+.tx-tm-off { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3, 12px); padding: var(--sp-4, 16px); color: var(--text-muted, var(--text-subtle)); }
+.tx-tm-off p { margin: 0; }
+.tx-tm-note { padding: var(--sp-3, 12px); color: var(--text-subtle); font-size: var(--fs-sm, 12px); }
+.tx-tm-chart-note { position: absolute; bottom: 38px; left: 10px; z-index: 2; max-width: 60%; height: 20px; line-height: 20px; padding: 0 var(--sp-2); border: 1px solid var(--warn-border); border-radius: var(--r-sm); background: rgba(15, 18, 22, 0.85); color: var(--text-muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 900px) { .tx-tm-label { display: none; } }

@@ -162,6 +162,24 @@ Lots and prices meet in `lotInTodayShares`: the daily bars are adjusted to today
 
 **The lint rule.** `src/core/screener`, `src/core/plan`, `src/core/backtest` and the services `screener`, `evidence`, `backtest`, `btstRecord`, `analyze` and `trades` may not import `providers/reference`, `providers/referenceHistory`, `foMembership`, `getUniverse`, `hubClient` or `HubClient` (ESLint `no-restricted-imports`, matched by regex so relative paths are caught too; `src/asOfOnly.test.ts` proves it). Other features (the results panel, the lots endpoint, the high/low sweep) may still read today's data directly.
 
+### The Time Machine (`?asOf=YYYY-MM-DD`, issue #31)
+
+The whole terminal as it was at a past day's close, with nothing from after it. The day lives in the URL (`/?asOf=2020-03-23`; the top bar's **As of** picker sets it) and in `src/client/timeMachine.ts`; `src/client/api.ts` adds it to every endpoint that answers as of a day, so no caller can forget it. The server decides what was known: `services/timeMachine.ts` (`pastDay`) snaps the day to the last session on or before it from the hub's calendar (`/v1/calendar`, through `asOf.tradingDays`; without it weekends are skipped and the answer says holidays weren't checked). Today or later is the live terminal.
+
+| What | As of day D | How it can't see later |
+|---|---|---|
+| Charts (`/api/chart`) | daily bars read from the hub up to D (`dailyCandlesThrough`), intraday ones up to 15:30 IST that day (the hub keeps a year of them; older days switch charts to D/W/M); weekly/monthly built from those; split/bonus markers up to D | `barsThrough` cuts every bar after D's close; no live bar: the browser's stream is closed and `liveHub.getLatest` answers nothing |
+| Prices | adjusted only for the splits and bonuses with an ex-date ≤ D: today's adjusted price × `asOf.priceScales(D)` (RELIANCE before its 2017 bonus shows the price it traded at) | the factors after D are undone; a stock whose factors the hub can't give is said in the notes |
+| Watchlist (`/api/quotes`) | D's close and its change on the session before | read from the hub up to D; marked `delayed`, so no alert fires |
+| Screener, track record | `runScreener(…, past)`: bars up to D (the store when it covers the 640-day look-back, else read from the hub for that day, `pastBars`), that day's F&O list, ban list and sector indices (`asOf(D)`); no live bar, OI tag, first-seen times or BTST record | index lists and industries are today's snapshots and the notes say so (survivorship); the track record counts only signals whose holding period ended by D |
+| Plan evidence (`/api/plan/evidence`) | the same five years the live plan uses, ending D, on bars up to D adjusted as of D; F&O list and lots of each session, with D's own as the stand-in (never today's); kept in memory per day | a signal needs its whole holding period inside the bars (`replaySignals`), so only trades closed by D count (`evidenceAsOf.test.ts`); market state from NIFTY up to D; no live record |
+| Lots (`/api/lots`), results (`/api/results`) | lots as traded on D (NSE's files have them from 8 Jul 2024; before, ≈ ₹5 lakh at D's close stands in, said); results dated D−7…D | upcoming dates aren't stored with when they were announced, so none are shown |
+| Live-only | Day High/Low, Compare, Backtest and Lab panels, price alerts, the order ticket, the BTST alerts, "I took it", the journal and Lab receipts are off or labelled | — |
+
+`src/server/services/timeMachine.test.ts` is the guard: it computes everything for a past day from a fake hub twice, with two different futures after the day (rewritten bars, a stock joining and one leaving F&O, a bonus that rescales the hub's earlier bars, a ban, a lot change, a results date), and with a hub that ignores `to` — the answers must be identical.
+
+Measured on the live hub (Apple-silicon laptop): 23 Mar 2020's screener (143 F&O stocks, bars read from the hub) ~0.7–1.3 s the first time, ~40 ms after; its evidence ~8 s in the background (bars ~1.3 s, replay ~6–7 s over 234 stocks × 1,528 sessions).
+
 ### Broker budget
 
 The hub enforces the broker's limits (Fyers' Standard plan: 5 calls a second, 50 a minute, 5,000 a day; Prime is 100× the day) for every app connected to it. Tradex reads the hub's counters from `/v1/status` and paces its own background work from them:

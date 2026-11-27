@@ -24,6 +24,7 @@ import { DrawingProperties } from "./DrawingProperties";
 import { CHART_INTERVAL_CONFIG, INTERVAL_META } from "@/core/market/intervals";
 import { olderRequest } from "@/core/market/olderBars";
 import { applyTick, fetchHistory, liveHub } from "@/client/marketData";
+import { useAsOfKey } from "@/client/timeMachine";
 import { Icons } from "./icons";
 import { useTerminalUI } from "./ui";
 import { IndicatorSettings } from "./IndicatorSettings";
@@ -48,6 +49,8 @@ interface LoadStatus {
   error: string | null;
   source: "broker" | "sample" | null;
   reason: string | null;
+  /** Time Machine: what differs from the live chart (prices not adjusted as then…). */
+  asOfNotes?: string[];
 }
 
 export function ChartCell({ index, active, multi }: { index: number; active: boolean; multi: boolean }) {
@@ -62,6 +65,8 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
   const idea = useIdea(cell.symbol);
   const focus = useScreenerFeed((feed) => feed.focus);
   const ui = useTerminalUI();
+  // The Time Machine's day: the chart reloads (ending at that day's close) when it changes.
+  const asOfKey = useAsOfKey();
 
   const hostRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<ChartEngine | null>(null);
@@ -303,7 +308,7 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
         actions = result.corporateActions;
         hasOlder = result.hasOlder;
         loaded = true;
-        setStatus({ loading: false, error: null, source: result.source, reason: result.reason });
+        setStatus({ loading: false, error: null, source: result.source, reason: result.reason, asOfNotes: result.asOf?.notes });
         if (result.source === "broker") {
           const latest = liveHub.getLatest(symbol);
           if (latest) onTick(latest);
@@ -323,7 +328,7 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
       unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cell.symbol, cell.interval]);
+  }, [cell.symbol, cell.interval, asOfKey]);
 
   const editingConfig = editing ? cell.indicators.find((indicator) => indicator.id === editing) : null;
   const selectedDrawing = selection ? drawings.find((drawing) => drawing.id === selection.id) : undefined;
@@ -495,6 +500,11 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
       {status.error && (
         <div className="tx-cell-overlay">
           <div className="tx-cell-error">{status.error}</div>
+        </div>
+      )}
+      {Boolean(status.asOfNotes?.length) && !status.loading && (
+        <div className="tx-tm-chart-note" title={status.asOfNotes!.join("\n")}>
+          {status.asOfNotes![0]}
         </div>
       )}
       {status.source === "sample" && !status.loading && (

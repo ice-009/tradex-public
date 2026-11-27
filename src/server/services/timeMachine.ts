@@ -179,6 +179,15 @@ export function pastBars(day: number, symbols: readonly string[], from: number):
   return { ready: state.value, error: state.error, progress: { done: state.done, total: state.total }, promise: state.promise };
 }
 
+/**
+ * One symbol's daily candles from `from` to a past day's close, read from the hub for that
+ * request (not kept: a chart asks once per symbol and range), in the chart's candle shape.
+ */
+export async function dailyCandlesThrough(day: number, symbol: string, from: number): Promise<Array<{ date: string; open: number; high: number; low: number; close: number; volume: number }>> {
+  const set = await new LongBars({ batch: longBatch }).load([symbol], Math.max(ARCHIVE_START, from), day);
+  return clip(set.bars.get(symbol) ?? [], day).map((bar) => ({ date: new Date(bar.t).toISOString(), open: bar.o, high: bar.h, low: bar.l, close: bar.c, volume: bar.v }));
+}
+
 /** Bars re-expressed as adjusted on their last day (`scale` = asOf's price scale): prices × scale, volumes ÷ it. */
 export function scaleBars(bars: readonly DailyBar[], scale: number): DailyBar[] {
   if (scale === 1) return bars as DailyBar[];
@@ -227,26 +236,29 @@ export async function quotesAsOf(symbols: string[], day: number): Promise<Quotes
   return { quotes, asOf: { day, notes: note ? [note] : [] } };
 }
 
+/** The stand-in position when a day's lot isn't known: about ₹5 lakh of stock, as the plan's evidence assumes. */
+const STAND_IN_NOTIONAL = 500_000;
+
 /**
  * Lot sizes as traded on a past day (that day's shares, like the Time
  * Machine's prices). Before NSE's files carried them (8 Jul 2024) they aren't
- * known: today's lots, converted to that day's shares (× the later
- * split/bonus factors), stand in, and the answer says so.
+ * known: a lot of about ₹5 lakh at that day's close stands in for each stock on
+ * that day's F&O list (the evidence's assumption), and the answer says so —
+ * nothing from after the day, today's lots included, is used.
  */
 export async function lotsAsOf(day: number): Promise<LotsResponse> {
   const known = await asOf(day);
   if (known.lots.known) return { lots: { ...known.lots.value }, source: "as-of", fetchedAt: Date.now(), asOf: { day, notes: [`Lot sizes as traded on ${dayLabel(known.lots.asOf)} (${known.lots.source}).`] } };
-  const today = await asOf();
-  const current = today.lots.known ? today.lots.value : {};
-  const { scaleOf } = await scalesOn(day, Object.keys(current));
+  const list = known.universe("fno");
+  if (!list.known) return { lots: {}, source: "as-of", fetchedAt: Date.now(), asOf: { day, notes: [known.lots.reason, list.reason] } };
+  const { quotes } = await quotesAsOf(list.value.map((member) => member.symbol), day);
   const lots: Record<string, number> = {};
-  // A price that day is today's adjusted price × scale, so the same notional is today's lot ÷ scale of that day's shares.
-  for (const [symbol, lot] of Object.entries(current)) lots[symbol] = Math.max(1, Math.round(lot / scaleOf(symbol)));
+  for (const quote of quotes) if (quote.ltp > 0) lots[quote.symbol] = Math.max(1, Math.round(STAND_IN_NOTIONAL / quote.ltp));
   return {
     lots,
     source: "as-of",
     fetchedAt: Date.now(),
-    asOf: { day, notes: [`${known.lots.reason} Today's lot sizes, converted to that day's shares, stand in: position sizes are indicative.`] },
+    asOf: { day, notes: [`${known.lots.reason} Each stands in as about ₹5 lakh of stock at that day's close: position sizes are indicative.`] },
   };
 }
 

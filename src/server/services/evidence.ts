@@ -24,7 +24,7 @@ import { BENCHMARK } from "@/server/services/screener";
 import { hubEndOfDay } from "@/server/providers/hub";
 import { log } from "@/server/log";
 import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
-import { pastBars, type PastDay } from "./timeMachine";
+import { pastBars, scaleBars, scalesOn, type PastDay } from "./timeMachine";
 
 // Strategy evidence for the daily plan (rules in src/core/plan/evidence.ts):
 // every screen replayed over the F&O list's daily history — the five years the
@@ -106,6 +106,11 @@ interface KeyInfo {
   range?: { from: number; to: number; barsOf: (symbol: string) => DailyBar[]; notes: string[] };
   /** Time Machine: the past day the table is as of (stand-ins are that day's, never today's). */
   asOf?: number;
+  /**
+   * Time Machine: the bars are adjusted only for the splits and bonuses by `asOf` (a screen's price
+   * levels can't see a later bonus); a today-adjusted share is this many of the bars' shares.
+   */
+  sharesPerTodayShare?: (symbol: string) => number;
 }
 
 const globalForEvidence = globalThis as unknown as { planEvidence?: State };
@@ -218,8 +223,19 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   // Each session's lot (in the bars' shares) where known, else today's; through asOf.
   // Time Machine: else that day's lot (in the bars' shares), else ~₹5 lakh of shares — never today's.
   const timeline = await asOfSpan(info.window.from, info.window.to, { symbols, results: false });
-  const lots = info.asOf === undefined ? orElse(timeline.at(timeline.history.today).lots, {}) : lotsInBarShares(timeline.at(info.asOf), symbols);
-  const pitLots = pointInTimeLots(timeline, lots, info.asOf === undefined ? undefined : `${dayLabel(info.asOf)}'s lot sizes`);
+  const toBars = info.sharesPerTodayShare;
+  const lots = info.asOf === undefined ? orElse(timeline.at(timeline.history.today).lots, {}) : lotsInBarShares(timeline.at(info.asOf), symbols, toBars);
+  const sessionLots = pointInTimeLots(timeline, lots, info.asOf === undefined ? undefined : `${dayLabel(info.asOf)}'s lot sizes`);
+  const pitLots = !toBars
+    ? sessionLots
+    : {
+        ...sessionLots,
+        // The day's own lot is in today-adjusted shares; the stand-in is already in the bars'.
+        lotOn: (symbol: string, day: number) => {
+          const fact = timeline.at(day).lotInTodayShares(symbol);
+          return fact.known ? fact.value * toBars(symbol) : (lots[symbol] ?? null);
+        },
+      };
   const states = marketStates(benchmark);
   // A chosen period counts its own sessions only: what comes before is warm-up.
   const first = Math.max(scan.firstSignalDate ?? 0, info.range?.from ?? 0);
@@ -438,11 +454,11 @@ const globalForPast = globalThis as unknown as { planEvidencePast?: Map<number, 
 const pastTables = (globalForPast.planEvidencePast ??= new Map());
 
 /** A day's lots in the bars' (today-adjusted) shares, for the stocks it knows them for; {} when that day's lots aren't known. */
-function lotsInBarShares(snapshot: ReturnType<ReferenceTimeline["at"]>, symbols: readonly string[]): Record<string, number> {
+function lotsInBarShares(snapshot: ReturnType<ReferenceTimeline["at"]>, symbols: readonly string[], toBars: (symbol: string) => number = () => 1): Record<string, number> {
   const out: Record<string, number> = {};
   for (const symbol of symbols) {
     const lot = snapshot.lotInTodayShares(symbol);
-    if (lot.known) out[symbol] = lot.value;
+    if (lot.known) out[symbol] = lot.value * toBars(symbol);
   }
   return out;
 }
@@ -469,8 +485,11 @@ async function pastInfo(day: number, pin: ReplayPin | null): Promise<KeyInfo> {
   const notes = [...set.notes];
   if (benchmark.standInUntil !== null) notes.push(`NIFTY's history up to ${dayLabel(benchmark.standInUntil)} isn't in NSE's index file: the market state uses the hub's equal-weight NIFTY 50 basket there (built from today's members).`);
   if (!standInKnown) notes.push(`The F&O list of ${dayLabel(day)} isn't known, so sessions without a list of their own have none to stand in.`);
-  const barsOf = (symbol: string) => (symbol === BENCHMARK ? benchmark.bars : (set.bars.get(symbol) ?? []));
-  return { key: `asof:${day}`, symbols, byDay, listOn, today: dayList, lastDay: day, window, range: { from, to: day, barsOf, notes }, asOf: day };
+  // Prices as adjusted on the day: a split or bonus after it can't move a screen's price levels.
+  const { scaleOf, note } = await scalesOn(day, symbols);
+  if (note) notes.push(note);
+  const barsOf = (symbol: string) => (symbol === BENCHMARK ? benchmark.bars : scaleBars(set.bars.get(symbol) ?? [], scaleOf(symbol)));
+  return { key: `asof:${day}`, symbols, byDay, listOn, today: dayList, lastDay: day, window, range: { from, to: day, barsOf, notes }, asOf: day, sharesPerTodayShare: (symbol) => 1 / scaleOf(symbol) };
 }
 
 /** A past day's table: computed in the background on first ask, kept in memory per day. */
