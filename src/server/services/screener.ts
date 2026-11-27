@@ -11,6 +11,8 @@ import { buildFeatureSets, marketOverview, runScreens } from "@/core/screener/ru
 import { emptyFresh, freshKey, updateFresh, type FreshState } from "@/core/screener/fresh";
 import { marketRegime } from "@/core/screener/regime";
 import { sectorIndexStat, sectorSources, strengthRanks, type SectorIndexStat, type SectorSource } from "@/core/screener/sectorIndex";
+import { sectorRrg } from "@/core/sector/rrg";
+import { RS_BENCHMARK } from "@/core/sector/series";
 import { latestOiFacts } from "@/server/providers/foData";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { updateBtstRecord } from "@/server/services/btstRecord";
@@ -79,8 +81,10 @@ export async function runScreener(universeId: UniverseId, useLive: boolean, past
   const needFrom = istParts().day - (DEEP_HISTORY_DAYS - SECTOR_HISTORY_SLACK_DAYS) * DAY_MS;
   const sources = sectorSources(catalog, members.map((member) => member.industry || "Other"), needFrom);
   const sectorSymbols = [...new Set([...sources.values()].map((source) => source.symbol))];
-  screenerStore.ensureFresh([...symbols, BENCHMARK, ...sectorSymbols]);
-  await screenerStore.hasData([...symbols, BENCHMARK, ...sectorSymbols]);
+  // NIFTY 500: the sectors' Relative Rotation Graph benchmark (issue #30).
+  const sectorBenchmark = sectorSymbols.length ? [RS_BENCHMARK] : [];
+  screenerStore.ensureFresh([...symbols, BENCHMARK, ...sectorBenchmark, ...sectorSymbols]);
+  await screenerStore.hasData([...symbols, BENCHMARK, ...sectorBenchmark, ...sectorSymbols]);
 
   const covered = symbols.filter((symbol) => screenerStore.getBars(symbol).length > 0);
   const progress = screenerStore.progress;
@@ -98,7 +102,7 @@ export async function runScreener(universeId: UniverseId, useLive: boolean, past
   // Futures OI from the hub's newest F&O bhavcopy day (GET /v1/fo/oi/day, cached; never waits).
   // Shown next to the setup, never scored: OI buildup showed no edge on its own in testing.
   const stored = (symbol: string) => screenerStore.getBars(symbol);
-  const { results, market, regime, sets } = screenUniverse({ covered, members, stored, benchmark: stored(BENCHMARK), live, sources, ban, oi: latestOiFacts(), firstSeen: (found) => stampFirstSeen(universeId, found) });
+  const { results, market, regime, sets } = screenUniverse({ covered, members, stored, benchmark: stored(BENCHMARK), rrgBenchmark: sectorBenchmark.length ? stored(RS_BENCHMARK) : [], live, sources, ban, oi: latestOiFacts(), firstSeen: (found) => stampFirstSeen(universeId, found) });
   const now = Date.now();
   // BTST live record: matches seen 3:10–3:25 PM, settled at the next open (no extra API calls).
   if (useLive) updateBtstRecord({ results, live, banned: new Set(ban.symbols), now });
@@ -171,7 +175,8 @@ async function pastUniverse(universeId: UniverseId, past: PastDay): Promise<Past
   const from = Math.max(ARCHIVE_START, day - PAST_SCREEN_DAYS * DAY_MS);
   const catalog = orElse(known.sectors, { available: false, indices: [], sectors: [] });
   const sources = sectorSources(catalog, members.map((member) => member.industry || "Other"), from + SECTOR_HISTORY_SLACK_DAYS * DAY_MS);
-  const indices = new Set([BENCHMARK, BENCHMARK_STAND_IN, ...[...sources.values()].map((source) => source.symbol)]);
+  const sectorSymbols = [...new Set([...sources.values()].map((source) => source.symbol))];
+  const indices = new Set([BENCHMARK, BENCHMARK_STAND_IN, ...(sectorSymbols.length ? [RS_BENCHMARK] : []), ...sectorSymbols]);
   const wanted = [...symbols, ...indices].filter((symbol) => symbol !== BENCHMARK_STAND_IN || from < NIFTY_FILE_START);
 
   let set: PastBars;
@@ -220,7 +225,7 @@ async function runScreenerAsOf(universeId: UniverseId, past: PastDay): Promise<S
   const missing = found.symbols.length - covered.length;
   if (missing) notes.push(`${missing} of the list's ${found.symbols.length} stocks have no daily bars up to that day (not listed yet, or not held by the hub).`);
   notes.push("No live bar, no open-interest tag (the hub keeps today's) and no BTST live record in the Time Machine.");
-  const { results, market, regime, sets } = screenUniverse({ covered, members: found.members, stored: found.barsOf, benchmark: found.benchmark, live: new Map(), sources: found.sources, ban: found.ban, oi: null });
+  const { results, market, regime, sets } = screenUniverse({ covered, members: found.members, stored: found.barsOf, benchmark: found.benchmark, rrgBenchmark: found.sources.size ? found.barsOf(RS_BENCHMARK) : [], live: new Map(), sources: found.sources, ban: found.ban, oi: null });
   return {
     status: "ready",
     syncing: false,
@@ -242,6 +247,8 @@ interface ScreenInput {
   stored: (symbol: string) => DailyBar[];
   /** NIFTY's stored bars ([] when the hub has none). */
   benchmark: DailyBar[];
+  /** NIFTY 500's bars, the sectors' Relative Rotation Graph benchmark ([]: no RRG). */
+  rrgBenchmark: DailyBar[];
   /** Today's forming bar per symbol (empty: end of day, or a past day). */
   live: Map<string, DailyBar>;
   sources: Map<string, SectorSource>;
@@ -274,10 +281,12 @@ function screenUniverse(input: ScreenInput) {
   });
   // Sector strength: each sector's rank (0 weakest – 1 strongest) by its sector index's 1-month
   // return (end of day), or the median 1-month return of its stocks when the hub has no index for it.
+  // Each sector index's place on the Relative Rotation Graph against NIFTY 500, with its weekly trail (end of day).
   const indexStats = new Map<string, SectorIndexStat>();
+  const rrgBench = input.rrgBenchmark;
   for (const [industry, source] of sources) {
     const bars = stored(source.symbol);
-    if (bars.length) indexStats.set(industry, sectorIndexStat(source, bars, input.benchmark));
+    if (bars.length) indexStats.set(industry, { ...sectorIndexStat(source, bars, input.benchmark), rrg: rrgBench.length ? sectorRrg(bars, rrgBench) : null });
   }
   for (const sector of market.sectors) {
     const stat = indexStats.get(sector.sector);

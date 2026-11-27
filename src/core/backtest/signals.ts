@@ -21,7 +21,7 @@ import { SCREENS, type ScreenContext, type ScreenDef } from "@/core/screener/scr
 /** Sessions of history a stock needs before its features are trusted (same as the track record). */
 export const WARMUP_SESSIONS = 60;
 /** Bars the features see per session (52 weeks + a little, as the live screener uses). */
-const FEATURE_WINDOW = 260;
+export const FEATURE_WINDOW = 260;
 
 export interface Signal {
   symbol: string;

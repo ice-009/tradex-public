@@ -6,6 +6,7 @@ import { recordTrials } from "./labTrials";
 import { saveLabCard } from "./labCards";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { DEFAULT_HORIZONS, DEFAULT_QUANTILES, LAB_ENGINE, LabInputError, MAX_HORIZON, runLab, type LabReport } from "@/core/lab/engine";
+import type { SectorContext } from "@/core/lab/sectorSignals";
 import { findSignal, resolveParams, signalMeta, type LabSignal } from "@/core/lab/signals";
 import { marketStates } from "@/core/plan/evidence";
 import { makeStamp, withDataPart, type RunStamp } from "@/core/repro/stamp";
@@ -14,6 +15,7 @@ import { storeStart } from "@/core/backtest/phases";
 import { istParts } from "@/core/market/session";
 import { asOf, orElse } from "@/server/providers/asOf";
 import { BacktestError, researchData, type ResearchData } from "./backtest";
+import { LabSectorError, labSectors } from "./labSectors";
 import { codeVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
 import { parseUniverse } from "./screener";
 
@@ -91,8 +93,9 @@ class LabError extends Error {}
 
 /**
  * The data a signal's run reads: the period's bars and point-in-time F&O list
- * (with the signal's extra warm-up), and today's industries for a signal that
- * uses sectors, which become part of the run's data stamp. Shared with the
+ * (with the signal's extra warm-up), today's industries for a signal that
+ * uses them, and the sector indices and baskets for a sector signal (#30,
+ * ./labSectors.ts), which become part of the run's data stamp. Shared with the
  * overlay service (./labOverlay.ts).
  */
 export async function loadSignalData(signal: LabSignal, params: Record<string, number>, period: { universe: string; from: number | null; to: number | null }, pin: ReplayPin | null) {
@@ -104,12 +107,14 @@ export async function loadSignalData(signal: LabSignal, params: Record<string, n
     warmupDays: signal.warmupDays?.(params),
   });
   const industries = signal.usesIndustries?.(params) ? await industryMap() : null;
-  const data = industries ? withDataPart(research.data, "industries", [...industries].sort((a, b) => (a[0] < b[0] ? -1 : 1))) : research.data;
-  return { research, industries, data };
+  const withIndustries = industries ? withDataPart(research.data, "industries", [...industries].sort((a, b) => (a[0] < b[0] ? -1 : 1))) : research.data;
+  // Sector signals also read each industry's index and basket over the same span.
+  const sectors = signal.usesSectors && research.symbols.length ? await labSectors({ ...research, data: withIndustries }) : null;
+  return { research, industries, sectors, data: sectors?.data ?? withIndustries };
 }
 
 /** A signal's values over loaded data. */
-export const buildSignalValues = (signal: LabSignal, params: Record<string, number>, research: ResearchData, industries: ReadonlyMap<string, string> | null) =>
+export const buildSignalValues = (signal: LabSignal, params: Record<string, number>, research: ResearchData, industries: ReadonlyMap<string, string> | null, sectors: SectorContext | null = null) =>
   signal.build(
     {
       dates: research.dates,
@@ -120,6 +125,7 @@ export const buildSignalValues = (signal: LabSignal, params: Record<string, numb
       scan: research.scan,
       pause: yieldToEventLoop,
       industryOf: industries ? (symbol) => industries.get(symbol) ?? null : undefined,
+      sectors,
     },
     params,
   );
@@ -135,7 +141,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
   try {
     const started = Date.now();
     const params = resolveParams(signal, request.params);
-    const { research, industries, data } = await loadSignalData(signal, params, request, pin);
+    const { research, industries, sectors, data } = await loadSignalData(signal, params, request, pin);
     const loadMs = Date.now() - started;
     const costs = COST_PRESETS[request.costPreset];
     const key = JSON.stringify([request, data.hash]);
@@ -146,7 +152,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     if (!research.symbols.length) throw new LabError("No daily bars for this universe and period yet: they are read from the Market Data Hub.");
 
     const signalStarted = Date.now();
-    const values = await buildSignalValues(signal, params, research, industries);
+    const values = await buildSignalValues(signal, params, research, industries, sectors?.context ?? null);
     const signalMs = Date.now() - signalStarted;
     const labStarted = Date.now();
     const report = runLab({
@@ -165,7 +171,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     });
     const sessions = research.dates.filter((day) => day >= (report.period.from ?? 0) && day <= (report.period.to ?? 0));
     const universeNote = research.universeNote(sessions);
-    report.notes.push(...research.warnings, ...(universeNote ? [universeNote] : []));
+    report.notes.push(...research.warnings, ...(universeNote ? [universeNote] : []), ...(sectors?.notes ?? []));
     if (industries) report.notes.push(industryNote(research, industries));
     const labMs = Date.now() - labStarted;
 
@@ -180,7 +186,7 @@ async function execute(raw: LabRequest, pin: ReplayPin | null): Promise<LabRespo
     log.info("Lab run", { signal: signal.id, universe: request.universe, days: report.period.days, stocks: report.universe.symbols, trials: trials.recorded, loadMs, signalMs, labMs });
     return { status: "ready", report, costs: { preset: request.costPreset, label: costs.label }, runtime: { loadMs, signalMs, labMs, scanCached: research.scanCached, cached: false }, stamp, trials };
   } catch (error) {
-    if (error instanceof LabError || error instanceof LabInputError || error instanceof BacktestError) return { status: "error", error: error.message };
+    if (error instanceof LabError || error instanceof LabInputError || error instanceof BacktestError || error instanceof LabSectorError) return { status: "error", error: error.message };
     throw error;
   }
 }

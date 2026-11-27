@@ -17,7 +17,7 @@ import { SCREENS, type ScreenDef, type ScreenGroup } from "@/core/screener/scree
 /** Sessions a plan is held before it is marked to the close. */
 export const HOLD_BARS: Record<ScreenGroup, number> = { btst: 1, swing: 10, positional: 25, results: 10 };
 /** How far back signals are replayed. */
-const LOOKBACK_SESSIONS = 160;
+export const LOOKBACK_SESSIONS = 160;
 const MIN_HISTORY = 60;
 const MIN_SIGNALS_FOR_VERDICT = 20;
 

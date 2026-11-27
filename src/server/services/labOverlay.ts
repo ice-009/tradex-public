@@ -75,9 +75,9 @@ export async function runOverlay(raw: OverlayRequest): Promise<OverlayResult> {
   const lookback = Math.min(252, Math.max(21, Math.round(raw.lookback ?? 126)));
   const request = { universe, from: raw.from ?? storeStart(istParts().day), to: raw.to ?? null, subFrom: raw.subFrom ?? null, costPreset: preset, quantiles, lookback };
 
-  const { research, industries, data } = await loadSignalData(signal, params, request, null);
+  const { research, industries, sectors, data } = await loadSignalData(signal, params, request, null);
   if (!research.symbols.length) throw new OverlayError("No daily bars for this universe and period yet: they are read from the Market Data Hub.");
-  const values = await buildSignalValues(signal, params, research, industries);
+  const values = await buildSignalValues(signal, params, research, industries, sectors?.context ?? null);
   const costs = COST_PRESETS[preset];
   const spread = monthlySpread({
     dates: research.dates,

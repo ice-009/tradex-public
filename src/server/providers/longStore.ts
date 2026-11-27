@@ -24,6 +24,10 @@ export async function longBatch(symbols: string[], from: number, to: number): Pr
   return { ...answer, series, queued: back(answer.queued), unknown: back(answer.unknown) };
 }
 
-const globalForLong = globalThis as unknown as { longBars?: LongBars };
+const globalForLong = globalThis as unknown as { longBars?: LongBars; sectorLongBars?: LongBars };
 if (!(globalForLong.longBars instanceof LongBars)) globalForLong.longBars = new LongBars({ batch: longBatch });
 export const longBars: LongBars = globalForLong.longBars;
+
+/** The sector indices and baskets a Signal Lab sector signal reads (its own memory, so they don't push out the stocks' set). */
+if (!(globalForLong.sectorLongBars instanceof LongBars)) globalForLong.sectorLongBars = new LongBars({ batch: longBatch });
+export const sectorLongBars: LongBars = globalForLong.sectorLongBars;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scoreSetup, type StockFacts } from "./score";
+import { SCORE_FACTORS, scoreSetup, type StockFacts } from "./score";
 
 const facts = (overrides: Partial<StockFacts> = {}): StockFacts => ({
   close: 100,
@@ -46,5 +46,41 @@ describe("setup score: market, sector, ban, 52-week high", () => {
     const far = rsPoints(scoreSetup(facts({ ofHigh52: 0.6 }), plan, { holdDays: 10 }));
     expect(near - far).toBeCloseTo(5, 5);
     expect(near).toBeLessThanOrEqual(15);
+  });
+});
+
+describe("gating by report cards (#29)", () => {
+  const base = { holdDays: 10, regime: "caution" as const };
+
+  it("is off without a gate: every factor counts, as before", () => {
+    const score = scoreSetup(facts(), plan, base);
+    expect(score.gating).toBe("off");
+    expect(score.parts.every((part) => part.proven === undefined)).toBe(true);
+    expect(score.total).toBe(Math.round(score.parts.reduce((sum, part) => sum + part.points, 0) - 4));
+    expect(scoreSetup(facts(), plan, { ...base, gate: null }).gating).toBe("off");
+  });
+
+  it("marks the score unproven, with the same total, when no factor passes", () => {
+    const ungated = scoreSetup(facts(), plan, base);
+    const score = scoreSetup(facts(), plan, { ...base, gate: { proven: [] } });
+    expect(score.gating).toBe("unproven");
+    expect(score.total).toBe(ungated.total);
+    expect(score.parts.map((part) => part.points)).toEqual(ungated.parts.map((part) => part.points));
+    expect(score.parts.every((part) => part.proven === false)).toBe(true);
+  });
+
+  it("counts only proven factors, rescaled to 100, then penalties", () => {
+    const score = scoreSetup(facts(), plan, { ...base, gate: { proven: ["trend", "extension"] } });
+    expect(score.gating).toBe("on");
+    expect(score.parts.filter((part) => part.proven).map((part) => part.key)).toEqual(["trend", "extension"]);
+    // Trend 15/15 and not extended 10/10: 100, minus the caution penalty.
+    expect(score.total).toBe(96);
+    // Trend 3 + 4 = 7 of 15, extension 3 of 10: 10 / 25 → 40, minus 4.
+    const weak = scoreSetup(facts({ aboveSma50: false, aboveEma20: false, ext20Atr: 3 }), plan, { ...base, gate: { proven: ["trend", "extension"] } });
+    expect(weak.total).toBe(36);
+  });
+
+  it("lists every factor with its key, in SCORE_FACTORS order", () => {
+    expect(scoreSetup(facts(), plan, base).parts.map((part) => [part.key, part.label, part.max])).toEqual(SCORE_FACTORS.map((factor) => [factor.key, factor.label, factor.max]));
   });
 });

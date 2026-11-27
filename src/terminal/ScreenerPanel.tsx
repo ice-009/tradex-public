@@ -9,6 +9,10 @@ import { GROUP_LABEL, focusedHit, refreshScreener, riskReward, scoreHit, setIdea
 import { openIdea } from "./ideaActions";
 import { drawPlanOnChart } from "./SetupCard";
 import { OiChip, ScoreChip } from "./ScoreBits";
+import { ReceiptLink } from "./Receipt";
+import { useFactorReceipts, useScoreGate, useScreenReceipts } from "./useReceipts";
+import type { Receipt } from "@/core/lab/receipt";
+import type { FactorKey } from "@/core/screener/score";
 import type { SetupScore } from "@/core/screener/score";
 import { ResultsBadge } from "./MarketPanel";
 import { Icons } from "./icons";
@@ -31,7 +35,7 @@ const UNIVERSES = [
 
 const MIN_RR_OPTIONS = [0, 1.5, 2, 3];
 
-type SortKey = "setups" | "score" | "setupScore" | "symbol" | "changePct" | "volRatio" | "deliveryPct" | "rsi14" | "rsRank" | "rr" | "track" | "since";
+type SortKey = "setups" | "score" | "setupScore" | "symbol" | "changePct" | "volRatio" | "deliveryPct" | "rsi14" | "rsRank" | "rr" | "track" | "since" | "sector";
 
 /** One table row: a stock plus the setup whose plan the row shows. */
 interface Line {
@@ -85,12 +89,16 @@ export function ScreenerPanel() {
   // Until the evidence is in, every screen shows; after that, screens with no edge only on request.
   const showAll = prefs.showAllScreens || !evidence;
   const visible = useMemo(() => new Set(SCREENS.filter((entry) => showAll || hasEdge(evidence?.[entry.id])).map((entry) => entry.id)), [showAll, evidence]);
+  // Receipts (#29): the score counts only factors with a passing report card (none: "unproven", same order).
+  const gate = useScoreGate();
+  const factorReceipts = useFactorReceipts();
+  const screenReceipts = useScreenReceipts();
   // One setup score per (stock, setup) shown — cached until the feed changes.
   const scores = useMemo(() => {
     const map = new Map<string, SetupScore | null>();
-    for (const idea of ideas.values()) for (const hit of idea.hits) map.set(`${idea.symbol}:${hit.screen.id}`, scoreHit(hit, track, results));
+    for (const idea of ideas.values()) for (const hit of idea.hits) map.set(`${idea.symbol}:${hit.screen.id}`, scoreHit(hit, track, results, gate));
     return map;
-  }, [ideas, track, results]);
+  }, [ideas, track, results, gate]);
   const loading = useScreenerFeed((feed) => feed.loading);
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "setupScore", dir: -1 });
   const [query, setQuery] = useState("");
@@ -145,6 +153,9 @@ export function ScreenerPanel() {
         case "since":
           // Newest setup on the stock (in "All setups" a stock can match several screens).
           return Math.max(0, ...idea.hits.map((entry) => entry.row.firstSeenAt ?? 0), row.firstSeenAt ?? 0);
+        case "sector":
+          // Sector strength (0–1 rank of the sector index's 1-month return), then the setup score within a sector.
+          return (row.facts?.sectorPct ?? -1) * 1000 + (scores.get(`${row.symbol}:${hit.screen.id}`)?.total ?? 0) / 1000;
         default: {
           const raw = row[sort.key];
           return typeof raw === "number" && Number.isFinite(raw) ? raw : -Infinity;
@@ -350,6 +361,14 @@ export function ScreenerPanel() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            className={`tx-btn-outline tx-scr-new ${sort.key === "sector" ? "is-on" : ""}`}
+            title="Sort by sector strength: stocks in the strongest sectors (their sector index's 1-month return, ranked) first. Context only: sector momentum showed no edge after costs in the Signal Lab (issue #30)."
+            onClick={() => setSort(sort.key === "sector" ? { key: "setupScore", dir: -1 } : { key: "sector", dir: -1 })}
+          >
+            Strong sectors
+          </button>
           <select className="tx-input" value={prefs.minRR} onChange={(event) => updateScreener({ minRR: Number(event.target.value) })} aria-label="Minimum reward to risk">
             {MIN_RR_OPTIONS.map((value) => (
               <option key={value} value={value}>
@@ -451,6 +470,8 @@ export function ScreenerPanel() {
                   allView={allView}
                   active={symbol === activeSymbol}
                   score={scores.get(`${symbol}:${hit.screen.id}`) ?? null}
+                  factorReceipts={factorReceipts}
+                  receipt={screenReceipts?.[hit.screen.id] ?? null}
                   record={records?.[hit.screen.id]}
                   shortlisted={shortlisted.has(symbol)}
                   firstScanAt={firstScanAt}
@@ -563,7 +584,35 @@ function liveStatus(asOf: NonNullable<ScreenerResponse["asOf"]>): string {
   return ` · live · quotes ${age} s old${pace ? `, refresh ~${pace}` : ""}${asOf.fromTicks ? ` · ${asOf.fromTicks} on ticks` : ""}`;
 }
 
-function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, record, shortlisted, firstScanAt, now }: { symbol: string; idea: TradeIdea; hit: SetupHit; row: ScreenerRow; allView: boolean; active: boolean; score: SetupScore | null; record?: TrackRecord; shortlisted: boolean; firstScanAt: number; now: number }) {
+function ScreenerRowView({
+  symbol,
+  idea,
+  hit,
+  row,
+  allView,
+  active,
+  score,
+  factorReceipts,
+  receipt,
+  record,
+  shortlisted,
+  firstScanAt,
+  now,
+}: {
+  symbol: string;
+  idea: TradeIdea;
+  hit: SetupHit;
+  row: ScreenerRow;
+  allView: boolean;
+  active: boolean;
+  score: SetupScore | null;
+  factorReceipts: Record<FactorKey, Receipt> | null;
+  receipt: Receipt | null;
+  record?: TrackRecord;
+  shortlisted: boolean;
+  firstScanAt: number;
+  now: number;
+}) {
   const { ref, tick } = useVisibleLiveTick<HTMLTableRowElement>(symbol);
   const rr = riskReward(row);
   const buyStop = isBuyStop(row.plan, row.close);
@@ -623,8 +672,9 @@ function ScreenerRowView({ symbol, idea, hit, row, allView, active, score, recor
       <td className="is-down">{formatPrice(row.plan.stop)}</td>
       <td className="is-up">{row.plan.target !== null ? formatPrice(row.plan.target) : "trail"}</td>
       <td>{rr !== null ? rr.toFixed(1) : "—"}</td>
-      <td>
-        <ScoreChip score={score} />
+      <td className="col-score">
+        <ScoreChip score={score} receipts={factorReceipts} />
+        {receipt && <ReceiptLink receipt={receipt} />}
       </td>
       <td className="col-track">
         <TrackCell record={record} />
