@@ -1,3 +1,5 @@
+import type { RiskModel } from "@/core/risk/model";
+import { correlationCut, type BookEntry, type CorrelationCut, type CorrelationSettings } from "@/core/risk/sizing";
 import { planStatus, type PlanStatus } from "@/core/screener/planStatus";
 import { SCREEN_MAP, type ScreenerRow } from "@/core/screener/screens";
 import { bucketFor, eligibleIn, type MarketState, type ScreenEvidence } from "./evidence";
@@ -25,6 +27,11 @@ import { entryKind, entryText, exitRuleFor, exitText, holdSessionsFor, type Entr
 //      risks more than the budget is kept aside as "too big for your risk"
 //      (shown, not hidden) and doesn't take a slot; the plan keeps going until
 //      the slots are filled.
+//   6. Optional (issue #40, off unless `correlation` is given): an idea that
+//      moves with your open trades or the ideas ranked above it is cut so
+//      their cluster's correlated risk stays under a budget
+//      (src/core/risk/sizing.ts). It keeps fewer lots with the reason on it
+//      (`correlation`), or is set aside in `correlated` without taking a slot.
 
 export interface PlanSettings {
   /** Trading capital, ₹. */
@@ -54,6 +61,15 @@ export interface PlanInput {
   settings: PlanSettings;
   /** Latest live price per symbol; a symbol without one is checked at its scan close. */
   prices?: Record<string, number>;
+  /** Correlation-aware sizing (step 6); without it the plan sizes every idea on its own. */
+  correlation?: PlanCorrelation;
+}
+
+export interface PlanCorrelation extends CorrelationSettings {
+  /** Correlations of the open trades' and candidates' returns (null: industry fallback only). */
+  model: RiskModel | null;
+  /** The open trades' ₹ risk at their stops, with their industry. */
+  open: BookEntry[];
 }
 
 export type SizeStatus = "ok" | "too-big" | "no-room";
@@ -95,6 +111,8 @@ export interface PlanIdea {
   scoreRanks: boolean;
   /** The plan checked against the live price ("ok" for every idea that can be taken). */
   status: PlanStatus;
+  /** Lots cut (or the idea skipped) by correlation-aware sizing, and why. */
+  correlation?: CorrelationCut;
 }
 
 export interface Plan {
@@ -114,6 +132,8 @@ export interface Plan {
   more: PlanIdea[];
   /** Matches whose plan no longer holds at the live price (see `status`): not to be taken. */
   invalid: PlanIdea[];
+  /** Ideas correlation-aware sizing left with no lot (their `size` is the size they'd have had alone). */
+  correlated: PlanIdea[];
   skipped: { banned: string[]; held: string[]; noLot: string[] };
 }
 
@@ -126,6 +146,11 @@ function sizeIdea(entry: number, stop: number, lot: number, budget: number, room
   if (lots < 1) return { status: "no-room", lot, lots: 0, qty: 0, risk: 0, notional: 0, oneLotRisk };
   const qty = lots * lot;
   return { status: "ok", lot, lots, qty, risk: qty * perShare, notional: qty * entry, oneLotRisk };
+}
+
+function withLots(size: PlanSize, lots: number, entry: number, stop: number): PlanSize {
+  const qty = lots * size.lot;
+  return { ...size, lots, qty, risk: qty * (entry - stop), notional: qty * entry };
 }
 
 export function buildPlan(input: PlanInput): Plan {
@@ -213,19 +238,37 @@ export function buildPlan(input: PlanInput): Plan {
   const ideas: PlanIdea[] = [];
   const unsized: PlanIdea[] = [];
   const more: PlanIdea[] = [];
+  const correlated: PlanIdea[] = [];
+  const { correlation } = input;
+  const book: BookEntry[] = [...(correlation?.open ?? [])];
   for (const idea of candidates) {
     idea.size = sizeIdea(idea.entry.price, idea.stop, idea.size.lot, riskBudget, Math.max(0, room));
     if (taken >= freeSlots) {
       if (idea.size.status === "ok") more.push(idea);
-    } else if (idea.size.status !== "ok") {
-      unsized.push(idea);
-    } else {
-      ideas.push(idea);
-      taken += 1;
-      room -= idea.size.notional;
+      continue;
     }
+    if (idea.size.status !== "ok") {
+      unsized.push(idea);
+      continue;
+    }
+    if (correlation) {
+      const industry = idea.row.industry;
+      const cut = correlationCut({ symbol: idea.symbol, industry, lots: idea.size.lots, oneLotRisk: idea.size.oneLotRisk }, book, riskBudget, correlation, correlation.model);
+      if (cut) {
+        idea.correlation = cut;
+        if (cut.lotsAfter < 1) {
+          correlated.push(idea);
+          continue;
+        }
+        idea.size = withLots(idea.size, cut.lotsAfter, idea.entry.price, idea.stop);
+      }
+      book.push({ symbol: idea.symbol, industry, kind: "idea", risk: idea.size.risk });
+    }
+    ideas.push(idea);
+    taken += 1;
+    room -= idea.size.notional;
   }
   for (const list of Object.values(skipped)) list.sort();
   invalid.sort((a, b) => b.expectedR - a.expectedR || a.symbol.localeCompare(b.symbol));
-  return { state, riskBudget, openCount: open.length, openNotional, freeSlots, eligible, ideas, unsized, more, invalid, skipped };
+  return { state, riskBudget, openCount: open.length, openNotional, freeSlots, eligible, ideas, unsized, more, invalid, correlated, skipped };
 }

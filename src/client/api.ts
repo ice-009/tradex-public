@@ -33,6 +33,7 @@ import type {
   ReceiptsResponse,
   ReplayRequest,
   ResultsResponse,
+  RiskReturnsResponse,
   ScreenerResponse,
   SymbolsResponse,
   TimeMachineResponse,
@@ -144,6 +145,9 @@ export const api = {
 
   /** "Re-run this": compute a stamped evidence table again from scratch (~10 s). */
   replayEvidence: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<EvidenceReplayResponse>("/api/plan/evidence/replay", body, signal),
+
+  /** Daily returns of open trades and plan ideas for the risk model (issue #40); "syncing" while a past day's bars are read. */
+  riskReturns: (symbols: string[]) => getStatusJson<RiskReturnsResponse>("/api/plan/returns", withAsOf({ symbols: csv(symbols) })),
 
   /** The trade journal: open trades with today's action, closed ones with the summary. */
   trades: () => getJson<TradesResponse>("/api/trades"),
