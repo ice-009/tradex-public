@@ -38,6 +38,8 @@ const env = {
   HUB_TIMEOUT_MS: "10000",
   MARKET_DB_PATH: path.join(RUN, ".cache", "market.db"),
   DATA_SOURCES: "",
+  // The sealing job (#33) would seal the stub's plan at whatever time CI runs: off, so runs don't depend on the clock.
+  PLAN_LEDGER: "off",
   NEXT_TELEMETRY_DISABLED: "1",
 };
 

@@ -253,6 +253,7 @@ All settings live in `.env`. [`.env.example`](.env.example) documents each one.
 | `HUB_URL`, `HUB_KEY` | The [Market Data Hub](https://github.com/ice-009/market-data-hub) all market data comes from (required for real data; `HUB_TIMEOUT_MS` sets the request timeout) |
 | `MARKET_DB_PATH` | Where the local candle cache lives (default `.cache/market.db`) |
 | `LOG_LEVEL` | Server log threshold: `debug`, `info` (default), `warn`, `error`. Logs are JSON lines with a request id |
+| `PLAN_LEDGER`, `PLAN_LEDGER_PUBLISH_CMD` | The sealed daily plan: `PLAN_LEDGER=off` stops the server sealing the plan each day; the command (opt-in, off by default) publishes each seal's hash outside the ledger (`scripts/ledger-anchor.sh` is an example). `npm run ledger -- verify` checks the chain |
 | `METRICS_TOKEN` | Bearer token a Prometheus scraper uses for `/api/metrics` (otherwise a signed-in session is needed) |
 | `TRADEX_PORT`, `TRADEX_BIND`, `TRADEX_URL`, `HUB_REF`, `TRADEX_VERSION`, `FYERS_*` | Docker Compose only: where Tradex is published, which hub to build, which release image to run, and the hub's broker login |
 

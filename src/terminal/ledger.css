@@ -1,0 +1,24 @@
+/* ============================================================
+   Sealed plan and ledger (src/terminal/PlanLedger.tsx)
+   Uses the theme tokens from globals.css.
+   ============================================================ */
+
+.tx-ledger code { font-family: var(--font-mono); font-size: 0.95em; color: var(--text-muted); }
+.tx-ledger-today { display: flex; flex-direction: column; gap: 2px; padding: 6px var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.tx-ledger-line, .tx-ledger-drift { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-normal); color: var(--text); }
+.tx-ledger-drift { color: var(--text-muted); }
+.tx-ledger-drift.is-same { color: var(--pos); }
+.tx-ledger-drift .is-added { color: var(--pos); }
+.tx-ledger-drift .is-dropped { color: var(--neg); }
+.tx-ledger-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-top: 6px; font-size: var(--fs-sm); }
+.tx-ledger-verify { margin-top: 6px; padding: 6px var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.tx-ledger-verify.is-ok { border-color: var(--pos-border); background: var(--pos-soft); }
+.tx-ledger-verify.is-bad { border-color: var(--neg-border); background: var(--neg-soft); }
+.tx-ledger-verify ul { margin: 4px 0 0; padding-left: 18px; }
+.tx-ledger-table { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.tx-ledger-table th { padding: 3px 6px; color: var(--text-subtle); font-size: var(--fs-xs); font-weight: var(--fw-regular); text-align: left; border-bottom: 1px solid var(--border); }
+.tx-ledger-table td { padding: 3px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.tx-ledger-row { cursor: pointer; }
+.tx-ledger-row:hover td { background: var(--surface-2); }
+.tx-ledger-ideas { margin: 2px 0 4px; padding-left: 20px; }
+.tx-ledger-stamp { font-size: var(--fs-xs); word-break: break-all; }

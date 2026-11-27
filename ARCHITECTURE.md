@@ -241,10 +241,40 @@ The **Plan** tab (the bottom panel's default) turns the screener into a short li
 | `instructions.ts` | Entry and exit wording, and the stored exit rule (`next-open`, `stop-target`, `time`, `trail-low:10`). |
 | `tracker.ts` | Today's action for an open trade from the stored daily bars (server) with the live price laid over it (browser). |
 | `journal.ts` | Realised R, net R after charges, and slippage of your fills against the plan. |
+| `seal.ts`, `sealSchedule.ts` | The sealed plan (below): what is sealed, the hash chain and its verification, the live plan against the seal, and when seals are due. |
 
 The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers the 5 years of daily bars the hub serves. Point-in-time F&O membership is used on the sessions the hub has an F&O list for, and each trade's costs use its session's lot where known (both through `asOf`).
 
 The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later). Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`.
+
+### The sealed plan: a tamper-evident ledger (`seal.ts`, `sealSchedule.ts`, issue #33)
+
+A backtest can be tuned after the fact; a live record can't. The server seals each trading day's plan at fixed times into an append-only hash chain, so the record of what the plan said can't be edited later without it showing.
+
+```
+ instrumentationNode.ts → services/planLedger.ts: a 60 s timer in the Next.js server process
+        │  dueSeals(now, NSE calendar, already sealed)          core/plan/sealSchedule.ts
+        ▼
+ runScreener("fno", live) + strategyEvidence() + asOf() lots    the same inputs the browser's plan reads
+        │  sealablePlan(): rankCandidates, no trades open      core/plan/seal.ts
+        ▼
+ makeStamp(kind "plan")  →  chainEntry(head, …)  →  appendSeal (one write transaction)
+        │                                                       providers/planLedger.ts → .cache/market.db
+        ▼
+ GET /api/plan/ledger · GET /api/plan/ledger/verify · npm run ledger -- verify · PLAN_LEDGER_PUBLISH_CMD (opt-in)
+```
+
+- **When.** `close` at 3:15–3:25 PM IST: the plan is final at 3:10 PM (`preview.ts`) and the buy window is 3:15–3:25 PM, so this is the plan when the first entry could be taken; it needs live prices from the hub (without them the screens would be on yesterday's close, so the seal is skipped and the reason shown). A server that is down for the whole window makes no close seal that day: a seal written later wouldn't be "before the trade". `final` from 7:30 PM until the next session opens, once the store holds the day's final daily bar (NSE's evening files, through the hub): the plan of record before the next open, on final prices; retried every 10 minutes until the bar is there. Holidays come from the hub's calendar (`/v1/calendar` through `asOf.tradingDays`); without it only weekends are skipped and the job says so.
+- **What is sealed: the plan before sizing.** Every candidate the rules rank (`rankCandidates`, steps 1–4 of `builder.ts`) with its screen, entry kind and price, stop, target, exit rule, hold, expected R and sample, lot and the price the screens saw; matches no longer valid; banned and lot-less stocks; the market state and the eligible screens. Not anyone's sized plan: capital, risk %, slots and open trades are per-user preferences kept in the browser, and the proof must not depend on them (nor on whose trades are open: nothing is left out as "held"). A **reference book** is sealed with it — what the default sizing (₹5 lakh, 1% risk, 5 slots, 4× leverage) would take with no trades open — so grading (#34) has a fixed portfolio to follow as well as every idea.
+- **The stamp.** Each seal carries a run stamp (kind `plan`, engine `seal/1`): the data hash covers the F&O list's stored daily bars and NIFTY, lots and the list (as for any run), plus `matches` (the screener's rows, which carry the live price), `ban`, `state` and `evidence` (the evidence table's own stamp hash and result hash); the params are the day, kind and reference sizing; `resultHash` is the sealed plan's hash.
+- **The chain.** An entry is `{schema, seq, day, kind, sealedAt, prevHash, plan, stamp}`; its `hash` is SHA-256 over its canonical JSON (`src/core/repro`), and `prevHash` is the previous entry's hash (64 zeros for the first). `verifyLedger` checks every hash against its content, every link, the sequence (1, 2, 3, … with no gaps or repeats), that each stamp's result hash is its plan's, one seal per day and kind, in time order. An edited entry fails its hash; an edited entry with a recomputed hash breaks the next link; a removed or inserted one breaks the sequence and the links. What a chain can't catch by itself is a rewritten *tail* (the newest entries redone and re-chained) or a cut-short ledger — that is what publishing each hash outside closes (`checkAnchors`).
+- **Storage.** `plan_ledger` in `.cache/market.db` (like the BTST live record and the Lab's trial record, not Prisma: the seal is the same for every user, and like those records it can't be rebuilt — it is only as long as the server has been writing it). `body` holds the record's canonical JSON and is the source of truth; `(day, kind)` is unique, so a restart, a second tick or a second server on the same file seals each day once (the head is read and the row inserted in one `IMMEDIATE` transaction). SQLite triggers refuse `UPDATE` and `DELETE` on the table: the app can't rewrite history; someone with the file and a SQLite shell can, and the chain shows it.
+- **Never in the Time Machine.** The job takes no day from a request and calls the screener and evidence without `past`; the ledger routes answer `status: "past"` with `?asOf` (a seal made after a past day isn't something that day knew), and the Plan tab shows a note instead.
+- **Publishing (opt-in, off by default).** With `PLAN_LEDGER_PUBLISH_CMD` set, the server runs that shell command after each new seal with `SEAL_SEQ`, `SEAL_DAY`, `SEAL_KIND`, `SEAL_HASH`, `SEAL_PREV_HASH` and `SEAL_LINE` (one JSON line) in its environment, and records whether it worked (`plan_ledger_anchors`). `scripts/ledger-anchor.sh` is an example: append the line to `ledger.jsonl` in a separate checkout of a `ledger` branch (or a gist), commit and push — the remote's record of each push is the outside timestamp. `npm run ledger -- verify --anchors <checkout>/ledger.jsonl` checks the ledger against it.
+- **Reading and checking.** `GET /api/plan/ledger?from&to` (YYYY-MM-DD; default the last 30 days) returns the records and `after`, the record before the first one, so a slice verifies on its own (`verifyLedger(entries, after)`); `?from=2000-01-01` is a whole-ledger export. `GET /api/plan/ledger/verify` checks the whole chain, the published hashes, and lists trading days with no seal (gaps: the server was down or had no live prices — a gap, never a removed seal, which breaks the chain). `npm run ledger -- verify` does the same from the command line on `.cache/market.db`, or `--file <export.json>` on an export anywhere; `show` and `export` print and save it.
+- **In the Plan tab** (`terminal/PlanLedger.tsx`): today's seal (time, hash, ideas, the default book), how the live plan differs from it since (`compareToSeal`: added, dropped and why, changed levels, market state — both sides ranked by the same rules with no trades open), the last 30 days with each seal's hash and its ideas, **Verify the chain** and **Export**.
+
+What #34 and #35 build on: grading reads `plan.ideas` (every idea, with its exit rule and hold) and `plan.reference.take` (the default book) from the ledger and settles them on the stored bars; the 08:45 brief (#35) reads the newest `final` seal as "today's plan" before the open.
 
 ## Backtesting (`src/core/backtest`)
 
