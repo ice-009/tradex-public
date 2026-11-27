@@ -13,7 +13,7 @@ export const GET = authed(
   "Unable to run the screener right now.",
   async (_email, request: NextRequest) => {
     const params = request.nextUrl.searchParams;
-    return NextResponse.json<ScreenerResponse>(await runScreener(parseUniverse(params.get("universe")), params.get("live") !== "0", await pastDay(params.get("asOf"))));
+    return NextResponse.json<ScreenerResponse>(await runScreener(parseUniverse(params.get("universe")), params.get("live") !== "0", await pastDay(params.get("asOf"), params.get("replay"))));
   },
   (): ScreenerResponse => ({ status: "error", error: "Unable to run the screener right now." }),
 );

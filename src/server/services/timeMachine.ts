@@ -338,11 +338,11 @@ export async function scalesOn(day: number, symbols: readonly string[], indices:
 // ------------------------------------------------------------------ quotes, lots, results as of a day
 
 /** A past day's closes for the watchlist: the last bar on or before the day, with its change on the bar before. */
-export async function quotesAsOf(symbols: string[], day: number): Promise<QuotesResponse> {
+export async function quotesAsOf(symbols: string[], day: number, replay = false): Promise<QuotesResponse> {
   if (!symbols.length) return { quotes: [], asOf: { day, notes: [] } };
   // Two weeks back is plenty for the bar before (holidays); a stock that didn't trade then has no quote.
   // From the hub (one small read), so watchlist symbols don't join the screener's store.
-  const set = await pastBars(day, symbols, day - 14 * DAY_MS).promise;
+  const set = await replayBars({ day, requested: day, snapped: false, note: null, replay }, symbols, day - 14 * DAY_MS).promise;
   const { scaleOf, note } = await scalesOn(day, symbols);
   const quotes: Quote[] = [];
   for (const symbol of symbols) {

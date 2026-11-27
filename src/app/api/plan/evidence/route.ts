@@ -19,7 +19,7 @@ export const GET = authed(
   "Unable to compute the strategy evidence right now.",
   async (_email, request: NextRequest) => {
     const params = request.nextUrl.searchParams;
-    return NextResponse.json<EvidenceResponse>(await strategyEvidence({ from: day(params.get("from")), to: day(params.get("to")) }, await pastDay(params.get("asOf"))));
+    return NextResponse.json<EvidenceResponse>(await strategyEvidence({ from: day(params.get("from")), to: day(params.get("to")) }, await pastDay(params.get("asOf"), params.get("replay"))));
   },
   (): EvidenceResponse => ({ status: "error", error: "Unable to compute the strategy evidence right now." }),
 );

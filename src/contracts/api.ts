@@ -62,6 +62,11 @@ export type TimeMachineResponse =
       note: string | null;
       /** What was known that day (F&O list, lot sizes, ban list, results, sector map) and what wasn't. */
       facts: Array<{ name: string; known: boolean; text: string }>;
+      /**
+       * Replay (#32): up to 90 sessions before and after the day (YYYY-MM-DD, ascending; those after stop before
+       * today), from the exchange calendar (`calendar`) or weekdays when the hub couldn't say.
+       */
+      sessions: { before: string[]; after: string[]; calendar: boolean };
     };
 
 /** The Time Machine day an answer is computed for. */
