@@ -21,6 +21,7 @@ import { isBuyStop, planStatus } from "@/core/screener/planStatus";
 import { isNewSetup } from "@/core/screener/fresh";
 import { BTST_WINDOW, mutedReason } from "@/core/screener/btstAlerts";
 import { liveRecordLine, signedPct, type LiveScreenRecord } from "@/core/screener/liveRecord";
+import { dayLabel } from "@/core/reference/timeMachine";
 import { requestAlertPermission } from "./Alerts";
 import type { LiveRecordResponse, ScreenerResponse, TrackResult } from "@/contracts/api";
 import { useEvidenceScreens } from "@/client/planFeed";
@@ -315,6 +316,11 @@ export function ScreenerPanel() {
           {syncing && <span className="tx-spinner tx-spinner-sm" />}
           {status}
         </span>
+        {data?.timeMachine && (
+          <span className="tx-scr-status tx-tm-scr" title={data.timeMachine.notes.join("\n")} data-testid="screener-as-of">
+            As of {dayLabel(data.timeMachine.day)} close{data.timeMachine.notes.length ? ` · ${data.timeMachine.notes.length} note${data.timeMachine.notes.length === 1 ? "" : "s"}` : ""}
+          </span>
+        )}
         <span className="tx-tb-spacer" />
         <button type="button" className={`tx-icon-btn ${prefs.showInfo ? "is-on" : ""}`} title="Rules, track record & sources" onClick={() => updateScreener({ showInfo: !prefs.showInfo })}>
           <Icons.gear size={15} />

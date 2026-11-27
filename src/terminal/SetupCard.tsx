@@ -13,6 +13,7 @@ import { OiChip, ScoreBreakdown, ScoreChip } from "./ScoreBits";
 import { ReceiptLine } from "./Receipt";
 import { useFactorReceipts, useScoreGate, useScreenReceipts } from "./useReceipts";
 import { OrderTicket } from "./OrderTicket";
+import { useTimeMachine } from "@/client/timeMachine";
 import { addPlanAlerts } from "./Alerts";
 import { getState, toggleShortlist, useTerminal } from "./store";
 import { commitDrawings } from "./drawingHistory";
@@ -309,17 +310,24 @@ export function SetupCard({ symbol }: { symbol: string }) {
         </button>
       </div>
       <div className="tx-setup-actions">
-        <button type="button" className="tx-btn-outline" onClick={() => setTicket(true)}>
-          <Icons.ticket size={15} /> Order ticket
-        </button>
-        <button
-          type="button"
-          className="tx-btn-outline"
-          onClick={() => setAlertsAdded(addPlanAlerts(symbol, plan, hit.row.close, hit.screen.name))}
-          title="Alerts at the breakout (if it's a buy-stop), the stop and the target"
-        >
-          {alertsAdded ? <Icons.check size={15} /> : <Icons.bell size={15} />} {alertsAdded === null ? "Alerts" : alertsAdded ? `${alertsAdded} set` : "Already set"}
-        </button>
+        <LiveActions>
+          {(off, why) => (
+            <>
+              <button type="button" className="tx-btn-outline" onClick={() => setTicket(true)} disabled={off} title={why ?? undefined}>
+                <Icons.ticket size={15} /> Order ticket
+              </button>
+              <button
+                type="button"
+                className="tx-btn-outline"
+                disabled={off}
+                onClick={() => setAlertsAdded(addPlanAlerts(symbol, plan, hit.row.close, hit.screen.name))}
+                title={why ?? "Alerts at the breakout (if it's a buy-stop), the stop and the target"}
+              >
+                {alertsAdded ? <Icons.check size={15} /> : <Icons.bell size={15} />} {alertsAdded === null ? "Alerts" : alertsAdded ? `${alertsAdded} set` : "Already set"}
+              </button>
+            </>
+          )}
+        </LiveActions>
       </div>
       {ticket && (
         <OrderTicket
@@ -362,4 +370,10 @@ function SetupNotices({ symbol, warnings, btst }: { symbol: string; warnings: st
       ))}
     </div>
   );
+}
+
+/** The order ticket and price alerts act on live prices: off in the Time Machine (a past day), with why. */
+function LiveActions({ children }: { children: (off: boolean, why: string | null) => React.ReactNode }) {
+  const pastDay = useTimeMachine((state) => state.asOf !== null);
+  return <>{children(pastDay, pastDay ? "Live only: the Time Machine shows a past day" : null)}</>;
 }

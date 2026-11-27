@@ -9,7 +9,7 @@ import { LongBars } from "@/server/providers/longBars";
 // periods older than the screener's 5-year store, read from the hub per run.
 
 /** Batch candles from..to for app symbols: sent as hub tickers, answered back under the app's symbols. */
-async function batch(symbols: string[], from: number, to: number): Promise<HubCandlesBatch> {
+export async function longBatch(symbols: string[], from: number, to: number): Promise<HubCandlesBatch> {
   const hub = hubClient();
   if (!hub) throw new Error(HUB_REQUIRED);
   const appSymbols = new Map<string, string[]>();
@@ -25,9 +25,9 @@ async function batch(symbols: string[], from: number, to: number): Promise<HubCa
 }
 
 const globalForLong = globalThis as unknown as { longBars?: LongBars; sectorLongBars?: LongBars };
-if (!(globalForLong.longBars instanceof LongBars)) globalForLong.longBars = new LongBars({ batch });
+if (!(globalForLong.longBars instanceof LongBars)) globalForLong.longBars = new LongBars({ batch: longBatch });
 export const longBars: LongBars = globalForLong.longBars;
 
 /** The sector indices and baskets a Signal Lab sector signal reads (its own memory, so they don't push out the stocks' set). */
-if (!(globalForLong.sectorLongBars instanceof LongBars)) globalForLong.sectorLongBars = new LongBars({ batch });
+if (!(globalForLong.sectorLongBars instanceof LongBars)) globalForLong.sectorLongBars = new LongBars({ batch: longBatch });
 export const sectorLongBars: LongBars = globalForLong.sectorLongBars;

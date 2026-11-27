@@ -13,6 +13,8 @@ import { LAYOUTS, setLayout, updateActiveCell, useTerminal } from "./store";
 import { Icons, LayoutIcon } from "./icons";
 import { LayoutsMenu, type LayoutDialogState } from "./LayoutsMenu";
 import { Dropdown, useTerminalUI } from "./ui";
+import { TimeMachinePicker } from "./TimeMachine";
+import { useTimeMachine } from "@/client/timeMachine";
 
 const STATUS_LABEL: Record<LiveStatus, string> = {
   idle: "Idle",
@@ -29,6 +31,7 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
   const { data: session } = useSession();
   const [status, setStatus] = useState<LiveStatus>(liveHub.status);
   const usage = useApiUsage();
+  const pastDay = useTimeMachine((state) => state.info?.label ?? state.asOf);
 
   useEffect(() => liveHub.onStatus(setStatus), []);
 
@@ -166,20 +169,29 @@ export function TopBar({ onLayoutDialog }: { onLayoutDialog: (dialog: LayoutDial
 
       <span className="tx-tb-spacer" />
 
+      <TimeMachinePicker />
+
       <ApiUsageMeter usage={usage} />
 
-      <span
-        className={`tx-status tx-status-${endOfDay ? "eod" : status}`}
-        title={[
-          endOfDay ? `${END_OF_DAY_LABEL}. ${END_OF_DAY_STATUS_HINT}` : status === "delayed" ? "No live stream from the hub: prices are polled every ~15 s" : "Market data feed",
-          usage ? hubSummary(usage.hub) : "",
-        ]
-          .filter(Boolean)
-          .join("\n")}
-      >
-        <span className="tx-status-dot" />
-        {endOfDay ? "End-of-day" : STATUS_LABEL[status]}
-      </span>
+      {pastDay ? (
+        <span className="tx-status tx-status-past" title={`Time Machine: the terminal as of ${pastDay}'s close. No live prices.`}>
+          <span className="tx-status-dot" />
+          Time Machine
+        </span>
+      ) : (
+        <span
+          className={`tx-status tx-status-${endOfDay ? "eod" : status}`}
+          title={[
+            endOfDay ? `${END_OF_DAY_LABEL}. ${END_OF_DAY_STATUS_HINT}` : status === "delayed" ? "No live stream from the hub: prices are polled every ~15 s" : "Market data feed",
+            usage ? hubSummary(usage.hub) : "",
+          ]
+            .filter(Boolean)
+            .join("\n")}
+        >
+          <span className="tx-status-dot" />
+          {endOfDay ? "End-of-day" : STATUS_LABEL[status]}
+        </span>
+      )}
 
       <Dropdown
         title="Account"

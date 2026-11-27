@@ -444,6 +444,15 @@ export interface HubResultsCalendar {
   events: Array<{ symbol: string; date: string; day: number; company: string; purpose: string }>;
 }
 
+/** GET /v1/calendar: NSE's trading days and holidays between two IST dates (hub #17). */
+export interface HubCalendar {
+  from: string;
+  to: string;
+  /** Trading days, YYYY-MM-DD, ascending. */
+  tradingDays: string[];
+  holidays: Array<{ date: string; day: number; name: string | null; source: string; weekend: boolean }>;
+}
+
 // ------------------------------------------------------------------ errors
 
 /** A failed hub request. `status` is 0 for network errors and timeouts. The message never contains the key. */
@@ -765,6 +774,11 @@ export class HubClient {
   /** Every known ticker change. */
   symbolChanges(): Promise<HubSymbolChanges> {
     return this.get<HubSymbolChanges>("/v1/symbols/changes", undefined, { retries: 0 });
+  }
+
+  /** NSE's trading calendar between two IST dates (YYYY-MM-DD; at most 40 years). A hub before it answers 404. */
+  calendar(from: string, to: string): Promise<HubCalendar> {
+    return this.get<HubCalendar>("/v1/calendar", { from, to }, { retries: 0 });
   }
 
   /** Results dates between two IST dates (YYYY-MM-DD). */

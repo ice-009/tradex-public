@@ -49,7 +49,11 @@ const dayLabel = (day: number) => {
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 };
 
-export function pointInTimeLots(source: LotSource, today: Readonly<Record<string, number>>): PointInTimeLots {
+/**
+ * `today`: the stand-in where a session's lot isn't known (today's lots, or, in
+ * the Time Machine, the shown day's — `standIn` names it in the note).
+ */
+export function pointInTimeLots(source: LotSource, today: Readonly<Record<string, number>>, standIn = "today's lot sizes"): PointInTimeLots {
   return {
     lotOn(symbol, day) {
       const fact = source.at(day).lotInTodayShares(symbol);
@@ -62,12 +66,12 @@ export function pointInTimeLots(source: LotSource, today: Readonly<Record<string
       if (!covered.length) {
         const fact = sessions.length ? source.at(sessions[0]).lots : null;
         const from = fact && !fact.known && fact.knownFrom !== null ? ` (the Market Data Hub has them from ${dayLabel(fact.knownFrom)})` : "";
-        return `Lot sizes: today's for every session; the lot of each day isn't known for this period${from}.`;
+        return `Lot sizes: ${standIn === "today's lot sizes" ? "today's" : standIn} for every session; the lot of each day isn't known for this period${from}.`;
       }
       const range = `${dayLabel(covered[0])} – ${dayLabel(covered.at(-1)!)}`;
       const rest = sessions.length - covered.length;
       return rest
-        ? `Lot sizes: as listed on each day (NSE F&O bhavcopy) on ${covered.length} of ${sessions.length} sessions (${range}); today's lot sizes on the other ${rest}, where the day's isn't known.`
+        ? `Lot sizes: as listed on each day (NSE F&O bhavcopy) on ${covered.length} of ${sessions.length} sessions (${range}); ${standIn} on the other ${rest}, where the day's isn't known.`
         : `Lot sizes: as listed on each day (NSE F&O bhavcopy), ${range}.`;
     },
   };

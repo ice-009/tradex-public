@@ -17,6 +17,10 @@
 //    separate walk backwards from each stock's first bar, so the 5 years stay
 //    exactly as they were. INFY's archive is served under two names
 //    (INFOSYSTCH until 28 Jun 2011), as the hub joins renamed tickers.
+//  - The trading calendar (/v1/calendar) is every weekday back to 1994, and
+//    /v1/adjustments/batch knows one split/bonus: RELIANCE 1:1 on 1 Sep 2025
+//    (factor 0.5), so the Time Machine (#31) can be seen re-expressing prices as
+//    they traded before it. The candles stay as they are (already "adjusted").
 //
 // Usage: node e2e/stub-hub.mjs  (STUB_HUB_PORT, default 8797; STUB_HUB_KEY, default "mdh_e2e")
 
@@ -257,6 +261,19 @@ function lotFor(symbol) {
   return Math.max(1, Math.round(60_000 / daily(symbol).at(-1).c));
 }
 
+/** Split/bonus factors the stub knows (the Time Machine's price scale, #31). */
+const ADJUSTMENTS = { RELIANCE: [{ date: "2025-09-01", day: Date.UTC(2025, 8, 1), symbol: "RELIANCE", factor: 0.5, cumulative: 0.5, source: "corporate_action", action: "BONUS 1:1" }] };
+
+/** Weekdays between two YYYY-MM-DD dates: the stub's sessions (it has no exchange holidays). */
+function tradingDays(from, to) {
+  const out = [];
+  for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${to}T00:00:00Z`); t += DAY) {
+    const weekday = new Date(t).getUTCDay();
+    if (weekday !== 0 && weekday !== 6) out.push(iso(t));
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ server
 
 function send(res, status, body, headers = {}) {
@@ -352,6 +369,18 @@ const routes = {
   },
 
   "/v1/fo/oi/day": (url, res) => send(res, 200, oiDay()),
+
+  "/v1/calendar": (url, res) => {
+    const from = url.searchParams.get("from") ?? "2026-01-01";
+    const to = url.searchParams.get("to") ?? "2026-12-31";
+    send(res, 200, { from, to, today: iso(LAST_SESSION + DAY), tradingToday: false, listedYears: [], lists: [], tradingDays: tradingDays(from, to), holidays: [], specialSessions: [] });
+  },
+
+  "/v1/adjustments/batch": (url, res) => {
+    const series = {};
+    for (const symbol of symbolsParam(url)) if (known(symbol) && !INDICES.has(symbol)) series[symbol] = { current: symbol, factors: ADJUSTMENTS[symbol] ?? [] };
+    send(res, 200, { derivedAt: LAST_SESSION, series });
+  },
 
   "/v1/fo/members": (url, res) => {
     const from = asOfFrozen(Date.parse(`${url.searchParams.get("from")}T00:00:00Z`));

@@ -1,14 +1,18 @@
 import { DAY_MS, IST_OFFSET_MS } from "@/core/market/session";
 import type { ChartInterval } from "@/core/market/intervals";
 import type { Bar } from "@/core/types";
-import type { Quote, SourceKind, StreamStatus, SymbolInfo, Tick } from "@/contracts/api";
+import type { ChartResponse, Quote, SourceKind, StreamStatus, SymbolInfo, Tick } from "@/contracts/api";
 import { api } from "@/client/api";
+import { inTimeMachine, onTimeMachineChange } from "@/client/timeMachine";
 import { istClock } from "@/core/format";
 import { INTERVAL_META } from "@/core/market/intervals";
 
 // Browser-side market data: candle history over /api/chart, snapshot quotes
 // over /api/quotes, and ONE shared SSE connection for live ticks that every
 // chart and the watchlist multiplex onto.
+//
+// In the Time Machine (src/client/timeMachine.ts) the stream is closed and no
+// tick is handed out: charts end at the day's close and quotes are its closes.
 
 /** A live price update (same shape from every data source; see src/contracts/api.ts). */
 export type LiveTick = Tick;
@@ -25,6 +29,8 @@ export interface HistoryResult {
   corporateActions: Array<{ time: number; label: string; title: string }>;
   /** Daily, weekly and monthly charts: older bars may exist (fetch them with `older`). */
   hasOlder: boolean;
+  /** Time Machine: the day the bars end at, and what differs from the live chart. */
+  asOf: ChartResponse["asOf"] | null;
 }
 
 /**
@@ -46,7 +52,7 @@ export async function fetchHistory(symbol: string, interval: ChartInterval, sign
     }))
     .filter((bar: Bar) => Number.isFinite(bar.time) && Number.isFinite(bar.close))
     .sort((a: Bar, b: Bar) => a.time - b.time);
-  return { bars, source: data.source ?? "sample", reason: data.sourceReason ?? null, corporateActions: data.corporateActions ?? [], hasOlder: Boolean(data.hasOlder) };
+  return { bars, source: data.source ?? "sample", reason: data.sourceReason ?? null, corporateActions: data.corporateActions ?? [], hasOlder: Boolean(data.hasOlder), asOf: data.asOf ?? null };
 }
 
 export async function fetchQuotes(symbols: string[], options: { fresh?: boolean } = {}): Promise<Quote[]> {
@@ -173,8 +179,15 @@ class LiveHub {
     };
   }
 
+  /** The latest tick for a symbol; none in the Time Machine (a live price is from after the day shown). */
   getLatest(symbol: string) {
+    if (inTimeMachine()) return null;
     return this.latest.get(symbol.toUpperCase()) ?? null;
+  }
+
+  /** Close or reopen the stream when the Time Machine's day changes. */
+  followTimeMachine() {
+    onTimeMachineChange(() => this.schedule());
   }
 
   private setStatus(status: LiveStatus) {
@@ -214,7 +227,8 @@ class LiveHub {
     else this.timer = null;
     this.watch();
     const rank = (symbol: string) => Math.min(...(this.priorities.get(symbol)?.values() ?? [Infinity]));
-    const symbols = [...this.listeners.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    // The Time Machine shows a past day: no live prices (listeners stay registered for when it ends).
+    const symbols = inTimeMachine() ? [] : [...this.listeners.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
     const change = this.source ? streamChange(this.sourceSymbols, symbols) : symbols.length ? "reconnect" : "keep";
     if (mode !== "force" && change === "keep") return;
     if (mode === "change" && change === "prune") {
@@ -269,7 +283,7 @@ class LiveHub {
     source.addEventListener("tick", (event) => {
       try {
         const tick = JSON.parse((event as MessageEvent).data) as LiveTick;
-        if (typeof tick.ltp !== "number") return;
+        if (typeof tick.ltp !== "number" || inTimeMachine()) return;
         if (this.source === source) this.retire();
         this.lastEventAt = this.lastTickAt = Date.now();
         const next = tick.polled ? "delayed" : "live";
@@ -288,6 +302,7 @@ class LiveHub {
 }
 
 export const liveHub = new LiveHub();
+liveHub.followTimeMachine();
 
 // ------------------------------------------------------------------ tick → candle
 

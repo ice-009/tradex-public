@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCompact, formatPrice } from "@/core/format";
 import { fetchQuotes, getSymbolInfo, liveHub, type Quote, type SymbolInfo } from "@/client/marketData";
+import { useAsOfKey } from "@/client/timeMachine";
 import {
   DEFAULT_SIZES,
   addPresetList,
@@ -77,20 +78,29 @@ function useQuotes(symbols: string[]) {
     [flush],
   );
 
+  // Time Machine: that day's closes, loaded once per day (they don't change).
+  const asOf = useAsOfKey();
+  const shownFor = useRef(asOf);
   useEffect(() => {
     const list = key ? key.split(",") : [];
     let cancelled = false;
+    // Another day: drop the other day's prices rather than show them until the new ones arrive.
+    if (shownFor.current !== asOf) {
+      shownFor.current = asOf;
+      pending.current = new Map();
+      setQuotes({});
+    }
     const refresh = () =>
       fetchQuotes(list).then((items) => {
         if (!cancelled) items.forEach(queue);
       });
     void refresh();
-    const timer = setInterval(refresh, list.length > BIG_LIST ? BIG_LIST_REFRESH_MS : QUOTE_REFRESH_MS);
+    const timer = asOf ? null : setInterval(refresh, list.length > BIG_LIST ? BIG_LIST_REFRESH_MS : QUOTE_REFRESH_MS);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     };
-  }, [key, queue]);
+  }, [key, queue, asOf]);
 
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 

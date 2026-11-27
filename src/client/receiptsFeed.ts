@@ -1,11 +1,15 @@
 import { useEffect, useSyncExternalStore } from "react";
 import type { ReceiptsResponse } from "@/contracts/api";
 import { api } from "@/client/api";
+import { useTimeMachine } from "@/client/timeMachine";
 
 // The report-card half of the receipts (#29): every score factor's and
 // screen's card in brief, and the factors whose card passes (the setup score's
 // gate). Loaded on first use and refreshed while something shows it — a card
 // changes only when the Lab is run again.
+//
+// Not in the Time Machine: a card is the Lab's run over periods up to today, so
+// on a past day the score is shown ungated and no receipt is shown.
 
 const REFRESH_MS = 10 * 60 * 1000;
 const ERROR_RETRY_MS = 60_000;
@@ -43,8 +47,14 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** The receipts' card summaries (null until loaded). Loads them on first use. */
+/** The receipts' card summaries (null until loaded, and in the Time Machine). Loads them on first use. */
 export function useReceiptCards(): ReceiptsResponse | null {
+  const pastDay = useTimeMachine((state) => state.asOf !== null);
+  const cards = useLiveReceiptCards();
+  return pastDay ? null : cards;
+}
+
+function useLiveReceiptCards(): ReceiptsResponse | null {
   useEffect(() => {
     users += 1;
     if (users === 1 && !timer) void load();

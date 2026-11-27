@@ -11,6 +11,8 @@ import { LayoutNameDialog, LayoutToast, type LayoutDialogState } from "./Layouts
 import { SymbolSearch } from "./SymbolSearch";
 import { TopBar } from "./TopBar";
 import { HubBanner } from "./HubBanner";
+import { LiveOnly, TimeMachineBanner } from "./TimeMachine";
+import { useTimeMachine } from "@/client/timeMachine";
 import { ScreenerPanel } from "./ScreenerPanel";
 import { ComparePanel } from "./ComparePanel";
 import { AlertWatcher } from "./Alerts";
@@ -33,6 +35,17 @@ import { BottomDock, WidgetBar } from "./Dock";
 import { Splitter } from "./Splitter";
 import { api } from "@/client/api";
 import { DEFAULT_SIZES, addPresetList, setSizes, setState, type LayoutId } from "./store";
+
+/**
+ * Bottom panels that read today's data (Compare scores today's quotes, Day High/Low is a live
+ * scan) or periods up to today (backtests, the Lab): off in the Time Machine, with the reason.
+ */
+const PAST_OFF: Partial<Record<string, string>> = {
+  compare: "Compare (it scores today's data)",
+  highlow: "The Day High/Low scan (it is live)",
+  backtest: "The backtester (its periods run up to today)",
+  lab: "The Signal Lab (its periods run up to today)",
+};
 
 /** Matches the CSS breakpoint where the sidebar turns into a drawer. */
 const NARROW_MAX_WIDTH = 1100;
@@ -74,7 +87,9 @@ function Workspace() {
   const [guide, setGuide] = useState<"smc" | null>(null);
   const [layoutDialog, setLayoutDialog] = useState<LayoutDialogState | null>(null);
   useScreenerPolling(useTerminal((state) => state.screener.universe));
-  useHighLowPolling(screenerOpen && screenerView === "highlow");
+  // The Time Machine shows a past day: live-only panels and watchers are off.
+  const pastDay = useTimeMachine((state) => state.asOf !== null);
+  useHighLowPolling(screenerOpen && screenerView === "highlow" && !pastDay);
   usePlanPolling();
 
   // First run after this update: make the full F&O list the default watchlist (once — later changes stick).
@@ -164,12 +179,28 @@ function Workspace() {
       <div className="tx-root">
         <TopBar onLayoutDialog={setLayoutDialog} />
         <HubBanner />
+        <TimeMachineBanner />
         <div className="tx-body">
           <DrawingToolbar />
           <div className={`tx-center ${screenerOpen && screenerMax ? "is-max" : ""}`}>
             <ChartGrid layout={layout} cellCount={cellCount} activeCell={activeCell} />
             <LayoutGuide />
-            {screenerOpen && (screenerView === "compare" ? <ComparePanel /> : screenerView === "highlow" ? <HighLowPanel /> : screenerView === "backtest" ? <BacktestPanel /> : screenerView === "lab" ? <LabPanel /> : screenerView === "plan" ? <PlanPanel /> : <ScreenerPanel />)}
+            {screenerOpen &&
+              (pastDay && PAST_OFF[screenerView] ? (
+                <LiveOnly what={PAST_OFF[screenerView]} />
+              ) : screenerView === "compare" ? (
+                <ComparePanel />
+              ) : screenerView === "highlow" ? (
+                <HighLowPanel />
+              ) : screenerView === "backtest" ? (
+                <BacktestPanel />
+              ) : screenerView === "lab" ? (
+                <LabPanel />
+              ) : screenerView === "plan" ? (
+                <PlanPanel />
+              ) : (
+                <ScreenerPanel />
+              ))}
             <BottomDock />
           </div>
           {watchlistOpen && <Watchlist />}
@@ -189,8 +220,8 @@ function Workspace() {
       {guide === "smc" && <SmcGuide onClose={() => setGuide(null)} />}
       {layoutDialog && <LayoutNameDialog dialog={layoutDialog} onClose={() => setLayoutDialog(null)} />}
       <LayoutToast />
-      <AlertWatcher />
-      <BtstAlertWatcher />
+      {!pastDay && <AlertWatcher />}
+      {!pastDay && <BtstAlertWatcher />}
       <QualityAlertWatcher />
     </TerminalUIContext.Provider>
   );

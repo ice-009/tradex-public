@@ -30,6 +30,8 @@ import { Icons } from "./icons";
 import { RunStampBar, type Replay } from "./RunStampBar";
 import { ReceiptLine } from "./Receipt";
 import { useScreenReceipts } from "./useReceipts";
+import { useTimeMachine } from "@/client/timeMachine";
+import { LiveOnlyNote } from "./TimeMachine";
 
 // The Plan tab: today's trades to take (from screens with a tested edge in
 // this market), how many lots, how to get in and out; your open trades with
@@ -101,8 +103,7 @@ export function PlanPanel() {
           <TodaysPlan plan={plan} state={state} evidence={ready} trades={trades} live={Boolean(data?.asOf?.live)} eodDate={data?.asOf?.eodDate ?? null} onSizing={() => setSettingsOpen(true)} />
         </div>
         <div className="tx-plan-col">
-          <OpenTrades trades={trades} error={tradesError} />
-          <Journal trades={trades} />
+          <JournalColumn trades={trades} error={tradesError} />
         </div>
         <div className="tx-plan-foot">
           {ready ? (
@@ -556,9 +557,7 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
         <button type="button" className="tx-icon-btn" title="Save this plan on the chart as a Long Position" onClick={() => drawPlanOnChart({ screen, row: idea.row, rr: riskReward(idea.row) })}>
           <Icons.long size={15} />
         </button>
-        <button type="button" className="tx-btn-outline tx-plan-took" onClick={() => setTaking(!taking)} title="Record that you took this trade">
-          {taking ? "Cancel" : "I took it"}
-        </button>
+        <TookItButton taking={taking} onClick={() => setTaking(!taking)} />
       </span>
       {taking && <TakeForm idea={idea} price={tick?.ltp ?? null} onDone={() => setTaking(false)} />}
     </li>
@@ -634,6 +633,28 @@ function TakeForm({ idea, price, onDone }: { idea: PlanIdea; price: number | nul
 // ------------------------------------------------------------------ open trades
 
 const REASON_FOR: Record<TradeTrack["action"], ExitReason> = { "sell-open": "open", overnight: "open", stop: "stop", target: "target", trail: "trail", time: "time", hold: "manual" };
+
+/** Your open trades and journal; in the Time Machine (a past day) they're live records, so not shown. */
+function JournalColumn({ trades, error }: { trades: TradesResponse | null; error: string | null }) {
+  const pastDay = useTimeMachine((state) => state.info?.label ?? state.asOf);
+  if (pastDay) return <LiveOnlyNote>Your open trades and journal are live records, so they aren&apos;t shown as of {pastDay}. The plan above is the one that day would have had.</LiveOnlyNote>;
+  return (
+    <>
+      <OpenTrades trades={trades} error={error} />
+      <Journal trades={trades} />
+    </>
+  );
+}
+
+/** "I took it" records a real trade: off in the Time Machine (paper trading in a replay is #32). */
+function TookItButton({ taking, onClick }: { taking: boolean; onClick: () => void }) {
+  const pastDay = useTimeMachine((state) => state.asOf !== null);
+  return (
+    <button type="button" className="tx-btn-outline tx-plan-took" onClick={onClick} disabled={pastDay} title={pastDay ? "The Time Machine shows a past day: your journal holds real trades only" : "Record that you took this trade"}>
+      {taking ? "Cancel" : "I took it"}
+    </button>
+  );
+}
 
 function OpenTrades({ trades, error }: { trades: TradesResponse | null; error: string | null }) {
   const open = useMemo(() => (trades?.trades ?? []).filter((trade) => trade.status === "open"), [trades]);
