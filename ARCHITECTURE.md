@@ -254,6 +254,8 @@ The split is per bucket because NIFTY spent most of 2022–24 above its 200-day 
 
 The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later). Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`.
 
+**Risk model and exposure (`src/core/risk`, issue #40).** `GET /api/plan/returns?symbols=` (services/riskReturns.ts) sends the last 120 sessions of daily log returns of your open trades and the plan's ideas, on NIFTY's sessions, from the screener's stored bars (Time Machine: bars up to that day only). In the browser, `model.ts` builds a covariance shrunk toward constant correlation (Ledoit–Wolf intensity, `covariance.ts`), each stock's daily σ and OLS beta to NIFTY. `exposure.ts` adds up open + planned positions: notional, ₹ at the stops (gross) and correlated (√(rᵀCr)), effective bets, ₹ beta, 1-day σ, the historical worst-5% day, sectors, and single-linkage clusters (ρ ≥ the threshold, or same industry and ρ ≥ 0.3). `sizing.ts` is the plan's optional step 6: with **correlation sizing** on (plan settings; off by default), an idea whose cluster would carry more than `maxCorrelatedRisk` × the risk per trade gets fewer lots, or is set aside in `plan.correlated` without taking a slot, with the reason on it. The Plan tab's **Exposure** section (terminal/Exposure.tsx) shows all of it, with a what-if tick per idea and a small correlation map.
+
 ### The sealed plan: a tamper-evident ledger (`seal.ts`, `sealSchedule.ts`, issue #33)
 
 A backtest can be tuned after the fact; a live record can't. The server seals each trading day's plan at fixed times into an append-only hash chain, so the record of what the plan said can't be edited later without it showing.

@@ -456,6 +456,27 @@ export interface TradesResponse {
   journal: JournalSummary;
 }
 
+/**
+ * GET /api/plan/returns?symbols=A,B[&asOf=YYYY-MM-DD]: the last 120 sessions of daily log returns
+ * of the stocks and NIFTY, lined up on NIFTY's sessions; the browser builds issue #40's risk model
+ * from them (src/core/risk). In the Time Machine the window ends at that day's close.
+ */
+export type RiskReturnsResponse =
+  | {
+      status: "ready";
+      /** Day keys, oldest first; null in a series = no bar that session (or the one before). */
+      sessions: number[];
+      benchmark: Array<number | null>;
+      returns: Record<string, Array<number | null>>;
+      /** Each stock's industry (NSE's index lists: today's classification). */
+      industries: Record<string, string>;
+      /** Stocks with no daily bars in the window. */
+      missing: string[];
+      notes: string[];
+    }
+  | { status: "syncing"; progress: { done: number; total: number } }
+  | { status: "error"; error: string };
+
 /** POST /api/trades: "I took it". */
 export interface TradeCreateRequest {
   symbol: string;
