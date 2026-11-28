@@ -29,6 +29,7 @@ import type { PaperSummary, PaperTradeRow } from "@/core/plan/paper";
 import type { FactorKey, StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
 import type { MarketRegime } from "@/core/screener/regime";
+import type { IvRank, OptionDay, OptionPoint, OptionView } from "@/core/options/summary";
 
 export type { ResultsEvent };
 
@@ -737,6 +738,63 @@ export interface FuturesResponse {
   /** Tickers are app symbols too: chart and quote them like a stock (e.g. "SBIN26NOVFUT"). Expiry is a day key. */
   contracts: Array<{ ticker: string; expiry: number; kind: "near" | "next" }>;
 }
+
+// ------------------------------------------------------------------ GET /api/options?symbol&range (issue #36)
+
+/** How much IV history the Options panel asks for. Every range reaches at least the year the IV rank needs. */
+export type OptionRange = "1y" | "5y" | "all";
+
+/** Why there are no option summaries to show: no hub, a hub too old for them (404), nothing stored yet, nothing on or before the day, or another error. */
+export type OptionsUnavailableReason = "no_hub" | "old_hub" | "not_ready" | "not_found" | "error";
+
+/**
+ * An underlying's daily option summaries (the Market Data Hub's, from NSE's
+ * F&O bhavcopy), as of today or the Time Machine's day: nothing after it.
+ */
+export type OptionsResponse =
+  | {
+      status: "ready";
+      /** The hub ticker asked for (a future's underlying: SBIN26NOVFUT → SBIN). */
+      symbol: string;
+      range: OptionRange;
+      /** The newest option day on or before the day shown, in full. */
+      day: OptionDay;
+      view: OptionView;
+      /** iv30 against the 365 days up to `day` (null with under 60 days of it). */
+      rank: IvRank | null;
+      /** Every day of the range up to `day`, oldest first (for the IV chart). */
+      history: OptionPoint[];
+      /** The hub's first stored option day (any underlying). */
+      knownFrom: string | null;
+      /** The hub's newest stored option day; null in the Time Machine (it is after the day shown). */
+      lastDate: string | null;
+      notes: string[];
+      asOf?: AsOfInfo;
+    }
+  | { status: "empty"; symbol: string; range: OptionRange; message: string; knownFrom: string | null; lastDate: string | null; asOf?: AsOfInfo }
+  | { status: "unavailable"; symbol: string; reason: OptionsUnavailableReason; message: string; asOf?: AsOfInfo };
+
+/** One underlying in the day's cross-section (GET /api/options/day). */
+export interface OptionsDayRow {
+  symbol: string;
+  kind: "stock" | "index";
+  spot: number | null;
+  iv30: number | null;
+  /** The hub's rank of iv30 against the symbol's own prior year (0–100; null with under 60 days). */
+  ivPercentile: number | null;
+  nearIv: number | null;
+  /** The near straddle's move to expiry, % of the forward, and the days to that expiry. */
+  movePct: number | null;
+  moveDays: number | null;
+  pcrOi: number | null;
+  skew25: number | null;
+  optionToStock: number | null;
+}
+
+/** Every underlying's option summary on the newest stored day on or before today / the Time Machine's day. */
+export type OptionsDayResponse =
+  | { status: "ready"; day: number; date: string; rows: OptionsDayRow[]; notes: string[]; asOf?: AsOfInfo }
+  | { status: "unavailable"; reason: OptionsUnavailableReason; message: string; asOf?: AsOfInfo };
 
 // ------------------------------------------------------------------ the Market Data Hub's health
 

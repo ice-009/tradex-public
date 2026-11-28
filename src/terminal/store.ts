@@ -67,7 +67,7 @@ export interface WatchList {
   symbols: string[];
 }
 
-export type SidePanel = "watchlist" | "movers" | "sectors" | "results" | "alerts";
+export type SidePanel = "watchlist" | "movers" | "sectors" | "results" | "alerts" | "options";
 
 /** A price alert: fires once when the price crosses `price` in `direction`. */
 export interface PriceAlert {

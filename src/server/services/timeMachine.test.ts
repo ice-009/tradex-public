@@ -68,7 +68,7 @@ function bars(symbol: string, variant: Variant) {
   return out;
 }
 
-const hub = vi.hoisted(() => ({ variant: "A" as "A" | "B", candleCalls: [] as Array<{ to: number | undefined }> }));
+const hub = vi.hoisted(() => ({ variant: "A" as "A" | "B", candleCalls: [] as Array<{ to: number | undefined }>, optionDates: [] as Array<string | undefined> }));
 
 /** The F&O list on a day: OLDCO leaves it after D in B; NEWCO joins it after D in B. */
 function members(t: number, variant: Variant): string[] {
@@ -104,6 +104,13 @@ const fake = {
   symbolChanges: async () => ({ count: 0, changes: [] }),
   resultsCalendar: async (from: string, to: string) => ({ from, to, fetchedAt: 1, events: hub.variant === "B" ? [{ symbol: "S02", date: "2019-06-20", day: day("2019-06-20"), company: "S02", purpose: "Financial Results" }] : [] }),
   indices: async () => ({ indices: [], baskets: [], sectors: [], basketMethod: "" }),
+  // Option summaries (#36): the newest session on or before `date`; B's IVs after D are far higher.
+  optionDay: async ({ date }: { date?: string }) => {
+    hub.optionDates.push(date);
+    const t = SESSIONS.filter((session) => session <= day(date ?? iso(LAST))).at(-1)!;
+    const iv30 = (symbol: string) => 0.2 + (seedOf(symbol) % 100) / 1000 + (hub.variant === "B" && t > D ? 0.5 : 0);
+    return { date: iso(t), day: t, count: STOCKS.length, rows: STOCKS.map((symbol) => ({ symbol, day: t, date: iso(t), kind: "stock", iv30: iv30(symbol), ivPercentile: 40, pcrOi: 0.9, flags: [], near: null, next: null })) };
+  },
 };
 
 vi.mock("@/server/providers/hub", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/server/providers/hub")>()), hubClient: () => fake }));
@@ -198,6 +205,11 @@ describe("the Time Machine reads nothing after the day shown", { timeout: 120_00
     expect(a.screener.universe?.count).toBe(31); // 30 stocks + OLDCO, on the list that day
     // The hub was asked for bars ending at D, and sent later ones anyway: they were cut off.
     expect(hub.candleCalls.every((call) => call.to !== undefined && call.to <= D)).toBe(true);
+    // Option facts (#36) as of D: asked for that day only, and on the rows.
+    expect(hub.optionDates.length).toBeGreaterThan(0);
+    expect(hub.optionDates.every((date) => date === iso(D))).toBe(true);
+    const rows = Object.values(a.screener.results ?? {}).flat();
+    expect(rows.some((row) => row.options?.day === D)).toBe(true);
     expect(normal(b.screener)).toEqual(normal(a.screener));
   });
 

@@ -9,7 +9,7 @@ import { HubStream } from "./stream";
 
 export { hubConfig, hubMode } from "./config";
 export { DEFAULT_ADJUST, HubClient, HubError, isEndOfDay } from "./client";
-export type { HubAdjust, HubAdjustment, HubAdjustments, HubCandle, HubCandles, HubCandlesBatch, HubContracts, HubIndices, HubMembers, HubOiDay, HubOiRow, HubQuote, HubStatus, HubTimeframe } from "./client";
+export type { HubAdjust, HubAdjustment, HubAdjustments, HubCandle, HubCandles, HubCandlesBatch, HubContracts, HubIndices, HubMembers, HubOiDay, HubOiRow, HubOptionDay, HubOptionSummary, HubQuote, HubStatus, HubTimeframe } from "./client";
 
 // The app's one hub client, one price stream and a cached view of the hub's
 // health (from GET /v1/status), built on first use from HUB_URL / HUB_KEY.

@@ -2,6 +2,7 @@
 
 import { MONTHS } from "@/core/format";
 import { oiTag, oiTooltip, type OiFact } from "@/core/market/openInterest";
+import { ivText, type OptionFact } from "@/core/options/summary";
 import { receiptLine, type Receipt } from "@/core/lab/receipt";
 import { grade, type FactorKey, type SetupScore } from "@/core/screener/score";
 import { ReceiptLine } from "./Receipt";
@@ -17,6 +18,30 @@ export function OiChip({ fact }: { fact: OiFact }) {
   return (
     <span className="tx-tag tx-tag-oi" title={oiTooltip(fact, label)}>
       {oiTag(fact)}
+    </span>
+  );
+}
+
+/**
+ * Options on the hub's newest option day (#36), e.g. "IV 32% · p84": the
+ * 30-day IV and its percentile against the stock's own prior year. Neutral,
+ * like the OI tag: no option signal has passed the Signal Lab, so it isn't scored.
+ */
+export function IvChip({ fact }: { fact: OptionFact }) {
+  const date = new Date(fact.day);
+  const label = `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`;
+  const tip = [
+    `Options on ${label}: 30-day ATM IV ${ivText(fact.iv30)}`,
+    fact.ivPercentile !== null ? `Higher than on ${fact.ivPercentile.toFixed(0)}% of the days in the year up to then` : "Too few days in the year before to rank it (needs 60)",
+    fact.movePct !== null ? `Near straddle prices a move of ±${fact.movePct.toFixed(1)}% over ${fact.moveDays} days` : null,
+    fact.pcrOi !== null ? `Put–call ratio (OI) ${fact.pcrOi.toFixed(2)}` : null,
+    "Information only, not scored: no option signal has passed the Signal Lab yet.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <span className="tx-tag tx-tag-iv" title={tip}>
+      IV {(fact.iv30 * 100).toFixed(0)}%{fact.ivPercentile !== null ? ` · p${fact.ivPercentile.toFixed(0)}` : ""}
     </span>
   );
 }

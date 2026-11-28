@@ -3,7 +3,7 @@ import "server-only";
 import type { ScreenerResponse, TrackResult } from "@/contracts/api";
 import { ARCHIVE_START } from "@/core/backtest/phases";
 import { spliceBenchmark } from "@/core/market/longHistory";
-import { dayLabel } from "@/core/reference/timeMachine";
+import { dayLabel, isoDay } from "@/core/reference/timeMachine";
 import type { UniverseMember } from "@/core/reference/pointInTime";
 import { computeFeatures } from "@/core/screener/features";
 import { runTrackRecord } from "@/core/screener/backtest";
@@ -14,6 +14,7 @@ import { sectorIndexStat, sectorSources, strengthRanks, type SectorIndexStat, ty
 import { sectorRrg } from "@/core/sector/rrg";
 import { RS_BENCHMARK } from "@/core/sector/series";
 import { latestOiFacts } from "@/server/providers/foData";
+import { optionFactsNow, optionFactsWithin, type OptionFacts } from "@/server/providers/options";
 import { DEEP_HISTORY_DAYS } from "@/server/providers/dailyBars";
 import { updateBtstRecord } from "@/server/services/btstRecord";
 import type { ScreenerRow } from "@/core/screener/screens";
@@ -102,7 +103,7 @@ export async function runScreener(universeId: UniverseId, useLive: boolean, past
   // Futures OI from the hub's newest F&O bhavcopy day (GET /v1/fo/oi/day, cached; never waits).
   // Shown next to the setup, never scored: OI buildup showed no edge on its own in testing.
   const stored = (symbol: string) => screenerStore.getBars(symbol);
-  const { results, market, regime, sets } = screenUniverse({ covered, members, stored, benchmark: stored(BENCHMARK), rrgBenchmark: sectorBenchmark.length ? stored(RS_BENCHMARK) : [], live, sources, ban, oi: latestOiFacts(), firstSeen: (found) => stampFirstSeen(universeId, found) });
+  const { results, market, regime, sets } = screenUniverse({ covered, members, stored, benchmark: stored(BENCHMARK), rrgBenchmark: sectorBenchmark.length ? stored(RS_BENCHMARK) : [], live, sources, ban, oi: latestOiFacts(), options: liveOptionFacts(), firstSeen: (found) => stampFirstSeen(universeId, found) });
   const now = Date.now();
   // BTST live record: matches seen 3:10–3:25 PM, settled at the next open (no extra API calls).
   if (useLive) updateBtstRecord({ results, live, banned: new Set(ban.symbols), now });
@@ -225,7 +226,9 @@ async function runScreenerAsOf(universeId: UniverseId, past: PastDay): Promise<S
   const missing = found.symbols.length - covered.length;
   if (missing) notes.push(`${missing} of the list's ${found.symbols.length} stocks have no daily bars up to that day (not listed yet, or not held by the hub).`);
   notes.push("No live bar, no open-interest tag (the hub keeps today's) and no BTST live record in the Time Machine.");
-  const { results, market, regime, sets } = screenUniverse({ covered, members: found.members, stored: found.barsOf, benchmark: found.benchmark, rrgBenchmark: found.sources.size ? found.barsOf(RS_BENCHMARK) : [], live: new Map(), sources: found.sources, ban: found.ban, oi: null });
+  // Option facts as of D: the hub's newest option day on or before D, its iv30 ranked against the year before (#36).
+  const options = await optionFactsWithin(isoDay(past.day), true, OPTION_FACTS_WAIT_MS);
+  const { results, market, regime, sets } = screenUniverse({ covered, members: found.members, stored: found.barsOf, benchmark: found.benchmark, rrgBenchmark: found.sources.size ? found.barsOf(RS_BENCHMARK) : [], live: new Map(), sources: found.sources, ban: found.ban, oi: null, options });
   return {
     status: "ready",
     syncing: false,
@@ -254,6 +257,8 @@ interface ScreenInput {
   sources: Map<string, SectorSource>;
   ban: { available: boolean; tradeDate: number | null; symbols: string[] };
   oi: ReturnType<typeof latestOiFacts>;
+  /** Option facts per symbol (iv30, its rank, the straddle's move): shown, never scored. */
+  options?: OptionFacts | null;
   firstSeen?: (results: Record<string, ScreenerRow[]>) => void;
 }
 
@@ -298,6 +303,8 @@ function screenUniverse(input: ScreenInput) {
     for (const row of rows) {
       const fact = oi?.bySymbol.get(row.symbol);
       if (fact) row.oi = fact;
+      const option = input.options?.bySymbol.get(row.symbol);
+      if (option) row.options = option;
       if (row.facts) {
         row.facts.sectorPct = sectorPct.get(row.industry || "Other") ?? null;
         row.facts.inBan = banned.has(row.symbol);
@@ -306,6 +313,18 @@ function screenUniverse(input: ScreenInput) {
     }
   }
   return { results: byScreen, market, regime, sets };
+}
+
+/** How long a Time Machine screener run waits for the day's option facts the first time (then they are cached). */
+const OPTION_FACTS_WAIT_MS = 2_000;
+/** Option facts older than this aren't shown live (a week of holidays at most), like the OI tag. */
+const MAX_OPTION_AGE_MS = 7 * DAY_MS;
+
+/** Today's option facts from the hub's newest option day (never waits: the next run has them). */
+function liveOptionFacts(): OptionFacts | null {
+  const today = istParts().day;
+  const facts = optionFactsNow(isoDay(today), false);
+  return facts && today - facts.day <= MAX_OPTION_AGE_MS ? facts : null;
 }
 
 // Replaying every screen over ~160 sessions is the expensive part, and it only

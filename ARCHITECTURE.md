@@ -29,10 +29,10 @@ layers below it. ESLint enforces this (`no-restricted-imports` in
 | Engine | `src/core` | Indicators, patterns, screens, scoring, backtest, tick and futures maths, IST session rules, pacing against the broker budget. Pure functions: no I/O, no React, no Next. | `@/core` |
 | Contracts | `src/contracts/api.ts` | The JSON body each `/api` route returns. Types only. | `@/core` (types) |
 | Data engine | `src/server/data` | One pipeline for market data whatever the source: source adapters, routing with fallback, caches, and the live price stream. See below. | `@/core`, `@/contracts`, `@/server` |
-| Providers | `src/server/providers` | The Market Data Hub client (`hub/`) and what is built on it: the daily-bar store (`dailyBars`, `dailyStore`), reference data (`reference`: lots, ban list, results calendar; `referenceHistory`: their past values; `asOf`: the point-in-time door the screener, plan and backtests must use), F&O data (`foData`: OI, membership), futures contracts (`futures`), universes; plus symbols, sample data and the trade-record database. | same |
+| Providers | `src/server/providers` | The Market Data Hub client (`hub/`) and what is built on it: the daily-bar store (`dailyBars`, `dailyStore`), reference data (`reference`: lots, ban list, results calendar; `referenceHistory`: their past values; `asOf`: the point-in-time door the screener, plan and backtests must use), F&O data (`foData`: OI, membership), futures contracts (`futures`), option summaries (`options`), universes; plus symbols, sample data and the trade-record database. | same |
 | Services | `src/server/services` | One use case per file: load data from providers, run the engine, return a contract type. | same |
 | Routes | `src/app/api/**/route.ts` | `export const GET = authed(...)`: read params, call one service, `NextResponse.json`. No logic. | `@/server`, `@/contracts` |
-| Client data | `src/client` | `api.ts` (typed fetchers, the only place that knows URLs) plus feeds: `marketData` (history, quotes, live ticks), `screenerFeed`, `highLowFeed`, `lotsFeed`, `futuresFeed`, `usageFeed` (the hub's health and budget). | `@/core`, `@/contracts`, `@/client` |
+| Client data | `src/client` | `api.ts` (typed fetchers, the only place that knows URLs) plus feeds: `marketData` (history, quotes, live ticks), `screenerFeed`, `highLowFeed`, `lotsFeed`, `futuresFeed`, `optionsFeed`, `usageFeed` (the hub's health and budget). | `@/core`, `@/contracts`, `@/client` |
 | Renderer | `src/chart` | Canvas chart engine, drawings, annotations, theme. Draws engine output; fetches nothing. | `@/core`, `@/chart` |
 | UI | `src/terminal`, `src/components` | React components and UI state (`store`, `uiPrefs`, `presets`, `ideaActions`). | everything except `@/server` and `@/app` |
 
@@ -63,7 +63,7 @@ npm test        # unit tests only
 
 ## Market data: the Market Data Hub
 
-Tradex fetches no market data itself. Everything — candles, quotes, live prices, daily bars with delivery %, open interest, the F&O list, lot sizes, the ban list, results dates, futures contracts — comes from a [Market Data Hub](https://github.com/ice-009/market-data-hub): a separate service that owns the one broker login, its request budget and live socket, and NSE's daily files, and serves them to every app over HTTP with an API key (`HUB_URL`, `HUB_KEY`). Tradex's key needs only the read scopes `history`, `live` and `fo`; backfills and downloads are run on the hub.
+Tradex fetches no market data itself. Everything — candles, quotes, live prices, daily bars with delivery %, open interest, the F&O list, lot sizes, the ban list, results dates, futures contracts, daily option summaries — comes from a [Market Data Hub](https://github.com/ice-009/market-data-hub): a separate service that owns the one broker login, its request budget and live socket, and NSE's daily files, and serves them to every app over HTTP with an API key (`HUB_URL`, `HUB_KEY`). Tradex's key needs only the read scopes `history`, `live` and `fo`; backfills and downloads are run on the hub.
 
 `src/hubOnly.test.ts` keeps it that way: no code under `src/` may mention Fyers or NSE's download hosts, and on the server only the hub client may call `fetch()`.
 
@@ -75,6 +75,7 @@ Tradex fetches no market data itself. Everything — candles, quotes, live price
    /v1/fo/oi/day ─────────────────────────────▶ providers/foData.ts ─▶ the screener's OI tag
    /v1/fo/members?from&to ────────────────────▶ providers/foData.ts ─▶ point-in-time F&O list for backtests and evidence
    /v1/fo/contracts ──────────────────────────▶ providers/futures.ts ─▶ order ticket, Day High/Low futures segment
+   /v1/options/summary, /v1/options/day ──────▶ providers/options.ts ─▶ /api/options(/day): Options panel; the screener's IV chip
    /v1/lots, /v1/fo/ban, /v1/results-calendar ▶ providers/reference.ts ─┐
    /v1/lots/history, /v1/fo/ban/history,                                ├▶ providers/asOf.ts ─▶ screener, plan, backtests
    /v1/adjustments/batch, /v1/symbols/changes ▶ providers/referenceHistory.ts ┘   (the only door to reference data for them)
@@ -134,6 +135,15 @@ Each long run's warnings name the stocks joined across renames, those the hub do
 - **Point-in-time F&O membership** for backtests and the plan's evidence: `/v1/fo/members?from&to` over the stored span (400 days per request), cached 6 hours, read through `asOf` (below). A day without a file uses the file before it, up to a week back (holidays); further gaps are unknown and fall back to today's list (`src/core/backtest/universe.ts`).
 - **Futures contracts**: `/v1/fo/contracts?symbol=` lists the near and next month as hub tickers with their real expiries and the lot, cached until the near month expires. The order ticket picks the contract (`pickContract`: the near month unless it expires inside the holding period) and reads the basis from one quote of the stock and its future. The Day High/Low sweep loads the F&O list's contracts in the background, two at a time, and sweeps each stock's near-month future once its ticker is known. Right after an expiry the hub may list only one contract (as near) until the evening's file. Tradex never builds a contract name itself.
 
+### Option summaries (`providers/options.ts`, `services/options.ts`, `src/core/options`, issue #36)
+
+The hub reads every option row of NSE's F&O bhavcopy (back to 4 Jun 2001) and stores **one summary per underlying per day** (market-data-hub#30): call/put OI, its change and volume, put–call ratios, and for the near and next expiry the forward, ATM strike and straddle, ATM/call/put IV (Black-76), 25-delta put and call IV, the OI-weighted call–put IV spread, max pain and the OI walls; plus a constant-30-day ATM IV (`iv30`), option-to-stock volume and flags (`LOT_ESTIMATED`, `FORWARD_PARITY`, `ATM_UNTRADED`…). Tradex recomputes none of it.
+
+- `/v1/options/summary?symbol&from&to` → `/api/options?symbol&range` (1y, 5y, all): the newest day in full and the IV history. A future's chart asks for its underlying. `src/core/options/summary.ts` turns the day into what the **Options** side panel shows: term structure (near vs next ATM IV, `iv30`), skew, the move the near straddle prices (forward ∓ straddle; one standard deviation ≈ straddle / 0.8), max pain and walls against the spot, and the flags in words. The IV rank (min–max) and percentile are computed from the history over the 365 days up to the day, with the number of days (null under 60, as the hub's own `ivPercentile`).
+- `/v1/options/day?date` → `/api/options/day`: every underlying on the newest stored day on or before the date (the panel's **Market** view), and the screener's **IV chip** (`row.options`: iv30, the hub's percentile, the straddle's move). It is information only and never scored: option signals go through the Signal Lab first (#38). Live, the chip is shown when the option day is at most a week old, like the OI tag.
+- Cached in memory: 30 minutes for a range ending today, 6 hours for one ending on a past day; a failure for a minute. The hub's answers: `404` from a hub before #30 → "update the hub"; `503 not_ready` (nothing stored yet; not retried) → "run `hub data nse-history --only options`"; `404` from `/v1/options/day` with "No option summaries stored on or before…" → nothing that early.
+- Prices in a summary (spot, forward, strikes, straddle, levels) are as traded that day; a later split or bonus isn't applied, and the panel says so.
+
 ### Point in time: `asOf` (`providers/asOf.ts`, `src/core/reference/pointInTime.ts`)
 
 The screener, the plan and the backtester read reference data only through one API, so every number can be asked "as it was known on day D":
@@ -173,6 +183,7 @@ The whole terminal as it was at a past day's close, with nothing from after it. 
 | Watchlist (`/api/quotes`) | D's close and its change on the session before | read from the hub up to D; marked `delayed`, so no alert fires |
 | Screener, track record | `runScreener(…, past)`: bars up to D (the store when it covers the 640-day look-back, else read from the hub for that day, `pastBars`), that day's F&O list, ban list and sector indices (`asOf(D)`); no live bar, OI tag, first-seen times or BTST record | index lists and industries are today's snapshots and the notes say so (survivorship); the track record counts only signals whose holding period ended by D |
 | Plan evidence (`/api/plan/evidence`) | the same five years the live plan uses, ending D, on bars up to D adjusted as of D; F&O list and lots of each session, with D's own as the stand-in (never today's); kept in memory per day | a signal needs its whole holding period inside the bars (`replaySignals`), so only trades closed by D count (`evidenceAsOf.test.ts`); market state from NIFTY up to D; no live record |
+| Options (`/api/options`, `/api/options/day`), the screener's IV chip | the hub is asked for summaries up to D (`to`, `date` = D); its iv30 percentile ranks against the year up to each day only | `throughDay` cuts whatever comes back at D, and a cross-section dated after D is refused (`services/options.test.ts`: two hubs differing after D, one ignoring `to`, give the same answer); the hub's newest stored day isn't said |
 | Lots (`/api/lots`), results (`/api/results`) | lots as traded on D (NSE's files have them from 8 Jul 2024; before, ≈ ₹5 lakh at D's close stands in, said); results dated D−7…D | upcoming dates aren't stored with when they were announced, so none are shown |
 | Live-only | Day High/Low, Compare, Backtest and Lab panels, price alerts, the order ticket, the BTST alerts, the journal and Lab receipts are off or labelled; "I took it" becomes "Paper take" (below) | — |
 

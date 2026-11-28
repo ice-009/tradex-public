@@ -43,6 +43,7 @@
 - **Market context:** a regime badge (NIFTY vs its 50/200-day averages plus breadth), sector strength (each sector index's 1-month return, from the hub's index history back to 2012; a clearly labelled synthetic equal-weight basket where no NSE index reaches back that far) and the NSE **F&O ban list** all feed the score. Relative strength is volatility-adjusted (6 and 12 months) with credit for trading near the 52-week high.
 - **Track record** shows how often each screen's past signals hit target before stop. **Compare** ranks a whole watchlist side by side.
 - Live watchlists (every F&O stock, grouped by sector), market movers, sector strength, an NSE results calendar and price alerts.
+- An **Options** panel (right sidebar): the charted stock's or index's implied volatility from NSE's F&O archive back to 2001 — near, next and 30-day ATM IV, its rank against the past year, 25-delta skew, the put–call ratio, max pain and the OI walls, the move the ATM straddle prices to expiry, and an IV history chart — plus every underlying that day, sortable by IV rank. Information only: option signals aren't scored until they pass the Signal Lab.
 - A **Day High / Low** scanner for F&O cash and near-month futures.
 - A futures **order ticket helper**: the right contract, basis-adjusted levels, lots sized from your max loss, and GTT OCO prices to copy into your broker.
 
@@ -155,6 +156,7 @@ Without `HUB_URL` and `HUB_KEY` (or while the hub is unreachable) Tradex shows a
 | Live prices | `GET /v1/stream` (Server-Sent Events) |
 | Screener, backtests, plan evidence: 5 years of daily bars with delivery % (older periods read per run, back to 1994) | `GET /v1/candles/batch` |
 | OI buildup next to each F&O setup | `GET /v1/fo/oi/day` |
+| Options panel, IV chip next to each F&O setup (hub with market-data-hub#30; history after `hub data nse-history --only options`) | `GET /v1/options/summary?symbol&from&to`, `GET /v1/options/day?date` |
 | Point-in-time F&O list for backtests | `GET /v1/fo/members?from&to` |
 | Futures contract, basis and lot in the order ticket; Day High/Low futures | `GET /v1/fo/contracts`, futures tickers like `SBIN26NOVFUT` |
 | Lot sizes, F&O ban list, results calendar, F&O list | `/v1/lots`, `/v1/fo/ban`, `/v1/results-calendar`, `/v1/universe/fno` |

@@ -1,3 +1,4 @@
+import type { OptionDay } from "@/core/options/summary";
 import type { HubConfig } from "./config";
 
 // A small typed client for the Market Data Hub's /v1 API
@@ -453,6 +454,30 @@ export interface HubCalendar {
   holidays: Array<{ date: string; day: number; name: string | null; source: string; weekend: boolean }>;
 }
 
+/**
+ * GET /v1/options/summary?symbol[&from&to] (market-data-hub#30): one
+ * underlying's daily option summaries, oldest first. `knownFrom`/`lastDate`:
+ * the hub's first and newest stored option days (any underlying).
+ */
+export interface HubOptionSummary {
+  symbol: string;
+  from: string;
+  to: string;
+  knownFrom: string | null;
+  knownFromDay: number | null;
+  lastDate: string | null;
+  lastDay: number | null;
+  days: OptionDay[];
+}
+
+/** GET /v1/options/day[?date][&kind]: every underlying on the newest stored option day on or before `date`. */
+export interface HubOptionDay {
+  date: string;
+  day: number;
+  count: number;
+  rows: Array<OptionDay & { symbol: string }>;
+}
+
 // ------------------------------------------------------------------ errors
 
 /** A failed hub request. `status` is 0 for network errors and timeouts. The message never contains the key. */
@@ -488,6 +513,8 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Return this non-2xx body instead of failing (e.g. a 503 that still carries stored candles). */
   acceptPartial?: (status: number, body: unknown) => boolean;
+  /** Error codes that asking again won't change (e.g. `not_ready`: nothing stored yet), answered at once. */
+  finalCodes?: readonly string[];
 }
 
 /** Most symbols the hub takes in one quotes or stream request. */
@@ -590,7 +617,7 @@ export class HubClient {
         const detail = typeof info.error === "string" ? info.error : response.statusText || "request failed";
         const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
         error = new HubError(this.scrub(`Market Data Hub ${response.status} ${code}: ${detail}`), response.status, code, retryAfterMs, body);
-        retryable = RETRYABLE.has(response.status) && !FINAL_CODES.has(code);
+        retryable = RETRYABLE.has(response.status) && !FINAL_CODES.has(code) && !options.finalCodes?.includes(code);
         waitMs = retryAfterMs ?? this.backoff(attempt);
       } catch (caught) {
         if (caught instanceof HubError) throw caught;
@@ -779,6 +806,24 @@ export class HubClient {
   /** NSE's trading calendar between two IST dates (YYYY-MM-DD; at most 40 years). A hub before it answers 404. */
   calendar(from: string, to: string): Promise<HubCalendar> {
     return this.get<HubCalendar>("/v1/calendar", { from, to }, { retries: 0 });
+  }
+
+  /**
+   * One underlying's daily option summaries between two IST dates (YYYY-MM-DD;
+   * the hub's default is the year up to today). A hub before market-data-hub#30
+   * answers 404 not_found; one with nothing stored yet 503 not_ready (not retried).
+   */
+  optionSummary(symbol: string, range: { from?: string; to?: string } = {}): Promise<HubOptionSummary> {
+    return this.get<HubOptionSummary>("/v1/options/summary", { symbol, from: range.from, to: range.to }, { finalCodes: ["not_ready"] });
+  }
+
+  /**
+   * Every underlying's option summary on the newest stored day on or before
+   * `date` (YYYY-MM-DD; default today), optionally only stocks or indices. 404
+   * not_found when nothing is stored on or before it (or from a hub before #30).
+   */
+  optionDay(options: { date?: string; kind?: "stock" | "index" } = {}): Promise<HubOptionDay> {
+    return this.get<HubOptionDay>("/v1/options/day", { date: options.date, kind: options.kind }, { finalCodes: ["not_ready"] });
   }
 
   /** Results dates between two IST dates (YYYY-MM-DD). */
