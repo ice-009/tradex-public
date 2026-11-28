@@ -16,7 +16,7 @@ async function restricted(file: string, source: string): Promise<string[]> {
 
 describe("reference data only through asOf", { timeout: 60_000 }, () => {
   it("stops the screener, plan and backtest services reading reference providers directly", async () => {
-    for (const file of ["src/server/services/screener.ts", "src/server/services/evidence.ts", "src/server/services/backtest.ts", "src/server/services/btstRecord.ts", "src/server/services/lab.ts"]) {
+    for (const file of ["src/server/services/screener.ts", "src/server/services/evidence.ts", "src/server/services/backtest.ts", "src/server/services/btstRecord.ts", "src/server/services/lab.ts", "src/server/services/coach.ts"]) {
       expect(await restricted(file, `import { getLotSizes } from "@/server/providers/reference";\nvoid getLotSizes;\n`), file).toEqual([expect.stringMatching(/through asOf/)]);
     }
     expect(await restricted("src/server/services/backtest.ts", `import { foMembership } from "@/server/providers/foData";\nvoid foMembership;\n`)).toHaveLength(1);

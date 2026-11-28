@@ -40,6 +40,7 @@ import type {
   SymbolsResponse,
   TimeMachineResponse,
   TrackResult,
+  CoachResponse,
   TradeCloseRequest,
   TradeCreateRequest,
   PaperResponse,
@@ -170,6 +171,8 @@ export const api = {
   updateTrade: (id: string, body: TradeUpdateRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}`, body, "PATCH"),
   closeTrade: (id: string, body: TradeCloseRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}/close`, body),
   deleteTrade: (id: string) => postJson<{ ok: boolean }>(`/api/trades/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  /** The trade coach (#42) on your journal; "past" in the Time Machine. */
+  coach: () => getStatusJson<CoachResponse>("/api/trades/coach", withAsOf({})),
 
   /** Paper trading in a Time Machine replay (#32): the current session graded as of the day shown. */
   paper: (signal?: AbortSignal) => getJson<PaperResponse>("/api/paper", withAsOf({}), signal),

@@ -1,0 +1,10 @@
+/* The trade coach (#42) in the Plan tab's journal column. */
+.tx-coach-findings { margin: 0 0 6px; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-normal); }
+.tx-coach-findings li { margin: 0 0 4px; padding: 4px var(--sp-2); border-left: 2px solid var(--border-strong); color: var(--text-muted); }
+.tx-coach-findings li b { display: block; color: var(--text); font-weight: var(--fw-semibold); }
+.tx-coach-findings li.is-clear { border-left-color: var(--info); }
+.tx-coach-findings li.is-clear span { color: var(--text); }
+.tx-coach-findings li.is-few span { color: var(--text-subtle); }
+.tx-coach-rules td, .tx-coach-rules th, .tx-coach-trades td, .tx-coach-trades th { white-space: nowrap; }
+.tx-coach-rules .is-left, .tx-coach-trades .is-left { max-width: none; }
+.tx-coach-trades .tx-coach-breaks { white-space: normal; min-width: 180px; }

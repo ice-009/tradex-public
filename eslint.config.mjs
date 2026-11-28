@@ -27,7 +27,7 @@ const REFERENCE_READS = [
 ];
 /** The screener, plan and backtest engines and the services that run them. */
 const POINT_IN_TIME_ENGINE = ["src/core/screener/**", "src/core/plan/**", "src/core/backtest/**", "src/core/lab/**"];
-const POINT_IN_TIME_SERVICES = ["screener", "evidence", "backtest", "btstRecord", "analyze", "trades", "lab", "labOverlay", "labSectors", "timeMachine", "planLedger"].map((name) => `src/server/services/${name}.ts`);
+const POINT_IN_TIME_SERVICES = ["screener", "evidence", "backtest", "btstRecord", "analyze", "trades", "lab", "labOverlay", "labSectors", "timeMachine", "planLedger", "coach"].map((name) => `src/server/services/${name}.ts`);
 
 const eslintConfig = defineConfig([
   ...nextVitals,

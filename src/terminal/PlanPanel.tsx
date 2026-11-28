@@ -35,6 +35,7 @@ import { useScreenReceipts } from "./useReceipts";
 import { useTimeMachine } from "@/client/timeMachine";
 import { LiveOnlyNote } from "./TimeMachine";
 import { PlanLedger } from "./PlanLedger";
+import { Coach } from "./Coach";
 
 // The Plan tab: today's trades to take (from screens with a tested edge in
 // this market), how many lots, how to get in and out; your open trades with
@@ -58,6 +59,19 @@ function entryTime(value: string) {
   const dayKey = Date.parse(`${value}T00:00:00Z`);
   if (!Number.isFinite(dayKey) || dayKey === istParts().day) return Date.now();
   return dayKey + (15 * 60 + 25 - 330) * 60_000;
+}
+/** "HH:MM" IST now, for time inputs. */
+const clockNow = () => {
+  const { minutes } = istParts();
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+};
+/** A date and an optional "HH:MM" IST time to epoch ms; without a time, 3:25 PM IST and `timed` false (the coach then can't check the entry window). */
+function entryMoment(date: string, clock: string): { at: number; timed: boolean } {
+  const dayKey = Date.parse(`${date}T00:00:00Z`);
+  const match = /^(\d{2}):(\d{2})$/.exec(clock);
+  if (!Number.isFinite(dayKey)) return { at: Date.now(), timed: true };
+  if (!match) return { at: dayKey + (15 * 60 + 25 - 330) * 60_000, timed: false };
+  return { at: dayKey + (Number(match[1]) * 60 + Number(match[2]) - 330) * 60_000, timed: true };
 }
 
 export function PlanPanel() {
@@ -609,6 +623,7 @@ function TakeForm({ idea, price, onDone }: { idea: PlanIdea; price: number | nul
   const [fill, setFill] = useState(String(Math.round((price ?? idea.entry.price) * 100) / 100));
   const [lots, setLots] = useState(String(Math.max(1, idea.size.lots)));
   const [date, setDate] = useState(dateValue(istParts().day));
+  const [clock, setClock] = useState(clockNow);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -616,6 +631,7 @@ function TakeForm({ idea, price, onDone }: { idea: PlanIdea; price: number | nul
     setBusy(true);
     setError(null);
     try {
+      const moment = entryMoment(date, clock);
       await takeTrade({
         symbol: idea.symbol,
         screenId: idea.screenId,
@@ -625,10 +641,14 @@ function TakeForm({ idea, price, onDone }: { idea: PlanIdea; price: number | nul
         exitRule: idea.exitRule,
         holdSessions: idea.holdSessions,
         entryPrice: Number(fill),
-        entryAt: entryTime(date),
+        entryAt: moment.at,
+        entryTimeKnown: moment.timed,
         lots: Number(lots),
         lotSize: idea.size.lot,
         notes: notes || null,
+        // For the coach (#42): how the plan said to buy, and the lots it sized (0 = none).
+        entryKind: idea.entry.kind,
+        planLots: idea.size.status === "ok" ? idea.size.lots : 0,
       });
       onDone();
     } catch (err) {
@@ -656,7 +676,21 @@ function TakeForm({ idea, price, onDone }: { idea: PlanIdea; price: number | nul
       </label>
       <label>
         <span>Date</span>
-        <input className="tx-input" type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
+        <input
+          className="tx-input"
+          type="date"
+          value={date}
+          onChange={(event) => {
+            setDate(event.target.value);
+            // Another day: its time isn't "now"; leave it blank unless you know it.
+            if (event.target.value !== dateValue(istParts().day)) setClock("");
+          }}
+          required
+        />
+      </label>
+      <label title="When the order filled (IST). Leave it blank if you don't know: the coach then won't check the 3:15–3:25 PM window for it.">
+        <span>Time</span>
+        <input className="tx-input" type="time" value={clock} onChange={(event) => setClock(event.target.value)} />
       </label>
       <label className="tx-plan-notes">
         <span>Notes</span>
@@ -678,11 +712,12 @@ const REASON_FOR: Record<TradeTrack["action"], ExitReason> = { "sell-open": "ope
 /** Your open trades and journal; in the Time Machine (a past day) they're live records, so not shown. */
 function JournalColumn({ trades, error }: { trades: TradesResponse | null; error: string | null }) {
   const pastDay = useTimeMachine((state) => state.info?.label ?? state.asOf);
-  if (pastDay) return <LiveOnlyNote>Your open trades and journal are live records, so they aren&apos;t shown as of {pastDay}. The plan above is the one that day would have had.</LiveOnlyNote>;
+  if (pastDay) return <LiveOnlyNote>Your open trades, journal and coach are live records, so they aren&apos;t shown as of {pastDay}. The plan above is the one that day would have had.</LiveOnlyNote>;
   return (
     <>
       <OpenTrades trades={trades} error={error} />
       <Journal trades={trades} />
+      <Coach trades={trades} />
     </>
   );
 }
