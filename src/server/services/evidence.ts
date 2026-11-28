@@ -207,7 +207,12 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   if (symbols.length && benchmark.length < 200 && hubEndOfDay()) {
     throw new Error("The daily plan needs NIFTY's daily history to tell the market state. The Market Data Hub has no broker connected (end-of-day data), and NSE's index closes aren't in it yet (market-data-hub#23); screens and backtests work meanwhile.");
   }
-  if (!symbols.length || benchmark.length < 200) throw new Error(`Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim());
+  if (!symbols.length || benchmark.length < 200) {
+    const message = `Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim();
+    // No stock has a bar yet while the store is still reading from the hub (or the hub is downloading): not a failure, ask again.
+    const { phase, queued } = screenerStore.progress;
+    throw !symbols.length && (phase === "history" || queued > 0) ? new NoDataYet(message) : new Error(message);
+  }
 
   progress.total = new Set(symbols.flatMap((symbol) => bars.get(symbol)!.map((bar) => bar.t))).size;
   const scan = await scanSignals({
@@ -264,6 +269,9 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   return { key: info.key, table, computedAt, ms, note, stamp };
 }
 
+/** No daily bars at all yet, while the store is still reading them: computed again on the next ask, not kept as an error. */
+class NoDataYet extends Error {}
+
 function start(info: KeyInfo) {
   const pending = { key: info.key, startedAt: Date.now(), done: 0, total: 0 };
   state.pending = pending;
@@ -275,6 +283,11 @@ function start(info: KeyInfo) {
       await writeFile(CACHE_FILE, JSON.stringify(result));
     })
     .catch((error: Error) => {
+      if (error instanceof NoDataYet) {
+        // Not kept as an error: the next ask computes again (by then the bars may be in).
+        log.info("Strategy evidence waits for daily bars", { message: error.message });
+        return;
+      }
       log.error("Strategy evidence failed", { error });
       state.error = { key: info.key, message: error.message, at: Date.now() };
     })
