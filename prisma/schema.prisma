@@ -125,10 +125,38 @@ model Trade {
   exitReason   String?
   plannedExit  Float?
   notes        String?
+  // Stored from the trade coach on (issue #42); null on older trades, which
+  // the coach says it can't check. "close", "buy-stop" or "btst"
+  // (src/core/plan/instructions.ts EntryKind).
+  entryKind    String?
+  // Lots the plan sized when you took it (0 = it sized none).
+  planLots     Int?
+  // The time of day of the entry was given (false: only the date).
+  entryTimed   Boolean?
+  // Stop and lot edits are kept in TradeChange since the trade was recorded.
+  audited      Boolean   @default(false)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  changes TradeChange[]
 
   @@index([userId, status])
+}
+
+// Every change to a trade's stop or lots after it was recorded (PATCH
+// /api/trades/:id), so the coach can tell a moved stop or an added lot from
+// the plan. Trades recorded before this table existed have `audited` false.
+model TradeChange {
+  id      String   @id @default(cuid())
+  tradeId String
+  // "stop" or "lots"
+  field   String
+  from    Float
+  to      Float
+  at      DateTime @default(now())
+
+  trade Trade @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+
+  @@index([tradeId])
 }

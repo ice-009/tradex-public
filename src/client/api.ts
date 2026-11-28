@@ -39,6 +39,7 @@ import type {
   SymbolsResponse,
   TimeMachineResponse,
   TrackResult,
+  CoachResponse,
   TradeCloseRequest,
   TradeCreateRequest,
   TradeDto,
@@ -159,6 +160,8 @@ export const api = {
   updateTrade: (id: string, body: TradeUpdateRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}`, body, "PATCH"),
   closeTrade: (id: string, body: TradeCloseRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}/close`, body),
   deleteTrade: (id: string) => postJson<{ ok: boolean }>(`/api/trades/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  /** The trade coach (#42) on your journal; "past" in the Time Machine. */
+  coach: () => getStatusJson<CoachResponse>("/api/trades/coach", withAsOf({})),
 
   /** Stored history a backtest can use for a universe. */
   backtestInfo: (universe: string, signal?: AbortSignal) => getJson<BacktestInfoResponse>("/api/backtest", { universe }, signal),

@@ -160,7 +160,7 @@ Each answer is a `Known<T>`: `{ known: true, value, asOf, source }` or `{ known:
 
 Lots and prices meet in `lotInTodayShares`: the daily bars are adjusted to today, so a lot of 250 before RELIANCE's 1:1 bonus (28 Oct 2024) is 500 of the bars' shares — the same notional as 250 shares at the price then.
 
-**The lint rule.** `src/core/screener`, `src/core/plan`, `src/core/backtest` and the services `screener`, `evidence`, `backtest`, `btstRecord`, `analyze` and `trades` may not import `providers/reference`, `providers/referenceHistory`, `foMembership`, `getUniverse`, `hubClient` or `HubClient` (ESLint `no-restricted-imports`, matched by regex so relative paths are caught too; `src/asOfOnly.test.ts` proves it). Other features (the results panel, the lots endpoint, the high/low sweep) may still read today's data directly.
+**The lint rule.** `src/core/screener`, `src/core/plan`, `src/core/backtest` and the services `screener`, `evidence`, `backtest`, `btstRecord`, `analyze`, `trades` and `coach` may not import `providers/reference`, `providers/referenceHistory`, `foMembership`, `getUniverse`, `hubClient` or `HubClient` (ESLint `no-restricted-imports`, matched by regex so relative paths are caught too; `src/asOfOnly.test.ts` proves it). Other features (the results panel, the lots endpoint, the high/low sweep) may still read today's data directly.
 
 ### The Time Machine (`?asOf=YYYY-MM-DD`, issue #31)
 
@@ -174,7 +174,7 @@ The whole terminal as it was at a past day's close, with nothing from after it. 
 | Screener, track record | `runScreener(…, past)`: bars up to D (the store when it covers the 640-day look-back, else read from the hub for that day, `pastBars`), that day's F&O list, ban list and sector indices (`asOf(D)`); no live bar, OI tag, first-seen times or BTST record | index lists and industries are today's snapshots and the notes say so (survivorship); the track record counts only signals whose holding period ended by D |
 | Plan evidence (`/api/plan/evidence`) | the same five years the live plan uses, ending D, on bars up to D adjusted as of D; F&O list and lots of each session, with D's own as the stand-in (never today's); kept in memory per day | a signal needs its whole holding period inside the bars (`replaySignals`), so only trades closed by D count (`evidenceAsOf.test.ts`); market state from NIFTY up to D; no live record |
 | Lots (`/api/lots`), results (`/api/results`) | lots as traded on D (NSE's files have them from 8 Jul 2024; before, ≈ ₹5 lakh at D's close stands in, said); results dated D−7…D | upcoming dates aren't stored with when they were announced, so none are shown |
-| Live-only | Day High/Low, Compare, Backtest and Lab panels, price alerts, the order ticket, the BTST alerts, "I took it", the journal and Lab receipts are off or labelled | — |
+| Live-only | Day High/Low, Compare, Backtest and Lab panels, price alerts, the order ticket, the BTST alerts, "I took it", the journal, the trade coach and Lab receipts are off or labelled | — |
 
 `src/server/services/timeMachine.test.ts` is the guard: it computes everything for a past day from a fake hub twice, with two different futures after the day (rewritten bars, a stock joining and one leaving F&O, a bonus that rescales the hub's earlier bars, a ban, a lot change, a results date), and with a hub that ignores `to` — the answers must be identical.
 
@@ -241,11 +241,27 @@ The **Plan** tab (the bottom panel's default) turns the screener into a short li
 | `instructions.ts` | Entry and exit wording, and the stored exit rule (`next-open`, `stop-target`, `time`, `trail-low:10`). |
 | `tracker.ts` | Today's action for an open trade from the stored daily bars (server) with the live price laid over it (browser). |
 | `journal.ts` | Realised R, net R after charges, and slippage of your fills against the plan. |
+| `coach.ts` | The trade coach (below): MAE / MFE, exit efficiency, hold and exit against the plan's own exit, rule breaks, and findings with their samples. |
 | `seal.ts`, `sealSchedule.ts` | The sealed plan (below): what is sealed, the hash chain and its verification, the live plan against the seal, and when seals are due. |
 
 The split is per bucket because NIFTY spent most of 2022–24 above its 200-day average and most of 2025–26 below it; a calendar split would leave one part of each state nearly empty. The evidence covers the 5 years of daily bars the hub serves. Point-in-time F&O membership is used on the sessions the hub has an F&O list for, and each trade's costs use its session's lot where known (both through `asOf`).
 
-The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later). Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`.
+The trade journal is the Prisma model `Trade` (per user; `side` is stored so short strategies can be added later), with `TradeChange` keeping every stop and lot edit. Routes: `GET/POST /api/trades`, `PATCH/DELETE /api/trades/:id`, `POST /api/trades/:id/close`, `GET /api/trades/coach`.
+
+### The trade coach (`coach.ts`, issue #42)
+
+What your own journal says about how you trade, in the Plan tab's journal column under the journal (`terminal/Coach.tsx`; live only, hidden with the journal in the Time Machine, where the route answers `past`).
+
+```
+ Prisma Trade + TradeChange ─┐
+ dailyStore bars × asOf.priceScales(entry day) ─┤ services/coach.ts ─▶ core/plan/coach.ts coachReport(trades, bars, now)
+ hub 15-minute candles (data engine, ≤ 1 year) ─┘   (kept 10 min per user, or until a trade changes)
+```
+
+- **Per closed trade.** R on the planned risk: planned entry − the stop *when you took the trade* (the first `TradeChange` of the stop, else the stop), before charges. **MAE / MFE** in R: on 15-minute candles when the hub has them for every session of the trade (its year of intraday candles), exact except inside the entry and exit candles; otherwise daily-bar **bounds**: `low` counts only the sessions strictly between entry and exit plus the two fills, `high` also the whole entry and exit days (partly before the entry, after the exit). Each trade says which it used and why. Fills are clamped into the stock's range in their candle or day, so a future's basis isn't an excursion; a fill >10% outside the stock's range that day (a split the factors miss, a wrong price) or a split during the trade is not measured. **Exit efficiency** = your exit's move ÷ MFE, shown when the MFE was ≥ 0.5R. **The plan's own exit** is replayed from your entry on daily bars as the tracker tells you each day: the stop as taken (gaps fill at the open), the target, a close below the trailing low, the close of the last session of the hold, or the next open for BTST; a bar touching both counts as the stop. **vs plan** = your R − the plan's exit R; **held** = sessions after the entry session to your exit, against the plan's exit session.
+- **Rule breaks**, each with the trades it could check and why not the rest: an entry outside the plan (close and BTST entries outside **3:15–3:25 PM IST** on a weekday; a buy-stop filled more than 0.1% below its level, or outside the session); a **stop moved** after entry (`TradeChange`); **more lots than the plan sized** (the largest size the trade had); **held past the plan's exit**. For these, "I took it" now stores the entry kind, the plan's lots (0 when it sized none) and whether the time of day was given (the form has a time field; a date alone is stored at 3:25 PM and marked untimed). Trades recorded before this change have none of it, nor a stop history: the coach counts them as unchecked rather than guessing (a BTST's entry kind follows from its exit rule).
+- **Findings** are sentences with their sample and a 95% t interval, and none is stated below **8 trades** (`MIN_SAMPLE`): winners' and losers' R against the plan's exit ("you exit winners 0.40R short of the plan's own exit on average (12 winners, 95% interval …)"), profit given back from the best price (MFE `low` − your exit's move: "at least"), and trades with a rule break against trades checked on every rule without one (Welch interval, ≥ 5 in each group). An interval that includes zero says "this could be chance". The intervals treat trades as independent, which they aren't quite (shared days and markets); the UI says so.
+- **No look-ahead**: a report as of `now` sees only trades entered by then, counts a trade closed only if it closed by then, and reads no daily bar or candle not finished by then; bars after a trade's exit never change its MAE / MFE (`coach.test.ts`). The plan's exit may come after yours: that is the counterfactual the "vs plan" numbers are about, read only from bars up to `now`, and a plan exit not reached yet leaves the trade out of them.
 
 ### The sealed plan: a tamper-evident ledger (`seal.ts`, `sealSchedule.ts`, issue #33)
 

@@ -61,6 +61,8 @@ test("open the terminal as it was on a past day: banner, chart ending that day, 
   expect(evidence.table.to).toBeLessThanOrEqual(SHOWN_DAY);
   await openDockTab(page, "Plan");
   await expect(page.locator(".tx-tm-note")).toContainText("aren't shown as of 13 Jun 2025");
+  // The trade coach (#42) reads the journal: hidden with it.
+  await expect(page.locator(".tx-coach")).toHaveCount(0);
 
   // Back to live: the banner goes, the URL loses the day.
   await banner.getByRole("button", { name: "Back to live" }).click();

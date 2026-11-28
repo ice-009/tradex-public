@@ -3,6 +3,7 @@ import "server-only";
 import type { TradeCloseRequest, TradeCreateRequest, TradeDto, TradesResponse, TradeUpdateRequest } from "@/contracts/api";
 import { COST_PRESETS } from "@/core/backtest/costs";
 import { istDayKey } from "@/core/market/session";
+import type { EntryKind } from "@/core/plan/instructions";
 import { EXIT_REASONS, journalSummary, plannedExitPrice, type ExitReason } from "@/core/plan/journal";
 import { trackTrade, type TradeTrack } from "@/core/plan/tracker";
 import { SCREEN_MAP } from "@/core/screener/screens";
@@ -41,6 +42,9 @@ const toDto = (row: Row): TradeDto => ({
   plannedExit: row.plannedExit,
   notes: row.notes,
   createdAt: row.createdAt.getTime(),
+  entryKind: ENTRY_KINDS.includes(row.entryKind as EntryKind) ? (row.entryKind as EntryKind) : null,
+  planLots: row.planLots,
+  entryTimed: row.entryTimed,
 });
 
 async function userId(email: string): Promise<string> {
@@ -68,6 +72,21 @@ const time = (value: unknown): Date => {
 };
 const text = (value: unknown, max = 2000): string | null => (typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null);
 const EXIT_RULE = /^(next-open|stop-target|time|trail-low:\d{1,2})$/;
+const ENTRY_KINDS: EntryKind[] = ["close", "buy-stop", "btst"];
+/** A date given without a time is stored at 3:25 PM IST (the end of the buy window), marked untimed. */
+const UNTIMED_MINUTES = 15 * 60 + 25;
+
+/** How the plan said to buy: BTST follows from the exit rule; otherwise as given (or unknown). */
+function entryKindFrom(value: unknown, exitRule: string): EntryKind | null {
+  const kind = value === undefined || value === null || value === "" ? null : String(value);
+  if (kind !== null && !ENTRY_KINDS.includes(kind as EntryKind)) throw new TradeInputError("Unknown entry kind.");
+  if (exitRule === "next-open") {
+    if (kind !== null && kind !== "btst") throw new TradeInputError("A next-open exit is a BTST entry.");
+    return "btst";
+  }
+  if (kind === "btst") throw new TradeInputError("A BTST entry sells at the next open.");
+  return kind as EntryKind | null;
+}
 
 export async function listTrades(email: string, now = Date.now()): Promise<TradesResponse> {
   const rows = await prisma.trade.findMany({ where: { userId: await userId(email) }, orderBy: { entryAt: "desc" } });
@@ -104,6 +123,15 @@ export async function createTrade(email: string, body: unknown): Promise<TradeDt
   if (!EXIT_RULE.test(exitRule)) throw new TradeInputError("Unknown exit rule.");
   const lots = whole(raw.lots, "Lots", 1000);
   const lotSize = whole(raw.lotSize, "Lot size", 1_000_000);
+  const entryKind = entryKindFrom(raw.entryKind, exitRule);
+  const planLots = raw.planLots === undefined || raw.planLots === null ? null : Number(raw.planLots);
+  if (planLots !== null && !(Number.isInteger(planLots) && planLots >= 0 && planLots <= 1000)) throw new TradeInputError("The plan's lots must be a whole number from 0 to 1000.");
+  const entryTimed = raw.entryTimeKnown !== false;
+  let entryAt = time(raw.entryAt);
+  if (!entryTimed) {
+    const day = istDayKey(entryAt.getTime());
+    entryAt = new Date(day + (UNTIMED_MINUTES - 330) * 60_000);
+  }
   const row = await prisma.trade.create({
     data: {
       userId: await userId(email),
@@ -116,11 +144,15 @@ export async function createTrade(email: string, body: unknown): Promise<TradeDt
       exitRule,
       holdSessions: whole(raw.holdSessions, "Holding period", 250),
       entryPrice: price(raw.entryPrice, "Fill price"),
-      entryAt: time(raw.entryAt),
+      entryAt,
       lots,
       lotSize,
       quantity: lots * lotSize,
       notes: text(raw.notes),
+      entryKind,
+      planLots,
+      entryTimed,
+      audited: true,
     },
   });
   return toDto(row);
@@ -146,7 +178,10 @@ export async function updateTrade(email: string, id: string, body: unknown): Pro
   if (raw.target !== undefined) data.target = optionalPrice(raw.target, "Target");
   if (raw.notes !== undefined) data.notes = text(raw.notes);
   if (((data.stop as number | undefined) ?? row.stop) >= row.plannedEntry) throw new TradeInputError("The stop must be below the planned entry.");
-  return toDto(await prisma.trade.update({ where: { id: row.id }, data }));
+  // The coach's audit (#42): every stop or lot change, so a moved stop or an added lot can be told from the plan.
+  const changes = (["stop", "lots"] as const).flatMap((field) => (data[field] !== undefined && data[field] !== row[field] ? [{ tradeId: row.id, field, from: row[field], to: data[field] as number }] : []));
+  const [updated] = await prisma.$transaction([prisma.trade.update({ where: { id: row.id }, data }), ...changes.map((change) => prisma.tradeChange.create({ data: change }))]);
+  return toDto(updated);
 }
 
 export async function closeTrade(email: string, id: string, body: unknown): Promise<TradeDto> {

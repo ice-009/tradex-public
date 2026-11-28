@@ -22,6 +22,8 @@ import type { CardSummary, WorksIn } from "@/core/lab/receipt";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
+import type { CoachReport } from "@/core/plan/coach";
+import type { EntryKind } from "@/core/plan/instructions";
 import type { LedgerRecord, LedgerVerification, SealKind } from "@/core/plan/seal";
 import type { TradeTrack } from "@/core/plan/tracker";
 import type { FactorKey, StockFacts } from "@/core/screener/score";
@@ -438,6 +440,10 @@ export interface TradeDto {
   plannedExit: number | null;
   notes: string | null;
   createdAt: number;
+  /** How the plan said to buy, the lots it sized, and whether the entry's time of day was given; null on trades recorded before the coach (#42). */
+  entryKind: EntryKind | null;
+  planLots: number | null;
+  entryTimed: boolean | null;
 }
 
 export interface TradesResponse {
@@ -463,10 +469,19 @@ export interface TradeCreateRequest {
   lots: number;
   lotSize: number;
   notes?: string | null;
+  /** How the plan said to buy ("close", "buy-stop", "btst"); BTST is implied by the exit rule "next-open". */
+  entryKind?: EntryKind | null;
+  /** Lots the plan sized for you (0 = none: too big for your risk, or no room). */
+  planLots?: number | null;
+  /** False when only the date of the entry is known (its time is then 3:25 PM IST); default true. */
+  entryTimeKnown?: boolean;
 }
 
 /** PATCH /api/trades/:id: fix a fill, the size, the stop or the notes. */
 export type TradeUpdateRequest = Partial<Pick<TradeCreateRequest, "entryPrice" | "entryAt" | "lots" | "stop" | "target" | "notes">>;
+
+/** GET /api/trades/coach: the trade coach (#42) on your journal; live only. */
+export type CoachResponse = { status: "ready"; report: CoachReport; computedAt: number; ms: number } | { status: "past"; error: string } | { status: "error"; error: string };
 
 /** POST /api/trades/:id/close */
 export interface TradeCloseRequest {
