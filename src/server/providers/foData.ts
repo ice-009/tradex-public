@@ -96,6 +96,14 @@ export async function foMembership(from: number, to: number): Promise<Map<number
   const key = `${from}:${to}`;
   let entry = membersState.get(key);
   if (!entry) {
+    // A range already read that holds this one (a Time Machine replay asks a day's five years for
+    // day after day inside the block it read): its days in range, without asking the hub again.
+    for (const [other, state] of membersState) {
+      const [otherFrom, otherTo] = other.split(":").map(Number);
+      if (otherFrom <= from && to <= otherTo && state.at > 0 && state.value.size && Date.now() - state.at <= MEMBERS_TTL_MS) {
+        return new Map([...state.value].filter(([day]) => day >= from && day <= to));
+      }
+    }
     entry = { at: 0, value: new Map(), pending: null };
     membersState.set(key, entry);
     // Ranges move forward a day at a time: drop the ones that aren't asked for any more.

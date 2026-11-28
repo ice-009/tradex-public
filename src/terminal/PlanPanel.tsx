@@ -19,6 +19,7 @@ import type { LiveScreenRecord } from "@/core/screener/liveRecord";
 import type { RunStamp } from "@/core/repro/stamp";
 import { api } from "@/client/api";
 import { closeTrade, editTrade, removeTrade, takeTrade, usePlanFeed } from "@/client/planFeed";
+import { paperTake, usePaperFeed } from "@/client/paperFeed";
 import { refreshScreener, riskReward, useScreenerFeed } from "@/client/screenerFeed";
 import { openIdea } from "./ideaActions";
 import { drawPlanOnChart } from "./SetupCard";
@@ -597,7 +598,7 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
         <button type="button" className="tx-icon-btn" title="Save this plan on the chart as a Long Position" onClick={() => drawPlanOnChart({ screen, row: idea.row, rr: riskReward(idea.row) })}>
           <Icons.long size={15} />
         </button>
-        <TookItButton taking={taking} onClick={() => setTaking(!taking)} />
+        <TookItButton idea={idea} taking={taking} onClick={() => setTaking(!taking)} />
       </span>
       {taking && <TakeForm idea={idea} price={tick?.ltp ?? null} onDone={() => setTaking(false)} />}
     </li>
@@ -686,13 +687,65 @@ function JournalColumn({ trades, error }: { trades: TradesResponse | null; error
   );
 }
 
-/** "I took it" records a real trade: off in the Time Machine (paper trading in a replay is #32). */
-function TookItButton({ taking, onClick }: { taking: boolean; onClick: () => void }) {
+/** "I took it" records a real trade; in the Time Machine it becomes "Paper take" (#32), into the replay's paper session. */
+function TookItButton({ idea, taking, onClick }: { idea: PlanIdea; taking: boolean; onClick: () => void }) {
   const pastDay = useTimeMachine((state) => state.asOf !== null);
+  if (pastDay) return <PaperTakeButton idea={idea} />;
   return (
-    <button type="button" className="tx-btn-outline tx-plan-took" onClick={onClick} disabled={pastDay} title={pastDay ? "The Time Machine shows a past day: your journal holds real trades only" : "Record that you took this trade"}>
+    <button type="button" className="tx-btn-outline tx-plan-took" onClick={onClick} title="Record that you took this trade">
       {taking ? "Cancel" : "I took it"}
     </button>
+  );
+}
+
+/**
+ * Paper-take a plan idea on the day shown, with the plan's own levels and
+ * size (one lot when the plan couldn't size it). It fills by the plan's entry
+ * rule as the replay steps forward; the Paper tab grades it.
+ */
+function PaperTakeButton({ idea }: { idea: PlanIdea }) {
+  const day = usePaperFeed((feed) => feed.data?.day ?? null);
+  const taken = usePaperFeed((feed) => Boolean(feed.data?.trades.some((trade) => trade.symbol === idea.symbol && trade.screenId === idea.screenId && trade.signalDay === feed.data?.day)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const lots = Math.max(1, idea.size.lots);
+  const take = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await paperTake({
+        symbol: idea.symbol,
+        screenId: idea.screenId,
+        entryKind: idea.entry.kind,
+        plannedEntry: idea.entry.price,
+        stop: idea.stop,
+        target: idea.target,
+        exitRule: idea.exitRule,
+        holdSessions: idea.holdSessions,
+        lots,
+        lotSize: idea.size.lot,
+        expectedR: idea.expectedR,
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className={`tx-btn-outline tx-plan-took ${taken ? "is-on" : ""}`}
+        onClick={() => void take()}
+        disabled={busy || taken || day === null}
+        title={taken ? "Paper-taken on this day: see the Paper tab" : `Paper-take ${lots} lot${lots === 1 ? "" : "s"} at the plan's levels: it fills by the plan's entry rule as the replay steps forward. Your real journal isn't touched.`}
+        data-testid="paper-take"
+      >
+        {taken ? "Paper-taken" : "Paper take"}
+      </button>
+      {error && <span className="tx-plan-error">{error}</span>}
+    </>
   );
 }
 

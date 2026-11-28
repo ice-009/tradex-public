@@ -3,7 +3,8 @@ import "server-only";
 import type { AsOfInfo, LotsResponse, Quote, QuotesResponse, ResultsResponse, TimeMachineResponse } from "@/contracts/api";
 import { ARCHIVE_START, storeStart } from "@/core/backtest/phases";
 import { DAY_MS, istParts } from "@/core/market/session";
-import { barsThrough, dayLabel, isoDay, parseAsOfParam, resolveDay } from "@/core/reference/timeMachine";
+import { barsThrough, dayLabel, isoDay, parseAsOfParam, resolveDay, sessionOnOrBefore } from "@/core/reference/timeMachine";
+import { blockReadFrom, blockServing, replayBlockFor, type ReplayBlock } from "@/core/reference/replay";
 import type { Known } from "@/core/reference/pointInTime";
 import type { DailyBar } from "@/core/types";
 import { asOf, priceScales, tradingDays } from "@/server/providers/asOf";
@@ -30,6 +31,15 @@ import { log } from "@/server/log";
 //     is said, never filled in with today's value without saying so.
 //
 // Nothing here reads a live quote, the stream or today's reference data.
+//
+// Replay (issue #32): requests sent while the browser steps or plays the day
+// carry `replay=1`. Those may read a dataset once for a whole replay block —
+// a few weeks before the day to about three months after
+// (src/core/reference/replay.ts) — and cut it at each day (`replayBars`), so
+// stepping doesn't read the hub again every session. What each day is
+// computed from is still only what was known by its close: the same bars, cut
+// at the same place, as a day read on its own (evidenceReplay.test.ts checks
+// the answers are equal).
 
 /** Calendar days of daily bars the screener reads before a past day: features (260 sessions) + the track record's 160 sessions. */
 export const PAST_SCREEN_DAYS = 640;
@@ -42,21 +52,28 @@ export interface PastDay {
   requested: number;
   snapped: boolean;
   note: string | null;
+  /** The browser is stepping or playing a replay: data may be read once for the replay block and cut at the day. */
+  replay?: boolean;
 }
 
 /**
  * The session `raw` (YYYY-MM-DD) means, or null for the live terminal (no
  * parameter, today or later). A malformed date or one before 1994 is a 400.
+ * `replay` is the request's `replay` parameter ("1" while the browser steps or plays).
  */
-export async function pastDay(raw: string | null | undefined): Promise<PastDay | null> {
+export async function pastDay(raw: string | null | undefined, replay: string | null | undefined = null): Promise<PastDay | null> {
   if (raw === null || raw === undefined || raw.trim() === "") return null;
   const parsed = parseAsOfParam(raw);
   if (!parsed.ok) throw new RequestError(parsed.error);
   const today = istParts().day;
   if (parsed.day >= today) return null;
   const resolved = resolveDay(parsed.day, today, await tradingDays().catch(() => null));
-  return resolved.mode === "live" ? null : { day: resolved.day, requested: resolved.requested, snapped: resolved.snapped, note: resolved.note };
+  if (resolved.mode === "live") return null;
+  return { day: resolved.day, requested: resolved.requested, snapped: resolved.snapped, note: resolved.note, ...(replay === "1" ? { replay: true } : {}) };
 }
+
+/** Sessions listed on each side of a past day in the Time Machine's answer, for stepping in the browser. */
+const STEP_SESSIONS = 90;
 
 const factText = <T>(fact: Known<T>, text: (value: T) => string) => (fact.known ? { known: true, text: `${text(fact.value)} (${fact.source}, ${dayLabel(fact.asOf)})` } : { known: false, text: fact.reason });
 
@@ -64,7 +81,7 @@ const factText = <T>(fact: Known<T>, text: (value: T) => string) => (fact.known 
 export async function timeMachineInfo(raw: string | null): Promise<TimeMachineResponse> {
   const past = await pastDay(raw);
   if (!past) return { status: "live" };
-  const known = await asOf(past.day);
+  const [known, calendar] = await Promise.all([asOf(past.day), tradingDays().catch(() => null)]);
   return {
     status: "past",
     day: past.day,
@@ -80,16 +97,72 @@ export async function timeMachineInfo(raw: string | null): Promise<TimeMachineRe
       { name: "Results", ...factText(known.results.reported, (events) => `${events.length} results in the week up to that day`) },
       { name: "Sector map", ...factText(known.sectors, (catalog) => `${catalog.indices.length} sector indices with history by then`) },
     ],
+    sessions: sessionsAround(past.day, calendar),
   };
+}
+
+/**
+ * The sessions before and after a past day (YYYY-MM-DD, ascending), from the
+ * hub's calendar (weekdays when it can't say), for the replay's steps. Those
+ * after it stop before today: stepping past them is the live terminal.
+ */
+export function sessionsAround(day: number, calendar: readonly number[] | null, today = istParts().day): { before: string[]; after: string[]; calendar: boolean } {
+  const days = calendar ?? weekdays(day - STEP_SESSIONS * 2 * DAY_MS, Math.min(today - DAY_MS, day + STEP_SESSIONS * 2 * DAY_MS));
+  const at = sessionOnOrBefore(day, days);
+  const index = at === null ? -1 : days.indexOf(at);
+  const before = days.slice(Math.max(0, index - STEP_SESSIONS), Math.max(0, index));
+  const after = days.slice(index + 1, index + 1 + STEP_SESSIONS).filter((session) => session < today);
+  return { before: before.map(isoDay), after: after.map(isoDay), calendar: Boolean(calendar) };
+}
+
+function weekdays(from: number, to: number): number[] {
+  const out: number[] = [];
+  for (let t = from; t <= to; t += DAY_MS) {
+    const weekday = new Date(t).getUTCDay();
+    if (weekday !== 0 && weekday !== 6) out.push(t);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ replay blocks
+
+/** Replay blocks kept (the one being stepped through and the ones before it). */
+const MAX_BLOCKS = 3;
+const globalForBlocks = globalThis as unknown as { replayBlocks?: ReplayBlock[] };
+const blocks = (globalForBlocks.replayBlocks ??= []);
+
+/**
+ * The replay block serving a past day (created on first ask): every dataset a
+ * replay reads is read once for it, so consecutive days share one read.
+ */
+export function replayBlock(day: number): ReplayBlock {
+  const found = blockServing(blocks, day);
+  if (found) return found;
+  const today = istParts().day;
+  const block = replayBlockFor(day, today - DAY_MS, storeStart(today));
+  blocks.unshift(block);
+  blocks.splice(MAX_BLOCKS);
+  return block;
 }
 
 // ------------------------------------------------------------------ daily bars as of a day
 
 interface PastSetState {
+  day: number;
+  start: number;
+  symbols: ReadonlySet<string>;
   done: number;
   total: number;
   value: PastBars | null;
   error: string | null;
+  promise: Promise<PastBars>;
+}
+
+/** What pastBars answers: the set once read (null meanwhile), or why it failed, the read's progress, and the set to come. */
+export interface PastBarsHandle {
+  ready: PastBars | null;
+  error: string | null;
+  progress: { done: number; total: number };
   promise: Promise<PastBars>;
 }
 
@@ -143,18 +216,52 @@ async function readPast(day: number, symbols: string[], from: number, progress: 
   return { day, from, source: "hub", bars, notes: longWarnings({ from, to: day, set, standInUntil: null }, bars.size).slice(1), missing: set.missing };
 }
 
+/** A set cut to `symbols` and `from`..`day`'s close: what a read of exactly that would have kept. */
+export function cutSet(set: PastBars, symbols: readonly string[], from: number, day: number): PastBars {
+  const bars = new Map<string, DailyBar[]>();
+  for (const symbol of new Set(symbols)) {
+    const list = set.bars.get(symbol);
+    if (!list) continue;
+    const cut = clip(list, day).filter((bar) => bar.t >= from);
+    if (cut.length) bars.set(symbol, cut);
+  }
+  return { day, from, source: set.source, bars, notes: set.notes, missing: set.missing.filter((symbol) => symbols.includes(symbol)) };
+}
+
+/**
+ * A set already read (or being read) that holds what `day`, `start`, `wanted`
+ * asks for: through that day or later, from that start or earlier, those
+ * symbols and maybe more — and on the same side of the hub's broker window
+ * (the hub's archive prices line up with the broker's only when a read
+ * reaches into it), so the cut is the same as reading it.
+ */
+function coveringSet(day: number, start: number, wanted: readonly string[]): PastSetState | null {
+  const brokerFrom = storeStart(istParts().day);
+  for (const state of sets.values()) {
+    if (state.error || state.day < day || state.start > start || state.day >= brokerFrom !== day >= brokerFrom) continue;
+    if (wanted.every((symbol) => state.symbols.has(symbol))) return state;
+  }
+  return null;
+}
+
 /**
  * Daily bars of `symbols` from `from` to `day`'s close (none after it), read
  * from the hub's long history, started in the background on first ask and
  * kept for a few days. `ready` is null while they are being read (poll `progress`).
+ * A set read before that covers the ask (a replay block's, a later day's) is cut instead of read again.
  */
-export function pastBars(day: number, symbols: readonly string[], from: number): { ready: PastBars | null; error: string | null; progress: { done: number; total: number }; promise: Promise<PastBars> } {
+export function pastBars(day: number, symbols: readonly string[], from: number): PastBarsHandle {
   const wanted = [...new Set(symbols)].sort();
   const start = Math.max(ARCHIVE_START, from);
   const key = `${day}:${start}:${wanted.join(",")}`;
   let state = sets.get(key);
   if (!state) {
-    const fresh: PastSetState = { done: 0, total: wanted.length, value: null, error: null, promise: Promise.resolve(null as never) };
+    const covering = coveringSet(day, start, wanted);
+    if (covering) {
+      const cut = (set: PastBars) => cutSet(set, wanted, start, day);
+      return { ready: covering.value && cut(covering.value), error: null, progress: { done: covering.done, total: covering.total }, promise: covering.promise.then(cut) };
+    }
+    const fresh: PastSetState = { day, start, symbols: new Set(wanted), done: 0, total: wanted.length, value: null, error: null, promise: Promise.resolve(null as never) };
     fresh.promise = readPast(day, wanted, start, fresh).then(
       (value) => {
         fresh.value = value;
@@ -177,6 +284,21 @@ export function pastBars(day: number, symbols: readonly string[], from: number):
     sets.set(key, state);
   }
   return { ready: state.value, error: state.error, progress: { done: state.done, total: state.total }, promise: state.promise };
+}
+
+/**
+ * pastBars for a past day as asked: a replay (`past.replay`) reads the replay
+ * block's span once — the same look-back from the block's first day, through
+ * its last — and cuts it at the day, so stepping through the block reads the
+ * hub once. Either way the answer holds `symbols` from `from` to the day's close only.
+ */
+export function replayBars(past: PastDay, symbols: readonly string[], from: number): PastBarsHandle {
+  if (!past.replay) return pastBars(past.day, symbols, from);
+  const block = replayBlock(past.day);
+  const start = Math.max(ARCHIVE_START, from);
+  const handle = pastBars(block.to, symbols, Math.max(ARCHIVE_START, blockReadFrom(block, past.day, start)));
+  const cut = (set: PastBars) => cutSet(set, symbols, start, past.day);
+  return { ready: handle.ready && cut(handle.ready), error: handle.error, progress: handle.progress, promise: handle.promise.then(cut) };
 }
 
 /**
@@ -216,11 +338,11 @@ export async function scalesOn(day: number, symbols: readonly string[], indices:
 // ------------------------------------------------------------------ quotes, lots, results as of a day
 
 /** A past day's closes for the watchlist: the last bar on or before the day, with its change on the bar before. */
-export async function quotesAsOf(symbols: string[], day: number): Promise<QuotesResponse> {
+export async function quotesAsOf(symbols: string[], day: number, replay = false): Promise<QuotesResponse> {
   if (!symbols.length) return { quotes: [], asOf: { day, notes: [] } };
   // Two weeks back is plenty for the bar before (holidays); a stock that didn't trade then has no quote.
   // From the hub (one small read), so watchlist symbols don't join the screener's store.
-  const set = await pastBars(day, symbols, day - 14 * DAY_MS).promise;
+  const set = await replayBars({ day, requested: day, snapped: false, note: null, replay }, symbols, day - 14 * DAY_MS).promise;
   const { scaleOf, note } = await scalesOn(day, symbols);
   const quotes: Quote[] = [];
   for (const symbol of symbols) {

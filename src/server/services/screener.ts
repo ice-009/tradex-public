@@ -23,7 +23,7 @@ import { screenerStore } from "@/server/providers/dailyStore";
 import { UNIVERSES, isUniverseId, type UniverseId } from "@/server/providers/universe";
 import { asOf, orElse } from "@/server/providers/asOf";
 import { BENCHMARK_STAND_IN } from "@/server/providers/longBars";
-import { PAST_SCREEN_DAYS, pastBars, scaleBars, scalesOn, storeBarsThrough, storeCovers, type PastBars, type PastDay } from "@/server/services/timeMachine";
+import { PAST_SCREEN_DAYS, replayBars, scaleBars, scalesOn, storeBarsThrough, storeCovers, type PastBars, type PastDay } from "@/server/services/timeMachine";
 import { log } from "@/server/log";
 
 // Screener and track-record orchestration: load bars (dailyStore, filled from
@@ -182,10 +182,10 @@ async function pastUniverse(universeId: UniverseId, past: PastDay): Promise<Past
   let set: PastBars;
   if (storeCovers(from)) set = await storeBarsThrough(day, wanted);
   else {
-    const handle = pastBars(day, wanted, from);
+    const handle = replayBars(past, wanted, from);
     const ready = handle.ready ?? (await Promise.race([handle.promise.catch(() => null), new Promise<null>((resolve) => setTimeout(() => resolve(null), PAST_WAIT_MS))]));
     if (!ready) {
-      const again = pastBars(day, wanted, from);
+      const again = replayBars(past, wanted, from);
       return again.error ? { status: "error", error: again.error } : { status: "pending", progress: again.progress };
     }
     set = ready;
@@ -314,7 +314,7 @@ const globalForTrack = globalThis as unknown as { trackCache?: Map<string, Promi
 const trackCache = (globalForTrack.trackCache ??= new Map());
 
 /** Past days' track records (Time Machine), most recent last. */
-const MAX_PAST_TRACKS = 4;
+const MAX_PAST_TRACKS = 12;
 const pastTracks = new Map<string, Promise<TrackResult>>();
 
 /**
