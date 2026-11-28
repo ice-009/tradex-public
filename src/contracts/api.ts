@@ -23,6 +23,8 @@ import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
 import type { TradeTrack } from "@/core/plan/tracker";
+import type { EntryKind } from "@/core/plan/instructions";
+import type { PaperSummary, PaperTradeRow } from "@/core/plan/paper";
 import type { FactorKey, StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
 import type { MarketRegime } from "@/core/screener/regime";
@@ -114,7 +116,8 @@ export interface ChartResponse {
    */
   hasOlder?: boolean;
   /** Time Machine: bars end at this day's close; prices adjusted only for the splits and bonuses by then (`priceScale` × today's adjusted). */
-  asOf?: AsOfInfo & { priceScale: number | null };
+  /** Time Machine; `aheadThrough`: a replay read ahead to this day (day key) at the day's prices — the browser shows only the bars up to the day it is at. */
+  asOf?: AsOfInfo & { priceScale: number | null; aheadThrough?: number };
 }
 
 // ------------------------------------------------------------------ GET /api/quotes?symbols=A,B
@@ -429,6 +432,43 @@ export interface TradeCreateRequest {
 
 /** PATCH /api/trades/:id: fix a fill, the size, the stop or the notes. */
 export type TradeUpdateRequest = Partial<Pick<TradeCreateRequest, "entryPrice" | "entryAt" | "lots" | "stop" | "target" | "notes">>;
+
+// ------------------------------------------------------------------ paper trading in a replay (#32): /api/paper?asOf=YYYY-MM-DD
+
+/** POST /api/paper?asOf=: paper-take a plan idea on the day shown (its fills come from the replayed bars, not from you). */
+export interface PaperTakeRequest {
+  symbol: string;
+  screenId: string;
+  entryKind: EntryKind;
+  plannedEntry: number;
+  stop: number;
+  target: number | null;
+  exitRule: string;
+  holdSessions: number;
+  lots: number;
+  lotSize: number;
+  /** The evidence's expected net R per trade for the setup (shown beside what the paper trades made). */
+  expectedR?: number | null;
+}
+
+export interface PaperTradeDto extends PaperTradeRow {
+  lots: number;
+  lotSize: number;
+  createdAt: number;
+}
+
+/** GET /api/paper?asOf=: the current paper session, every trade graded as of that day's close. */
+export interface PaperResponse {
+  session: { id: string; createdAt: number; name: string | null };
+  /** The day graded (day key). */
+  day: number;
+  trades: PaperTradeDto[];
+  summary: PaperSummary;
+  costs: { preset: CostPresetId; label: string };
+  /** Earlier sessions (newest first): trades in each. */
+  earlier: Array<{ id: string; createdAt: number; closedAt: number | null; trades: number }>;
+  notes: string[];
+}
 
 /** POST /api/trades/:id/close */
 export interface TradeCloseRequest {

@@ -5,7 +5,7 @@ import { ChartEngine } from "@/chart/engine";
 import { INDICATORS, createIndicatorConfig, indicatorTitle } from "@/core/indicators/indicators";
 import { formatCompact, formatCrosshairTime, formatPrice, formatValue } from "@/core/format";
 import type { LegendState } from "@/chart/types";
-import type { IndicatorConfig } from "@/core/types";
+import type { Bar, IndicatorConfig } from "@/core/types";
 import {
   EMPTY_DRAWINGS,
   engines,
@@ -24,7 +24,9 @@ import { DrawingProperties } from "./DrawingProperties";
 import { CHART_INTERVAL_CONFIG, INTERVAL_META } from "@/core/market/intervals";
 import { olderRequest } from "@/core/market/olderBars";
 import { applyTick, fetchHistory, liveHub } from "@/client/marketData";
-import { useAsOfKey } from "@/client/timeMachine";
+import { timeMachine, useAsOfKey } from "@/client/timeMachine";
+import { replayBusy, replayState, setReplayBars, useReplay } from "@/client/replay";
+import { revealLimit, revealed } from "@/core/reference/replay";
 import { Icons } from "./icons";
 import { useTerminalUI } from "./ui";
 import { IndicatorSettings } from "./IndicatorSettings";
@@ -80,6 +82,31 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
   const syncRef = useRef(syncCrosshair);
   /** Loads older bars when the chart is scrolled to its left edge (set by the history effect). */
   const needOlderRef = useRef<(() => void) | null>(null);
+  /** Replay (#32): every bar read, up to `through` (after the day shown); the engine gets only those revealed. */
+  const aheadRef = useRef<{ key: string; day: number; through: number; bars: Bar[]; hasOlder: boolean; actions: Array<{ time: number; label: string; title: string }>; intraday: boolean; intervalMs: number } | null>(null);
+  const activeRef = useRef(active);
+  const cursor = useReplay((state) => state.cursor);
+
+  /** Give the engine the bars up to the day shown (or the bar-by-bar cursor), and the active chart's bar times to the replay. */
+  const showRevealed = useCallback((reset: boolean) => {
+    const engine = engineRef.current;
+    const ahead = aheadRef.current;
+    const asOf = timeMachine().asOf;
+    if (!engine || !ahead || !asOf) return;
+    const shown = revealed(ahead.bars, revealLimit(Date.parse(`${asOf}T00:00:00Z`), replayState().cursor), (bar) => bar.time);
+    engine.setData(shown, { intervalMs: ahead.intervalMs, intraday: ahead.intraday, resetView: reset });
+    if (activeRef.current) setReplayBars({ times: ahead.bars.map((bar) => bar.time), intraday: ahead.intraday });
+  }, []);
+
+  useEffect(() => {
+    activeRef.current = active;
+    if (active && aheadRef.current) setReplayBars({ times: aheadRef.current.bars.map((bar) => bar.time), intraday: aheadRef.current.intraday });
+    else if (active) setReplayBars({ times: engineRef.current?.getBars().map((bar) => bar.time) ?? [], intraday: INTERVAL_META[cell.interval].intraday });
+  }, [active, cell.interval]);
+  // Bar-by-bar: the cursor moved inside the next session.
+  useEffect(() => {
+    if (aheadRef.current) showRevealed(false);
+  }, [cursor, showRevealed]);
 
   useEffect(() => {
     symbolRef.current = cell.symbol;
@@ -288,6 +315,8 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
         .then((older) => {
           hasOlder = older.hasOlder && older.bars.length > 0;
           engine.prependBars(older.bars, request.to);
+          const ahead = aheadRef.current;
+          if (ahead) aheadRef.current = { ...ahead, hasOlder, bars: [...older.bars.filter((bar) => bar.time < request.to), ...ahead.bars.filter((bar) => bar.time >= request.to)] };
           actions = [...older.corporateActions.filter((action) => action.time < request.to), ...actions.filter((action) => action.time >= request.to)];
           engine.setCorporateActions(actions);
         })
@@ -299,31 +328,58 @@ export function ChartCell({ index, active, multi }: { index: number; active: boo
         });
     };
 
-    setStatus({ loading: true, error: null, source: null, reason: null });
-    engine.select(null); // the floating properties toolbar would point at stale geometry
-    fetchHistory(symbol, interval, controller.signal)
-      .then((result) => {
-        engine.setData(result.bars, { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
-        engine.setCorporateActions(result.corporateActions);
-        actions = result.corporateActions;
-        hasOlder = result.hasOlder;
-        loaded = true;
-        setStatus({ loading: false, error: null, source: result.source, reason: result.reason, asOfNotes: result.asOf?.notes });
-        if (result.source === "broker") {
-          const latest = liveHub.getLatest(symbol);
-          if (latest) onTick(latest);
-        }
-      })
-      .catch((error: Error) => {
-        if (controller.signal.aborted) return;
-        engine.setData([], { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
-        engine.setCorporateActions([]);
-        setStatus({ loading: false, error: error.message || "Could not load chart data", source: null, reason: null });
-      });
+    // Replay (#32): bars read ahead of the day are kept here and only those up to the day (or the
+    // bar-by-bar cursor) go to the engine, so indicators never see an unrevealed bar. A step inside
+    // what was read ahead shows the next bars without asking the server again.
+    const key = `${symbol}|${interval}`;
+    const day = asOfKey ? Date.parse(`${asOfKey}T00:00:00Z`) : null;
+    const ahead = aheadRef.current;
+    const busy = `chart:${index}`;
+    if (day !== null && ahead && ahead.key === key && day >= ahead.day && day <= ahead.through && replayState().active) {
+      loaded = true;
+      hasOlder = ahead.hasOlder;
+      actions = ahead.actions;
+      engine.setCorporateActions(actions.filter((action) => action.time <= day));
+      showRevealed(false);
+    } else {
+      aheadRef.current = null;
+      setStatus({ loading: true, error: null, source: null, reason: null });
+      engine.select(null); // the floating properties toolbar would point at stale geometry
+      replayBusy(busy, true);
+      fetchHistory(symbol, interval, controller.signal)
+        .then((result) => {
+          const through = result.asOf?.aheadThrough;
+          if (day !== null && through !== undefined) {
+            aheadRef.current = { key, day: result.asOf!.day, through, bars: result.bars, hasOlder: result.hasOlder, actions: result.corporateActions, intraday: meta.intraday, intervalMs: meta.ms };
+            engine.setCorporateActions(result.corporateActions.filter((action) => action.time <= day));
+            showRevealed(true);
+          } else {
+            engine.setData(result.bars, { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
+            engine.setCorporateActions(result.corporateActions);
+            if (activeRef.current && day !== null) setReplayBars({ times: result.bars.map((bar) => bar.time), intraday: meta.intraday });
+          }
+          actions = result.corporateActions;
+          hasOlder = result.hasOlder;
+          loaded = true;
+          setStatus({ loading: false, error: null, source: result.source, reason: result.reason, asOfNotes: result.asOf?.notes });
+          if (result.source === "broker") {
+            const latest = liveHub.getLatest(symbol);
+            if (latest) onTick(latest);
+          }
+        })
+        .catch((error: Error) => {
+          if (controller.signal.aborted) return;
+          engine.setData([], { intervalMs: meta.ms, intraday: meta.intraday, resetView: true });
+          engine.setCorporateActions([]);
+          setStatus({ loading: false, error: error.message || "Could not load chart data", source: null, reason: null });
+        })
+        .finally(() => replayBusy(busy, false));
+    }
 
     const unsubscribe = liveHub.subscribe(symbol, onTick, 0);
     return () => {
       controller.abort();
+      replayBusy(busy, false);
       needOlderRef.current = null;
       unsubscribe();
     };

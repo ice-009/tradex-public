@@ -53,6 +53,7 @@ model User {
   subscription         Subscription?
   portfolioPositions   PortfolioPosition[]
   trades               Trade[]
+  paperSessions        PaperSession[]
 }
 
 model VerificationToken {
@@ -131,4 +132,50 @@ model Trade {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
+}
+
+// Paper trading in a Time Machine replay (issue #32), kept apart from the real
+// journal (Trade). A session is one replay's paper account; each PaperTrade is
+// a plan idea "paper taken" on a past day with the plan's levels. Fills and
+// exits aren't stored: they are graded from the replayed daily bars as of the
+// day shown (src/core/plan/paper.ts), so stepping back un-does an exit.
+model PaperSession {
+  id        String       @id @default(cuid())
+  userId    String
+  name      String?
+  createdAt DateTime     @default(now())
+  // Set when a new session is started; the newest open one is the current one.
+  closedAt  DateTime?
+  trades    PaperTrade[]
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model PaperTrade {
+  id           String   @id @default(cuid())
+  sessionId    String
+  symbol       String
+  screenId     String
+  // "close", "buy-stop" or "btst" (src/core/plan/instructions.ts)
+  entryKind    String
+  plannedEntry Float
+  stop         Float
+  target       Float?
+  // "next-open", "stop-target", "time" or "trail-low:10"
+  exitRule     String
+  holdSessions Int
+  // The session it was taken on, as of whose close (IST day key: UTC midnight of the IST date).
+  signalDay    DateTime
+  lots         Int
+  lotSize      Int
+  quantity     Int
+  // The evidence's expected net R per trade for the setup when it was taken.
+  expectedR    Float?
+  createdAt    DateTime @default(now())
+
+  session PaperSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, signalDay])
 }
