@@ -48,7 +48,7 @@ export interface ScreenerPrefs {
   /** Panel fills the center column (charts hidden), like a maximized bottom panel. */
   maximized: boolean;
   /** Bottom panel tab: the daily trade plan, the stock screener ("Explore"), the Compare ranking, the day high/low feed, or the strategy backtester. */
-  view: "plan" | "screener" | "compare" | "highlow" | "backtest" | "lab";
+  view: "plan" | "paper" | "screener" | "compare" | "highlow" | "backtest" | "lab";
   /** Day high/low feed filters. */
   hl: { kind: "all" | "high" | "low"; segment: "both" | "cash" | "fut"; listOnly: boolean; from930: boolean; latestOnly: boolean };
   showInfo: boolean;

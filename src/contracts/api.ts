@@ -24,6 +24,8 @@ import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findi
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
 import type { LedgerRecord, LedgerVerification, SealKind } from "@/core/plan/seal";
 import type { TradeTrack } from "@/core/plan/tracker";
+import type { EntryKind } from "@/core/plan/instructions";
+import type { PaperSummary, PaperTradeRow } from "@/core/plan/paper";
 import type { FactorKey, StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
 import type { MarketRegime } from "@/core/screener/regime";
@@ -64,6 +66,11 @@ export type TimeMachineResponse =
       note: string | null;
       /** What was known that day (F&O list, lot sizes, ban list, results, sector map) and what wasn't. */
       facts: Array<{ name: string; known: boolean; text: string }>;
+      /**
+       * Replay (#32): up to 90 sessions before and after the day (YYYY-MM-DD, ascending; those after stop before
+       * today), from the exchange calendar (`calendar`) or weekdays when the hub couldn't say.
+       */
+      sessions: { before: string[]; after: string[]; calendar: boolean };
     };
 
 /** The Time Machine day an answer is computed for. */
@@ -111,7 +118,8 @@ export interface ChartResponse {
    */
   hasOlder?: boolean;
   /** Time Machine: bars end at this day's close; prices adjusted only for the splits and bonuses by then (`priceScale` × today's adjusted). */
-  asOf?: AsOfInfo & { priceScale: number | null };
+  /** Time Machine; `aheadThrough`: a replay read ahead to this day (day key) at the day's prices — the browser shows only the bars up to the day it is at. */
+  asOf?: AsOfInfo & { priceScale: number | null; aheadThrough?: number };
 }
 
 // ------------------------------------------------------------------ GET /api/quotes?symbols=A,B
@@ -449,6 +457,27 @@ export interface TradesResponse {
   journal: JournalSummary;
 }
 
+/**
+ * GET /api/plan/returns?symbols=A,B[&asOf=YYYY-MM-DD]: the last 120 sessions of daily log returns
+ * of the stocks and NIFTY, lined up on NIFTY's sessions; the browser builds issue #40's risk model
+ * from them (src/core/risk). In the Time Machine the window ends at that day's close.
+ */
+export type RiskReturnsResponse =
+  | {
+      status: "ready";
+      /** Day keys, oldest first; null in a series = no bar that session (or the one before). */
+      sessions: number[];
+      benchmark: Array<number | null>;
+      returns: Record<string, Array<number | null>>;
+      /** Each stock's industry (NSE's index lists: today's classification). */
+      industries: Record<string, string>;
+      /** Stocks with no daily bars in the window. */
+      missing: string[];
+      notes: string[];
+    }
+  | { status: "syncing"; progress: { done: number; total: number } }
+  | { status: "error"; error: string };
+
 /** POST /api/trades: "I took it". */
 export interface TradeCreateRequest {
   symbol: string;
@@ -468,6 +497,43 @@ export interface TradeCreateRequest {
 
 /** PATCH /api/trades/:id: fix a fill, the size, the stop or the notes. */
 export type TradeUpdateRequest = Partial<Pick<TradeCreateRequest, "entryPrice" | "entryAt" | "lots" | "stop" | "target" | "notes">>;
+
+// ------------------------------------------------------------------ paper trading in a replay (#32): /api/paper?asOf=YYYY-MM-DD
+
+/** POST /api/paper?asOf=: paper-take a plan idea on the day shown (its fills come from the replayed bars, not from you). */
+export interface PaperTakeRequest {
+  symbol: string;
+  screenId: string;
+  entryKind: EntryKind;
+  plannedEntry: number;
+  stop: number;
+  target: number | null;
+  exitRule: string;
+  holdSessions: number;
+  lots: number;
+  lotSize: number;
+  /** The evidence's expected net R per trade for the setup (shown beside what the paper trades made). */
+  expectedR?: number | null;
+}
+
+export interface PaperTradeDto extends PaperTradeRow {
+  lots: number;
+  lotSize: number;
+  createdAt: number;
+}
+
+/** GET /api/paper?asOf=: the current paper session, every trade graded as of that day's close. */
+export interface PaperResponse {
+  session: { id: string; createdAt: number; name: string | null };
+  /** The day graded (day key). */
+  day: number;
+  trades: PaperTradeDto[];
+  summary: PaperSummary;
+  costs: { preset: CostPresetId; label: string };
+  /** Earlier sessions (newest first): trades in each. */
+  earlier: Array<{ id: string; createdAt: number; closedAt: number | null; trades: number }>;
+  notes: string[];
+}
 
 /** POST /api/trades/:id/close */
 export interface TradeCloseRequest {

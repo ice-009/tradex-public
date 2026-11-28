@@ -11,8 +11,8 @@ import type { TimeMachineResponse } from "@/contracts/api";
 // and everything live-only — the order ticket, alerts, the journal, the Day
 // High/Low scan — is switched off or labelled.
 //
-// Replay controls (#32) will move the day with `setAsOf`; every feed already
-// refetches when it changes.
+// Replay controls (#32, src/client/replay.ts) move the day with `setAsOf`; every
+// feed refetches when it changes.
 
 export type PastInfo = Extract<TimeMachineResponse, { status: "past" }>;
 
@@ -90,15 +90,19 @@ export const useAsOfKey = () => useTimeMachine((current) => current.asOf ?? "");
 /** Subscribe outside React (the live stream pauses while a past day is shown). */
 export const onTimeMachineChange = subscribe;
 
-/** Show the terminal as of `date` (YYYY-MM-DD), or live (null). Updates the URL; every feed reloads. */
-export function setAsOf(date: string | null) {
+/**
+ * Show the terminal as of `date` (YYYY-MM-DD), or live (null). Updates the URL; every feed reloads.
+ * `replace`: a replay's step replaces the URL instead of adding a history entry per session.
+ */
+export function setAsOf(date: string | null, options: { replace?: boolean } = {}) {
   const asOf = date && DATE.test(date) ? date : null;
   if (asOf === state.asOf) return;
   if (typeof window !== "undefined") {
     const url = new URL(window.location.href);
     if (asOf) url.searchParams.set(PARAM, asOf);
     else url.searchParams.delete(PARAM);
-    window.history.pushState(null, "", url);
+    if (options.replace) window.history.replaceState(null, "", url);
+    else window.history.pushState(null, "", url);
   }
   set({ asOf, info: null, error: null });
 }

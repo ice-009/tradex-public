@@ -19,12 +19,14 @@ import type { LiveScreenRecord } from "@/core/screener/liveRecord";
 import type { RunStamp } from "@/core/repro/stamp";
 import { api } from "@/client/api";
 import { closeTrade, editTrade, removeTrade, takeTrade, usePlanFeed } from "@/client/planFeed";
+import { paperTake, usePaperFeed } from "@/client/paperFeed";
 import { refreshScreener, riskReward, useScreenerFeed } from "@/client/screenerFeed";
 import { openIdea } from "./ideaActions";
 import { drawPlanOnChart } from "./SetupCard";
 import { updateScreener, useTerminal } from "./store";
-import { setSizing, usePrefs } from "./uiPrefs";
-import { useDailyPlan, useMarketState } from "./usePlan";
+import { setCorrelationSizing, setSizing, usePrefs } from "./uiPrefs";
+import { useMarketState, usePlanWithRisk } from "./usePlan";
+import { CorrelatedList, ExposureSection } from "./Exposure";
 import { useLiveTick, useVisibleLiveTick } from "./LivePrice";
 import { Icons } from "./icons";
 import { RunStampBar, type Replay } from "./RunStampBar";
@@ -69,7 +71,7 @@ export function PlanPanel() {
   const capital = usePrefs((prefs) => prefs.capital);
   const riskPct = usePrefs((prefs) => prefs.riskPct);
   const maxOpen = usePrefs((prefs) => prefs.maxOpen);
-  const plan = useDailyPlan();
+  const { plan, risk } = usePlanWithRisk();
   const state = useMarketState();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showEvidence, setShowEvidence] = useState(false);
@@ -102,6 +104,7 @@ export function PlanPanel() {
       <div className="tx-plan-body">
         <div className="tx-plan-col">
           <TodaysPlan plan={plan} state={state} evidence={ready} trades={trades} live={Boolean(data?.asOf?.live)} eodDate={data?.asOf?.eodDate ?? null} onSizing={() => setSettingsOpen(true)} />
+          <ExposureSection plan={plan} risk={risk} />
           <PlanLedger />
         </div>
         <div className="tx-plan-col">
@@ -179,8 +182,36 @@ function PlanSettings() {
         <span>Leverage cap ×</span>
         <input className="tx-input tx-input-num" type="number" min={1} max={8} step={0.5} value={maxLeverage} onChange={(event) => { const n = number(event.target.value, 1, 8); if (n !== null) setSizing({ maxLeverage: n }); }} />
       </label>
+      <CorrelationSettings />
       <span className="tx-dim">Each trade is sized so its stop loses about {riskPct}% of capital, in whole futures lots.</span>
     </div>
+  );
+}
+
+/** Correlation-aware sizing (issue #40): off by default; the cluster budget and the ρ that links two stocks. */
+function CorrelationSettings() {
+  const on = usePrefs((prefs) => prefs.corrSizing);
+  const maxCorrRisk = usePrefs((prefs) => prefs.maxCorrRisk);
+  const threshold = usePrefs((prefs) => prefs.corrThreshold);
+  const number = (value: string, min: number, max: number) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : null;
+  };
+  return (
+    <>
+      <label className="tx-plan-check" title="Cut or skip an idea that moves with your open trades or the ideas above it, so the cluster's correlated risk stays under the budget. Off: every idea is sized on its own, as the evidence was tested.">
+        <span>Correlation sizing</span>
+        <input type="checkbox" checked={on} onChange={(event) => setCorrelationSizing({ corrSizing: event.target.checked })} />
+      </label>
+      <label title="Most correlated risk (the stop risks combined through their correlations) one cluster may carry, as a multiple of the risk per trade">
+        <span>Cluster budget ×</span>
+        <input className="tx-input tx-input-num" type="number" min={1} max={5} step={0.25} value={maxCorrRisk} disabled={!on} onChange={(event) => { const n = number(event.target.value, 1, 5); if (n !== null) setCorrelationSizing({ maxCorrRisk: n }); }} />
+      </label>
+      <label title="Two stocks count as one cluster from this correlation of daily returns (same-industry pairs from 0.3)">
+        <span>Linked at ρ ≥</span>
+        <input className="tx-input tx-input-num" type="number" min={0.3} max={0.95} step={0.05} value={threshold} disabled={!on} onChange={(event) => { const n = number(event.target.value, 0.3, 0.95); if (n !== null) setCorrelationSizing({ corrThreshold: n }); }} />
+      </label>
+    </>
   );
 }
 
@@ -253,6 +284,8 @@ function TodaysPlan({
         <div className="tx-plan-empty">No setup passed the test in this market. Not trading is the plan today.</div>
       ) : plan.freeSlots === 0 ? (
         <div className="tx-plan-empty">All {plan.openCount} slots are in use. Manage the open trades; new ideas appear when one closes.</div>
+      ) : !plan.ideas.length && !plan.unsized.length && plan.correlated.length > 0 ? (
+        <div className="tx-plan-empty">Every match moves with what you already hold, and that cluster is at its correlated-risk budget: no new idea today.</div>
       ) : !plan.ideas.length && !plan.unsized.length ? (
         <div className="tx-plan-empty">
           None of the setups that work in this market ({plan.eligible.map((id) => SCREEN_MAP[id]?.name).join(", ")}) match right now. The screener re-checks during the session.
@@ -268,6 +301,7 @@ function TodaysPlan({
         </ol>
       )}
       {plan && plan.unsized.length > 0 && <UnsizedList plan={plan} />}
+      {plan && plan.correlated.length > 0 && <CorrelatedList plan={plan} />}
       {excluded.length > 0 && plan && <LeftOut excluded={excluded} expanded={!plan.ideas.length} />}
       {plan && plan.invalid.length > 0 && <InvalidList plan={plan} />}
       {plan && !live && eodDate && plan.ideas.length > 0 && (
@@ -513,7 +547,7 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
   const { size } = idea;
   const dayPct = tick?.chp ?? idea.row.changePct;
   const sizeText =
-    size.status === "ok" ? `${size.lots} lot${size.lots === 1 ? "" : "s"}` : size.status === "too-big" ? "too big for your risk" : "no room under the leverage cap";
+    size.status === "ok" ? `${size.lots} lot${size.lots === 1 ? "" : "s"}${idea.correlation ? ` (of ${idea.correlation.lotsBefore})` : ""}` : size.status === "too-big" ? "too big for your risk" : "no room under the leverage cap";
   const sizeTitle =
     size.status === "ok"
       ? `${size.lots} × ${size.lot} = ${size.qty} shares · ${rupees(size.notional)} notional · loses ${rupees(size.risk)} at the stop`
@@ -554,12 +588,17 @@ function IdeaRow({ idea, rank, evidence, trades }: { idea: PlanIdea; rank: numbe
           {live ? ` · ${live}` : ""}
         </span>
       </button>
+      {idea.correlation && (
+        <span className="tx-plan-corr" title={`The cluster's correlated risk with this idea: ${rupees(idea.correlation.clusterRisk)} of a ${rupees(idea.correlation.budget)} budget`}>
+          {idea.correlation.text}
+        </span>
+      )}
       {receipt && <ReceiptLine receipt={receipt} className="tx-plan-receipt" />}
       <span className="tx-plan-actions">
         <button type="button" className="tx-icon-btn" title="Save this plan on the chart as a Long Position" onClick={() => drawPlanOnChart({ screen, row: idea.row, rr: riskReward(idea.row) })}>
           <Icons.long size={15} />
         </button>
-        <TookItButton taking={taking} onClick={() => setTaking(!taking)} />
+        <TookItButton idea={idea} taking={taking} onClick={() => setTaking(!taking)} />
       </span>
       {taking && <TakeForm idea={idea} price={tick?.ltp ?? null} onDone={() => setTaking(false)} />}
     </li>
@@ -648,13 +687,65 @@ function JournalColumn({ trades, error }: { trades: TradesResponse | null; error
   );
 }
 
-/** "I took it" records a real trade: off in the Time Machine (paper trading in a replay is #32). */
-function TookItButton({ taking, onClick }: { taking: boolean; onClick: () => void }) {
+/** "I took it" records a real trade; in the Time Machine it becomes "Paper take" (#32), into the replay's paper session. */
+function TookItButton({ idea, taking, onClick }: { idea: PlanIdea; taking: boolean; onClick: () => void }) {
   const pastDay = useTimeMachine((state) => state.asOf !== null);
+  if (pastDay) return <PaperTakeButton idea={idea} />;
   return (
-    <button type="button" className="tx-btn-outline tx-plan-took" onClick={onClick} disabled={pastDay} title={pastDay ? "The Time Machine shows a past day: your journal holds real trades only" : "Record that you took this trade"}>
+    <button type="button" className="tx-btn-outline tx-plan-took" onClick={onClick} title="Record that you took this trade">
       {taking ? "Cancel" : "I took it"}
     </button>
+  );
+}
+
+/**
+ * Paper-take a plan idea on the day shown, with the plan's own levels and
+ * size (one lot when the plan couldn't size it). It fills by the plan's entry
+ * rule as the replay steps forward; the Paper tab grades it.
+ */
+function PaperTakeButton({ idea }: { idea: PlanIdea }) {
+  const day = usePaperFeed((feed) => feed.data?.day ?? null);
+  const taken = usePaperFeed((feed) => Boolean(feed.data?.trades.some((trade) => trade.symbol === idea.symbol && trade.screenId === idea.screenId && trade.signalDay === feed.data?.day)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const lots = Math.max(1, idea.size.lots);
+  const take = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await paperTake({
+        symbol: idea.symbol,
+        screenId: idea.screenId,
+        entryKind: idea.entry.kind,
+        plannedEntry: idea.entry.price,
+        stop: idea.stop,
+        target: idea.target,
+        exitRule: idea.exitRule,
+        holdSessions: idea.holdSessions,
+        lots,
+        lotSize: idea.size.lot,
+        expectedR: idea.expectedR,
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className={`tx-btn-outline tx-plan-took ${taken ? "is-on" : ""}`}
+        onClick={() => void take()}
+        disabled={busy || taken || day === null}
+        title={taken ? "Paper-taken on this day: see the Paper tab" : `Paper-take ${lots} lot${lots === 1 ? "" : "s"} at the plan's levels: it fills by the plan's entry rule as the replay steps forward. Your real journal isn't touched.`}
+        data-testid="paper-take"
+      >
+        {taken ? "Paper-taken" : "Paper take"}
+      </button>
+      {error && <span className="tx-plan-error">{error}</span>}
+    </>
   );
 }
 

@@ -38,17 +38,21 @@ import type {
   ReceiptsResponse,
   ReplayRequest,
   ResultsResponse,
+  RiskReturnsResponse,
   ScreenerResponse,
   SymbolsResponse,
   TimeMachineResponse,
   TrackResult,
   TradeCloseRequest,
   TradeCreateRequest,
+  PaperResponse,
+  PaperTakeRequest,
   TradeDto,
   TradesResponse,
   TradeUpdateRequest,
 } from "@/contracts/api";
 import { asOfParam } from "@/client/timeMachine";
+import { replayActive } from "@/client/replay";
 
 export class ApiError extends Error {
   constructor(
@@ -109,18 +113,22 @@ const csv = (symbols: string[]) => symbols.join(",");
  * as of a past day: added to every one of them here, so no caller can forget it.
  */
 const asOf = () => asOfParam();
+/** "1" while a replay steps or plays (src/client/replay.ts): the server may read the replay block once and cut it at each day. */
+const replay = () => (asOf() && replayActive() ? "1" : undefined);
 const withAsOf = (params: Record<string, string>): Record<string, string> => {
   const day = asOf();
-  return day ? { ...params, asOf: day } : params;
+  if (!day) return params;
+  const flag = replay();
+  return flag ? { ...params, asOf: day, replay: flag } : { ...params, asOf: day };
 };
 
 export const api = {
   /** Candles for a chart; `older` asks daily-based intervals for the bars from `from` up to (not including) `to`, epoch ms. */
   chart: (symbol: string, interval: string, range: string, signal?: AbortSignal, older?: { from: number; to: number }) =>
-    getJson<ChartResponse>("/api/chart", { symbol, interval, range, from: older?.from, to: older?.to, asOf: asOf() }, signal),
+    getJson<ChartResponse>("/api/chart", { symbol, interval, range, from: older?.from, to: older?.to, asOf: asOf(), replay: replay() }, signal),
 
   /** `fresh`: a just-now price (costs an API call); otherwise a recent cached one is fine. */
-  quotes: (symbols: string[], fresh = false) => getJson<QuotesResponse>("/api/quotes", { symbols: csv(symbols), fresh: fresh ? 1 : undefined, asOf: asOf() }),
+  quotes: (symbols: string[], fresh = false) => getJson<QuotesResponse>("/api/quotes", { symbols: csv(symbols), fresh: fresh ? 1 : undefined, asOf: asOf(), replay: replay() }),
 
   symbols: (query: string, signal?: AbortSignal) => getJson<SymbolsResponse>("/api/symbols", { q: query }, signal),
 
@@ -150,6 +158,9 @@ export const api = {
   /** "Re-run this": compute a stamped evidence table again from scratch (~10 s). */
   replayEvidence: (body: ReplayRequest, signal?: AbortSignal) => postStatusJson<EvidenceReplayResponse>("/api/plan/evidence/replay", body, signal),
 
+  /** Daily returns of open trades and plan ideas for the risk model (issue #40); "syncing" while a past day's bars are read. */
+  riskReturns: (symbols: string[]) => getStatusJson<RiskReturnsResponse>("/api/plan/returns", withAsOf({ symbols: csv(symbols) })),
+
   /** The sealed daily plans (#33) between two YYYY-MM-DD dates (default: the last 30 days); "past" in the Time Machine. */
   planLedger: (range?: { from?: string; to?: string }) => getStatusJson<PlanLedgerResponse>("/api/plan/ledger", withAsOf({ ...(range?.from ? { from: range.from } : {}), ...(range?.to ? { to: range.to } : {}) })),
 
@@ -162,6 +173,14 @@ export const api = {
   updateTrade: (id: string, body: TradeUpdateRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}`, body, "PATCH"),
   closeTrade: (id: string, body: TradeCloseRequest) => postJson<TradeDto>(`/api/trades/${encodeURIComponent(id)}/close`, body),
   deleteTrade: (id: string) => postJson<{ ok: boolean }>(`/api/trades/${encodeURIComponent(id)}`, undefined, "DELETE"),
+
+  /** Paper trading in a Time Machine replay (#32): the current session graded as of the day shown. */
+  paper: (signal?: AbortSignal) => getJson<PaperResponse>("/api/paper", withAsOf({}), signal),
+  /** Paper-take a plan idea on the day shown. */
+  paperTake: (body: PaperTakeRequest) => postJson<{ id: string }>(`/api/paper?${new URLSearchParams(withAsOf({})).toString()}`, body),
+  paperRemove: (id: string) => postJson<{ ok: boolean }>(`/api/paper/${encodeURIComponent(id)}`, undefined, "DELETE"),
+  /** Start a new paper session (the current one is kept, closed). */
+  paperSession: () => postJson<{ id: string }>("/api/paper/session", {}),
 
   /** Stored history a backtest can use for a universe. */
   backtestInfo: (universe: string, signal?: AbortSignal) => getJson<BacktestInfoResponse>("/api/backtest", { universe }, signal),
@@ -180,11 +199,11 @@ export const api = {
 
   analyze: (symbols: string[]) => getJson<AnalyzeResponse>("/api/analyze", { symbols: csv(symbols) }),
 
-  results: () => getJson<ResultsResponse>("/api/results", { asOf: asOf() }),
+  results: () => getJson<ResultsResponse>("/api/results", { asOf: asOf(), replay: replay() }),
 
   highLow: (after: number) => getJson<HighLowResponse>("/api/highlow", { after }),
 
-  lots: () => getJson<LotsResponse>("/api/lots", { asOf: asOf() }),
+  lots: () => getJson<LotsResponse>("/api/lots", { asOf: asOf(), replay: replay() }),
 
   /** An underlying's daily option summaries (IV term, skew, PCR, max pain, straddle) and IV history, as of the Time Machine's day when set. */
   options: (symbol: string, range: OptionRange, signal?: AbortSignal) => getStatusJson<OptionsResponse>("/api/options", withAsOf({ symbol, range }), signal),

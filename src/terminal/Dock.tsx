@@ -9,6 +9,8 @@ import { useHighLowFeed } from "@/client/highLowFeed";
 import { istParts } from "@/core/market/session";
 import { usePlanFeed } from "@/client/planFeed";
 import { useDailyPlan } from "./usePlan";
+import { useTimeMachine } from "@/client/timeMachine";
+import { usePaperFeed } from "@/client/paperFeed";
 
 /**
  * Bottom panel strip, always visible under the charts (like a trading
@@ -25,6 +27,8 @@ export function BottomDock() {
   const status = useScreenerFeed((feed) => feed.data?.status);
   const plan = useDailyPlan();
   const planned = plan?.ideas.filter((idea) => idea.size.status === "ok").length ?? 0;
+  const pastDay = useTimeMachine((state) => state.asOf !== null);
+  const paperOpen = usePaperFeed((feed) => (feed.data ? feed.data.summary.open + feed.data.summary.pending : 0));
   const urgent = usePlanFeed((feed) => Object.values(feed.trades?.tracks ?? {}).filter((track) => track.urgent).length);
 
   return (
@@ -39,6 +43,18 @@ export function BottomDock() {
         {planned > 0 && <span className="tx-dock-count">{planned}</span>}
         {urgent > 0 && <span className="tx-dock-dot is-error" title={`${urgent} open trade${urgent === 1 ? " needs" : "s need"} action today`} />}
       </button>
+      {(pastDay || view === "paper") && (
+        <button
+          type="button"
+          className={`tx-dock-tab ${open && view === "paper" ? "is-active" : ""}`}
+          onClick={() => updateScreener(open && view === "paper" ? { open: false, maximized: false } : { open: true, view: "paper" })}
+          title="Paper trades in this Time Machine replay, graded as of the day shown"
+          data-testid="dock-paper"
+        >
+          Paper
+          {paperOpen > 0 && <span className="tx-dock-count">{paperOpen}</span>}
+        </button>
+      )}
       <button
         type="button"
         className={`tx-dock-tab ${open && view === "screener" ? "is-active" : ""}`}

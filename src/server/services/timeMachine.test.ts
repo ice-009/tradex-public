@@ -153,6 +153,7 @@ async function asOfD(variant: Variant) {
   const { pastDay, quotesAsOf, lotsAsOf, resultsAsOf } = await import("./timeMachine");
   const { runScreener, trackRecord } = await import("./screener");
   const { strategyEvidence } = await import("./evidence");
+  const { riskReturns } = await import("./riskReturns");
   const past = (await pastDay(REQUESTED))!;
   const screener = await vi.waitFor(
     async () => {
@@ -172,7 +173,15 @@ async function asOfD(variant: Variant) {
     { timeout: 60_000, interval: 200 },
   );
   const quotes = await quotesAsOf(["S00", "S01", "S02", "OLDCO", "NEWCO"], past.day);
-  return { past, screener, track, evidence, quotes, lots: await lotsAsOf(past.day), results: await resultsAsOf(past.day) };
+  const returns = await vi.waitFor(
+    async () => {
+      const answer = await riskReturns(["S00", "S01", "S02", "OLDCO"], past);
+      if (answer.status !== "ready") throw new Error(`returns ${answer.status}`);
+      return answer;
+    },
+    { timeout: 30_000, interval: 100 },
+  );
+  return { past, screener, track, evidence, quotes, returns, lots: await lotsAsOf(past.day), results: await resultsAsOf(past.day) };
 }
 
 describe("the Time Machine reads nothing after the day shown", { timeout: 120_000 }, () => {
@@ -228,6 +237,16 @@ describe("the Time Machine reads nothing after the day shown", { timeout: 120_00
     // B's hub serves S00 halved before its bonus; as of D it is the same price again.
     expect(b.quotes.quotes[0].ltp).toBeCloseTo(s00.c, 6);
     expect(normal(b.quotes)).toEqual(normal(a.quotes));
+  });
+
+  it("gives the plan's risk model the 120 sessions of returns ending at D (#40)", () => {
+    expect(a.returns.status).toBe("ready");
+    if (a.returns.status !== "ready") return;
+    expect(a.returns.sessions).toHaveLength(120);
+    expect(a.returns.sessions.at(-1)).toBe(D);
+    expect(a.returns.returns.S00.every((value) => value !== null)).toBe(true);
+    // B's later bonus rescales S00's bars before D: returns don't change.
+    expect(b.returns).toEqual(a.returns);
   });
 
   it("gives lots and results as known on D, never today's", () => {
