@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ScreenerRow } from "@/core/screener/screens";
-import { buildPlan, DEFAULT_PLAN_SETTINGS, type PlanInput } from "./builder";
+import type { RiskModel } from "@/core/risk/model";
+import { DEFAULT_CORRELATION_SETTINGS, type BookEntry } from "@/core/risk/sizing";
+import { buildPlan, DEFAULT_PLAN_SETTINGS, type PlanCorrelation, type PlanInput } from "./builder";
 import type { EvidenceBucket, ScreenEvidence } from "./evidence";
 import { entryKind, entryText, exitRuleFor, exitText } from "./instructions";
 
@@ -148,6 +150,66 @@ describe("daily plan", () => {
     );
     expect(plan.ideas.map((idea) => idea.screenId)).toEqual(["res-drift"]);
     expect(plan.invalid).toHaveLength(0);
+  });
+
+  describe("correlation-aware sizing (#40)", () => {
+    const bank = (symbol: string, stop = 95) => row(symbol, 100, stop, { industry: "Financial Services" });
+    const it_ = (symbol: string) => row(symbol, 100, 95, { industry: "Information Technology" });
+    const RHO: Record<string, number> = { "AAA:BBB": 0.82, "AAA:CCC": 0.8, "BBB:CCC": 0.8, "AAA:HDF": 0.82, "BBB:HDF": 0.8, "CCC:HDF": 0.8 };
+    const symbols = ["AAA", "BBB", "CCC", "DDD", "HDF"];
+    const corr = symbols.map((a) => symbols.map((b) => (a === b ? 1 : (RHO[`${a}:${b}`] ?? RHO[`${b}:${a}`] ?? 0.1))));
+    const model: RiskModel = { symbols, index: Object.fromEntries(symbols.map((s, i) => [s, i])), from: 0, to: 0, sessions: 120, cov: corr, corr, vol: {}, beta: {}, shrinkage: 0, meanCorrelation: 0, returns: {}, excluded: [] };
+    const correlation = (open: BookEntry[] = []): PlanCorrelation => ({ ...DEFAULT_CORRELATION_SETTINGS, model, open });
+    const results = { "res-drift": [bank("AAA"), bank("BBB"), bank("CCC"), it_("DDD")] };
+    const lotsOf = (plan: ReturnType<typeof buildPlan>) => plan.ideas.map((idea) => [idea.symbol, idea.size.lots]);
+
+    it("changes nothing when it is off", () => {
+      const off = buildPlan(input({ results }));
+      expect(lotsOf(off)).toEqual([
+        ["AAA", 10],
+        ["BBB", 10],
+        ["CCC", 10],
+        ["DDD", 10],
+      ]);
+      expect(off.correlated).toEqual([]);
+      expect(off.ideas.some((idea) => idea.correlation)).toBe(false);
+      // Same plan with the model given but nothing correlated (every ρ 0.1, no shared industry).
+      const unrelated = buildPlan(input({ results: { "res-drift": ["AAA", "BBB", "CCC", "DDD"].map((s, i) => row(s, 100, 95, { industry: `I${i}` })) }, correlation: { ...correlation(), model: { ...model, corr: model.corr.map((r) => r.map((v) => (v === 1 ? 1 : 0.1))) } } }));
+      expect(lotsOf(unrelated)).toEqual(lotsOf(off));
+    });
+
+    it("cuts or skips ideas that move with an open trade and the ideas above them", () => {
+      const plan = buildPlan(input({ results, correlation: correlation([{ symbol: "HDF", industry: "Financial Services", kind: "open", risk: 7_500 }]) }));
+      // Open HDF at 1.5 R (₹7,500), budget 2 R (₹10,000): AAA (ρ 0.82) may risk x ≤ −0.82·7500 + √((0.82·7500)² + 10000² − 7500²), in ₹500 lots.
+      const maxX = -0.82 * 7_500 + Math.sqrt((0.82 * 7_500) ** 2 + 10_000 ** 2 - 7_500 ** 2);
+      expect(plan.ideas[0]).toMatchObject({ symbol: "AAA", size: { lots: Math.floor(maxX / 500), risk: Math.floor(maxX / 500) * 500 } });
+      expect(plan.ideas[0].correlation?.text).toBe(`${Math.floor(maxX / 500)} lots instead of 10: 0.82 correlated with your open HDF`);
+      // BBB and CCC: the bank cluster is full; skipped, without taking a slot. DDD (IT) untouched.
+      expect(plan.correlated.map((idea) => idea.symbol)).toEqual(["BBB", "CCC"]);
+      expect(plan.correlated[0].size.lots).toBe(10);
+      expect(plan.correlated[0].correlation?.text).toMatch(/^Skipped: 0\.82 correlated with the plan's AAA and 1 more/);
+      expect(lotsOf(plan).at(-1)).toEqual(["DDD", 10]);
+      expect(plan.ideas.at(-1)?.correlation).toBeUndefined();
+    });
+
+    it("lets the next idea take a skipped idea's slot", () => {
+      const plan = buildPlan(input({ results, settings: { ...DEFAULT_PLAN_SETTINGS, maxOpen: 2 }, correlation: correlation() }));
+      // AAA full, BBB at ρ 0.82 still fits (√3.64 R ≤ 2 R), CCC would be the third: but only 2 slots.
+      expect(plan.ideas.map((idea) => idea.symbol)).toEqual(["AAA", "BBB"]);
+      // A third bank gets what is left of the budget: ≈ 0.11 R = one ₹500 lot.
+      const three = buildPlan(input({ results, settings: { ...DEFAULT_PLAN_SETTINGS, maxOpen: 3 }, correlation: correlation() }));
+      expect(lotsOf(three)).toEqual([
+        ["AAA", 10],
+        ["BBB", 10],
+        ["CCC", 1],
+      ]);
+      expect(three.ideas[2].correlation?.text).toBe("1 lot instead of 10: 0.80 correlated with the plan's AAA and 1 more");
+      // With ₹1,000 lots nothing fits: CCC is set aside and DDD takes the slot.
+      const wide = { "res-drift": [bank("AAA"), bank("BBB"), bank("CCC", 90), it_("DDD")] };
+      const tight = buildPlan(input({ results: wide, settings: { ...DEFAULT_PLAN_SETTINGS, maxOpen: 3 }, correlation: correlation() }));
+      expect(tight.ideas.map((idea) => idea.symbol)).toEqual(["AAA", "BBB", "DDD"]);
+      expect(tight.correlated.map((idea) => idea.symbol)).toEqual(["CCC"]);
+    });
   });
 
   it("writes plain entry and exit instructions", () => {

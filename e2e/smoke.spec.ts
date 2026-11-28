@@ -135,6 +135,40 @@ test("open the plan", async ({ page }) => {
   await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible();
 });
 
+test("see the plan's exposure, and size it by correlation (#40)", async ({ page }) => {
+  await openDockTab(page, "Plan");
+  const ideas = page.locator(".tx-plan-section").first().locator(".tx-plan-ideas li");
+  await expect(ideas.first()).toBeVisible({ timeout: 60_000 });
+  const exposure = page.locator(".tx-exposure");
+  await expect(exposure).toContainText("EXPOSURE");
+  // Every planned idea is a row; the risk model is built from the stored daily returns.
+  await expect(exposure.locator(".tx-exposure-table tbody tr")).toHaveCount(await ideas.count());
+  await expect(exposure.locator(".tx-exposure-totals")).toContainText(/Correlated₹[\d,]+ · [\d.]+R/);
+  await expect(exposure).toContainText(/Correlations of daily returns over 120 sessions/);
+  // What-if: untick the first idea and the gross risk at the stops drops.
+  const atStops = exposure.locator(".tx-exposure-totals > span").nth(1).locator("b");
+  const before = await atStops.textContent();
+  await exposure.locator(".tx-exposure-table input[type=checkbox]").first().uncheck();
+  await expect(atStops).not.toHaveText(before ?? "");
+  await exposure.locator(".tx-exposure-table input[type=checkbox]").first().check();
+
+  // Correlation sizing is off by default. On, it only touches ideas linked to each other: the stub's
+  // stocks move independently (no shared industry among the ideas, ρ ≈ 0), so even a 1× budget leaves the plan alone.
+  // (The cuts themselves are unit-tested: src/core/risk/sizing.test.ts, src/core/plan/builder.test.ts.)
+  const sizes = await ideas.locator(".tx-plan-size").allTextContents();
+  await page.getByTitle("Capital, risk per trade, most open trades").click();
+  const settings = page.locator(".tx-plan-settings");
+  const toggle = settings.getByLabel("Correlation sizing");
+  await expect(toggle).not.toBeChecked();
+  await expect(settings.getByLabel("Cluster budget ×")).toBeDisabled();
+  await toggle.check();
+  await settings.getByLabel("Cluster budget ×").fill("1");
+  await expect(exposure).toContainText("Sizing holds each cluster to 1× the risk per trade");
+  expect(await ideas.locator(".tx-plan-size").allTextContents()).toEqual(sizes);
+  await toggle.uncheck();
+  await expect(exposure).toContainText("Correlation-aware sizing is off");
+});
+
 test("scroll a daily chart back past the stored 5 years: older bars load, a renamed stock's history joined (#18, #16)", async ({ page }) => {
   await openSymbol(page, "INFY");
   await pickInterval(page, "D");
