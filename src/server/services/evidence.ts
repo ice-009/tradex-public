@@ -5,7 +5,8 @@ import path from "node:path";
 import type { EvidenceReplayResponse, EvidenceResponse } from "@/contracts/api";
 import { COST_PRESETS, type CostPresetId } from "@/core/backtest/costs";
 import { lotHistoryPart, pointInTimeLots } from "@/core/backtest/lots";
-import { scanSignals } from "@/core/backtest/signals";
+import { scanSignals, type ScanInput, type SignalScan } from "@/core/backtest/signals";
+import { cutScan, type BlockScan } from "@/core/backtest/scanCut";
 import { STORE_DAYS, WARMUP_DAYS, clampToArchive, isLongRange, storeStart } from "@/core/backtest/phases";
 import { pointInTimeUniverse, universeNote } from "@/core/backtest/universe";
 import { marketStates, replaySignals, roundTripPct, summarizeEvidence, type EvidenceTable } from "@/core/plan/evidence";
@@ -24,7 +25,7 @@ import { BENCHMARK } from "@/server/services/screener";
 import { hubEndOfDay } from "@/server/providers/hub";
 import { log } from "@/server/log";
 import { codeVersion, hubVersion, parseStamp, pinOf, type ReplayPin } from "./runStamp";
-import { pastBars, scaleBars, scalesOn, type PastDay } from "./timeMachine";
+import { pastBars, replayBlock, scaleBars, scalesOn, type PastBars, type PastDay } from "./timeMachine";
 
 // Strategy evidence for the daily plan (rules in src/core/plan/evidence.ts):
 // every screen replayed over the F&O list's daily history — the five years the
@@ -193,7 +194,10 @@ async function pinnedInfo(pin: ReplayPin): Promise<KeyInfo> {
   return { key: "replay", symbols, byDay, listOn, today, lastDay: pin.to, window };
 }
 
-async function compute(info: KeyInfo, progress: { done: number; total: number }): Promise<Computed> {
+/** Runs the screens over a computation's input: scanSignals, or a replay block's scan cut at the day (falling back to scanSignals). */
+type ScanFn = (input: ScanInput) => Promise<SignalScan>;
+
+async function compute(info: KeyInfo, progress: { done: number; total: number }, scanWith: ScanFn = scanSignals): Promise<Computed> {
   const started = Date.now();
   const bars = new Map<string, DailyBar[]>();
   for (const symbol of [...info.symbols, BENCHMARK]) {
@@ -207,10 +211,15 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   if (symbols.length && benchmark.length < 200 && hubEndOfDay()) {
     throw new Error("The daily plan needs NIFTY's daily history to tell the market state. The Market Data Hub has no broker connected (end-of-day data), and NSE's index closes aren't in it yet (market-data-hub#23); screens and backtests work meanwhile.");
   }
-  if (!symbols.length || benchmark.length < 200) throw new Error(`Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim());
+  if (!symbols.length || benchmark.length < 200) {
+    const message = `Not enough stored daily history yet: the evidence needs the F&O stocks' and NIFTY's daily bars, read from the Market Data Hub. ${screenerStore.progress.message}`.trim();
+    // No stock has a bar yet while the store is still reading from the hub (or the hub is downloading): not a failure, ask again.
+    const { phase, queued } = screenerStore.progress;
+    throw !symbols.length && (phase === "history" || queued > 0) ? new NoDataYet(message) : new Error(message);
+  }
 
   progress.total = new Set(symbols.flatMap((symbol) => bars.get(symbol)!.map((bar) => bar.t))).size;
-  const scan = await scanSignals({
+  const scan = await scanWith({
     symbols,
     getBars: (symbol) => bars.get(symbol) ?? [],
     benchmark,
@@ -264,6 +273,9 @@ async function compute(info: KeyInfo, progress: { done: number; total: number })
   return { key: info.key, table, computedAt, ms, note, stamp };
 }
 
+/** No daily bars at all yet, while the store is still reading them: computed again on the next ask, not kept as an error. */
+class NoDataYet extends Error {}
+
 function start(info: KeyInfo) {
   const pending = { key: info.key, startedAt: Date.now(), done: 0, total: 0 };
   state.pending = pending;
@@ -275,6 +287,11 @@ function start(info: KeyInfo) {
       await writeFile(CACHE_FILE, JSON.stringify(result));
     })
     .catch((error: Error) => {
+      if (error instanceof NoDataYet) {
+        // Not kept as an error: the next ask computes again (by then the bars may be in).
+        log.info("Strategy evidence waits for daily bars", { message: error.message });
+        return;
+      }
       log.error("Strategy evidence failed", { error });
       state.error = { key: info.key, message: error.message, at: Date.now() };
     })
@@ -391,7 +408,7 @@ function rangeEvidence(range: EvidenceRange): EvidenceResponse {
 export async function strategyEvidence(range: EvidenceRange | null = null, past: PastDay | null = null): Promise<EvidenceResponse> {
   if (past) {
     if (range && (range.from !== null || range.to !== null)) return { status: "error", error: "A chosen period's evidence isn't available in the Time Machine: it could reach past the day shown." };
-    return pastEvidence(past.day);
+    return pastEvidence(past.day, Boolean(past.replay));
   }
   if (range && (range.from !== null || range.to !== null)) return rangeEvidence(range);
   const info = await keyInfo();
@@ -449,7 +466,7 @@ export async function replayEvidence(body: unknown): Promise<EvidenceReplayRespo
 // ------------------------------------------------------------------ a past day (Time Machine)
 
 /** Past days' tables kept in memory (most recently asked last). */
-const MAX_PAST_DAYS = 6;
+const MAX_PAST_DAYS = 60;
 const globalForPast = globalThis as unknown as { planEvidencePast?: Map<number, RangeState> };
 const pastTables = (globalForPast.planEvidencePast ??= new Map());
 
@@ -492,8 +509,126 @@ async function pastInfo(day: number, pin: ReplayPin | null): Promise<KeyInfo> {
   return { key: `asof:${day}`, symbols, byDay, listOn, today: dayList, lastDay: day, window, range: { from, to: day, barsOf, notes }, asOf: day, sharesPerTodayShare: (symbol) => 1 / scaleOf(symbol) };
 }
 
-/** A past day's table: computed in the background on first ask, kept in memory per day. */
-function pastEvidence(day: number): EvidenceResponse {
+// ------------------------------------------------------------------ replay: one scan per block, cut at each day
+
+/**
+ * A replay block's evidence input (issue #32): the block's days share one read
+ * of the bars — the first day's look-back through the last day — and one scan
+ * of it per price-scale set (a split or bonus inside the block changes the
+ * prices a scan sees) and, where some counted session has no F&O list of its
+ * own, per stand-in list. Each day's table is then the day's own computation
+ * with that scan cut at the day in place of a scan of its own (cutScan, which
+ * checks the cut equals one and otherwise scans from scratch).
+ */
+interface EvidenceBlock {
+  block: { from: number; to: number };
+  ready: Promise<{
+    readFrom: number;
+    symbols: string[];
+    byDay: ReadonlyMap<number, ReadonlySet<string>>;
+    listOn: (day: number) => ReadonlySet<string> | null;
+    set: PastBars;
+    /** Some session the block's days count has no F&O list of its own (the day's list stands in). */
+    standInUsed: boolean;
+  }>;
+  scans: Map<string, Promise<BlockScan>>;
+}
+
+/** Blocks kept, and scans per block (each a few tens of MB for the F&O list). */
+const MAX_EVIDENCE_BLOCKS = 2;
+const MAX_BLOCK_SCANS = 3;
+const globalForBlocks = globalThis as unknown as { planEvidenceBlocks?: Map<string, EvidenceBlock> };
+const evidenceBlocks = (globalForBlocks.planEvidenceBlocks ??= new Map());
+
+/** The evidence block already started for a day, if any. */
+const blockFor = (day: number) => [...evidenceBlocks.values()].find((entry) => entry.block.from <= day && day <= entry.block.to) ?? null;
+
+/** The replay block's input for a day: read once per block (the bars of everyone on an F&O list in its window). */
+function evidenceBlock(day: number): EvidenceBlock {
+  const found = blockFor(day);
+  if (found) return found;
+  const block = replayBlock(day);
+  const key = `${block.from}:${block.to}`;
+  const entry: EvidenceBlock = {
+    block,
+    scans: new Map(),
+    ready: (async () => {
+      const readFrom = clampToArchive(evidenceWindowStart(block.from, STORE_DAYS) - WARMUP_DAYS * DAY_MS);
+      const { today, byDay, listOn } = await membershipOver({ from: readFrom, to: block.to }, block.to);
+      const symbols = [...new Set([...today, ...[...byDay.values()].flatMap((members) => [...members])])].sort();
+      const started = Date.now();
+      const set = await pastBars(block.to, [...symbols, BENCHMARK, BENCHMARK_STAND_IN], readFrom).promise;
+      const counted = evidenceWindowStart(block.from, STORE_DAYS);
+      const sessions = new Set<number>();
+      for (const [symbol, bars] of set.bars) if (symbol !== BENCHMARK && symbol !== BENCHMARK_STAND_IN) for (const bar of bars) if (bar.t >= counted) sessions.add(bar.t);
+      const standInUsed = !byDay.size || [...sessions].some((session) => listOn(session) === null);
+      log.info("Evidence replay block read", { from: dayLabel(block.from), to: dayLabel(block.to), symbols: symbols.length, ms: Date.now() - started });
+      return { readFrom, symbols, byDay, listOn, set, standInUsed };
+    })(),
+  };
+  entry.ready.catch(() => evidenceBlocks.get(key) === entry && evidenceBlocks.delete(key));
+  evidenceBlocks.set(key, entry);
+  while (evidenceBlocks.size > MAX_EVIDENCE_BLOCKS) evidenceBlocks.delete(evidenceBlocks.keys().next().value!);
+  return entry;
+}
+
+/**
+ * A past day's table from its replay block: the day's own input (pastInfo, its
+ * bars cut from the block's read), and the block's scan for the day's price
+ * scales and stand-in list, cut at the day.
+ */
+async function blockCompute(day: number, entry: EvidenceBlock, progress: { done: number; total: number }): Promise<Computed> {
+  const block = await entry.ready;
+  const info = await pastInfo(day, null);
+  const inBlock = new Set(block.symbols);
+  if (!info.symbols.every((symbol) => inBlock.has(symbol)) || !info.range) return compute(info, progress);
+  const { scaleOf } = await scalesOn(day, block.symbols);
+  const standIn = [...info.today].sort();
+  const signature = [
+    block.symbols.flatMap((symbol) => (scaleOf(symbol) === 1 ? [] : [`${symbol}*${scaleOf(symbol)}`])).join(","),
+    block.standInUsed ? standIn.join(",") : "-",
+  ].join("|");
+  let scan = entry.scans.get(signature);
+  if (!scan) {
+    const { set } = block;
+    const member = new Set(standIn);
+    const isMember = block.byDay.size ? pointInTimeUniverse({ byDay: block.byDay, today: standIn, listOn: block.listOn }).isMember : (symbol: string) => member.has(symbol);
+    const started = Date.now();
+    scan = scanSignals({
+      symbols: block.symbols.filter((symbol) => set.bars.has(symbol)),
+      getBars: (symbol) => scaleBars(set.bars.get(symbol) ?? [], scaleOf(symbol)),
+      benchmark: spliceBenchmark(set.bars.get(BENCHMARK) ?? [], set.bars.get(BENCHMARK_STAND_IN) ?? []).bars,
+      isMember,
+      pause: async () => {
+        progress.done += 1;
+        await yieldToEventLoop();
+      },
+    }).then((result) => {
+      log.info("Evidence replay block scanned", { day: dayLabel(day), sessions: result.dates.length, ms: Date.now() - started });
+      return { scan: result, isMember };
+    });
+    const current = scan;
+    current.catch(() => entry.scans.get(signature) === current && entry.scans.delete(signature));
+    entry.scans.set(signature, current);
+    while (entry.scans.size > MAX_BLOCK_SCANS) entry.scans.delete(entry.scans.keys().next().value!);
+  }
+  const blockScan = await scan;
+  const from = info.range.from;
+  return compute(info, progress, async (input) => {
+    const cut = cutScan(blockScan, input, day, from);
+    if (cut) return cut;
+    log.info("Evidence replay: the block's scan doesn't cut to this day, scanning it from scratch", { day: dayLabel(day) });
+    return scanSignals(input);
+  });
+}
+
+/**
+ * A past day's table: computed in the background on first ask, kept in memory
+ * per day. A replay (`replay`) computes it from the replay block's read and
+ * scan (blockCompute), as does a day a block already serves; otherwise from
+ * the day's own read and scan. The two give the same table (evidenceReplay.test.ts).
+ */
+function pastEvidence(day: number, replay = false): EvidenceResponse {
   let entry = pastTables.get(day);
   const failedLongAgo = entry?.error && Date.now() - entry.error.at >= RETRY_AFTER_ERROR_MS;
   if (!entry || (failedLongAgo && !entry.pending)) {
@@ -501,8 +636,8 @@ function pastEvidence(day: number): EvidenceResponse {
     entry = fresh;
     pastTables.set(day, fresh);
     while (pastTables.size > MAX_PAST_DAYS) pastTables.delete(pastTables.keys().next().value!);
-    void pastInfo(day, null)
-      .then((info) => compute(info, fresh.pending!))
+    const block = replay ? evidenceBlock(day) : blockFor(day);
+    void (block ? blockCompute(day, block, fresh.pending!) : pastInfo(day, null).then((info) => compute(info, fresh.pending!)))
       .then((result) => {
         fresh.current = result;
       })

@@ -1,0 +1,49 @@
+/* Time Machine replay controls and the Paper tab (issue #32). */
+
+.tx-tm-replay {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2, 8px);
+  flex-wrap: wrap;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--warn-border);
+  background: var(--surface-2);
+  font-size: var(--fs-sm, 12px);
+}
+.tx-tm-replay-day { font-weight: 600; color: var(--warn); min-width: 96px; }
+.tx-tm-replay-day em { font-style: normal; font-weight: 400; color: var(--text-subtle); }
+.tx-tm-replay .tx-tb-btn.is-on { border-color: var(--warn-border); background: var(--warn-soft); }
+.tx-tm-speed { height: 26px; padding: 0 4px; font-size: var(--fs-sm, 12px); }
+.tx-tm-jump { display: flex; align-items: center; gap: 4px; }
+.tx-tm-replay-note { color: var(--text-subtle); }
+.tx-tm-paper-chip {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm, 4px);
+  background: var(--surface);
+  color: var(--text-muted, inherit);
+  font-size: var(--fs-sm, 12px);
+  cursor: pointer;
+}
+.tx-tm-paper-chip:hover { border-color: var(--warn-border); }
+.tx-tm-paper-chip .is-up, .tx-paper .is-up { color: var(--pos); }
+.tx-tm-paper-chip .is-down, .tx-paper .is-down { color: var(--neg); }
+
+.tx-paper { display: flex; flex-direction: column; }
+.tx-paper-body { flex: 1; overflow: auto; padding: 0 var(--sp-3, 12px) var(--sp-3, 12px); }
+.tx-paper-summary { display: flex; flex-wrap: wrap; gap: var(--sp-4, 16px); padding: var(--sp-3, 12px) 0; }
+.tx-paper-summary span { display: flex; flex-direction: column; gap: 2px; color: var(--text-subtle); font-size: var(--fs-sm, 12px); }
+.tx-paper-summary b { font-size: 16px; color: var(--text); }
+.tx-paper-summary b.is-up { color: var(--pos); }
+.tx-paper-summary b.is-down { color: var(--neg); }
+.tx-paper-summary em { font-style: normal; font-size: var(--fs-xs, 11px); }
+.tx-paper-table td, .tx-paper-table th { white-space: nowrap; }
+.tx-paper-table tr.is-later, .tx-paper-table tr.is-unfilled { color: var(--text-subtle); }
+.tx-paper-status { text-transform: none; }
+
+@media (max-width: 900px) {
+  .tx-tm-jump { display: none; }
+  .tx-tm-paper-chip { margin-left: 0; }
+}

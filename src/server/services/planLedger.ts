@@ -196,9 +196,14 @@ export const liveSource: SealSource = {
   async build(due, now) {
     const today = istParts(now).day;
     if (due.kind === "close" && due.day !== today) return { skip: "A close seal is made on its own day only." };
+    const live = due.kind === "close";
+    // The screener first: right after a start (an evening or weekend restart makes the final seal due at
+    // once) the daily bars are still being read from the hub, and asking for the evidence then would
+    // compute it from nothing and leave that error in the Plan tab for a minute.
+    const first = await runScreener("fno", live, null);
+    if (first.status !== "ready" || !first.results) return { skip: first.status === "syncing" ? "The screener is still building its history." : `The screener has no data: ${first.error ?? "unknown error"}` };
     const evidence = await readyEvidence(now + EVIDENCE_WAIT_MS);
     if ("skip" in evidence) return evidence;
-    const live = due.kind === "close";
     // Never `past`: the seal is today's live plan (the Time Machine can't reach it).
     const screener = await runScreener("fno", live, null);
     if (screener.status !== "ready" || !screener.results || !screener.asOf) return { skip: screener.status === "syncing" ? "The screener is still building its history." : `The screener has no data: ${screener.error ?? "unknown error"}` };

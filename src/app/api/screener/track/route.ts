@@ -13,7 +13,7 @@ export const GET = authed(
   "Unable to replay the screens right now.",
   async (_email, request: NextRequest) => {
     const params = request.nextUrl.searchParams;
-    return NextResponse.json<TrackResult>(await trackRecord(parseUniverse(params.get("universe")), await pastDay(params.get("asOf"))));
+    return NextResponse.json<TrackResult>(await trackRecord(parseUniverse(params.get("universe")), await pastDay(params.get("asOf"), params.get("replay"))));
   },
   (): TrackResult => ({ status: "error", error: "Unable to replay the screens right now." }),
 );

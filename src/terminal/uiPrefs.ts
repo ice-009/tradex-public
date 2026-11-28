@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { Tool } from "@/chart/types";
+import { DEFAULT_CORRELATION_SETTINGS } from "@/core/risk/sizing";
 
 // Small UI-preference store for the drawing/chart chrome (kept apart from the
 // terminal store): hide-all-drawings, crosshair sync, and the tool last used in
@@ -19,10 +20,14 @@ export interface UIPrefs {
   /** Daily plan: most trades open at once, and the cap on total open notional as a multiple of capital. */
   maxOpen: number;
   maxLeverage: number;
+  /** Correlation-aware sizing (issue #40, off by default): cut ideas whose cluster's correlated risk would pass maxCorrRisk × the risk per trade; ρ ≥ corrThreshold links two positions. */
+  corrSizing: boolean;
+  maxCorrRisk: number;
+  corrThreshold: number;
 }
 
 const STORAGE_KEY = "tradex.uiprefs.v1";
-const DEFAULTS: UIPrefs = { hideDrawings: false, syncCrosshair: true, groupTools: {}, showPlans: true, autoPatterns: true, capital: 500_000, riskPct: 1, maxOpen: 5, maxLeverage: 4 };
+const DEFAULTS: UIPrefs = { hideDrawings: false, syncCrosshair: true, groupTools: {}, showPlans: true, autoPatterns: true, capital: 500_000, riskPct: 1, maxOpen: 5, maxLeverage: 4, corrSizing: false, maxCorrRisk: DEFAULT_CORRELATION_SETTINGS.maxCorrelatedRisk, corrThreshold: DEFAULT_CORRELATION_SETTINGS.threshold };
 
 let prefs: UIPrefs | null = null;
 const listeners = new Set<() => void>();
@@ -95,4 +100,8 @@ export function setSizing(patch: Partial<Pick<UIPrefs, "capital" | "riskPct" | "
 
 export function toggleAutoPatterns() {
   setPrefs((current) => ({ ...current, autoPatterns: !current.autoPatterns }));
+}
+
+export function setCorrelationSizing(patch: Partial<Pick<UIPrefs, "corrSizing" | "maxCorrRisk" | "corrThreshold">>) {
+  setPrefs((current) => ({ ...current, ...patch }));
 }

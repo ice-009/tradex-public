@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import "./replay.css";
 import { api } from "@/client/api";
 import { resolvedTimeMachine, setAsOf, useTimeMachine } from "@/client/timeMachine";
 import { ARCHIVE_START } from "@/core/backtest/phases";
 import { DAY_MS, istParts } from "@/core/market/session";
 import { dayLabel, isoDay } from "@/core/reference/timeMachine";
-import { adaptToEndOfDay } from "./store";
+import { adaptToEndOfDay, updateScreener } from "./store";
+import { jumpTo, pause, setSpeed, stepBar, stepDay, togglePlay, useReplay } from "@/client/replay";
+import { usePaperFeed, usePaperPolling } from "@/client/paperFeed";
+import { REPLAY_SPEEDS } from "@/core/reference/replay";
+import { signedR } from "@/core/plan/evidence";
 
 /** The hub keeps a year of intraday candles: a day older than that has daily charts only. */
 const INTRADAY_DAYS = 365;
@@ -114,6 +119,119 @@ export function TimeMachineBanner() {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ replay controls (#32)
+
+const SPEED_LABEL: Record<number, string> = { 0.5: "½ session/s", 1: "1 session/s", 2: "2 sessions/s", 4: "4 sessions/s" };
+const isTyping = (target: EventTarget | null) => {
+  const element = target as HTMLElement | null;
+  return Boolean(element && (element.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName)));
+};
+
+/**
+ * Under the banner in the Time Machine: step a session back or forward, play
+ * forward at a chosen speed, reveal the next bar of an intraday chart, jump to
+ * a date, and the paper session's running score. Keyboard: Alt+] / Alt+[ next
+ * / previous session, Alt+Shift+] / Alt+Shift+[ next / previous bar, Alt+P play
+ * or pause, Alt+J jump to a date.
+ */
+export function ReplayBar() {
+  const asOf = useTimeMachine((state) => state.asOf);
+  const info = useTimeMachine((state) => state.info);
+  const playing = useReplay((state) => state.playing);
+  const speed = useReplay((state) => state.speed);
+  const cursor = useReplay((state) => state.cursor);
+  const stopped = useReplay((state) => state.stopped);
+  const summary = usePaperFeed((feed) => feed.data?.summary ?? null);
+  const jumpRef = useRef<HTMLInputElement>(null);
+  const [jump, setJump] = useState("");
+  usePaperPolling();
+
+  useEffect(() => {
+    if (!asOf) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.altKey || event.metaKey || event.ctrlKey || isTyping(event.target) || document.querySelector(".tx-modal")) return;
+      const step = event.code === "BracketRight" ? 1 : event.code === "BracketLeft" ? -1 : 0;
+      if (step) {
+        event.preventDefault();
+        if (event.shiftKey) stepBar(step);
+        else stepDay(step);
+      } else if (event.code === "KeyP") {
+        event.preventDefault();
+        togglePlay();
+      } else if (event.code === "KeyJ") {
+        event.preventDefault();
+        jumpRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [asOf]);
+  // Leaving the Time Machine stops a replay.
+  useEffect(() => () => pause(), []);
+
+  if (!asOf) return null;
+  const hasPrev = Boolean(info?.sessions.before.length);
+  const hasNext = Boolean(info?.sessions.after.length);
+  const label = info?.label ?? dayLabel(Date.parse(`${asOf}T00:00:00Z`));
+  return (
+    <div className="tx-tm-replay" role="toolbar" aria-label="Replay" data-testid="replay-bar">
+      <span className="tx-tm-replay-day" data-testid="replay-day">
+        {label}
+        {cursor !== null && <em> · next session to {new Date(cursor - 1 + 5.5 * 3_600_000).toISOString().slice(11, 16)}</em>}
+      </span>
+      <button type="button" className="tx-tb-btn" onClick={() => stepDay(-1)} disabled={!hasPrev || playing} title="Previous session (Alt+[)" aria-label="Previous session">
+        ◀ Session
+      </button>
+      <button type="button" className={`tx-tb-btn ${playing ? "is-on" : ""}`} onClick={togglePlay} disabled={!hasNext && !playing} title="Play the days forward (Alt+P)" aria-label={playing ? "Pause" : "Play"}>
+        {playing ? "❚❚ Pause" : "▶ Play"}
+      </button>
+      <button type="button" className="tx-tb-btn" onClick={() => stepDay(1)} disabled={!hasNext || playing} title="Next session (Alt+])" aria-label="Next session">
+        Session ▶
+      </button>
+      <button type="button" className="tx-tb-btn" onClick={() => stepBar(1)} disabled={!hasNext || playing} title="Next bar: on an intraday chart, reveal the next session one bar at a time; on a daily chart, the next session (Alt+Shift+])" aria-label="Next bar">
+        Bar ▶
+      </button>
+      <select className="tx-input tx-tm-speed" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} aria-label="Replay speed" title="Play speed">
+        {REPLAY_SPEEDS.map((value) => (
+          <option key={value} value={value}>
+            {SPEED_LABEL[value] ?? `${value}/s`}
+          </option>
+        ))}
+      </select>
+      <form
+        className="tx-tm-jump"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (jump) jumpTo(jump);
+        }}
+      >
+        <input ref={jumpRef} type="date" className="tx-input tx-tm-date" aria-label="Jump to date" title="Jump to a date (Alt+J)" min={isoDay(ARCHIVE_START)} max={latestPastDay()} value={jump} onChange={(event) => setJump(event.target.value)} />
+        <button type="submit" className="tx-tb-btn" disabled={!jump}>
+          Jump
+        </button>
+      </form>
+      {stopped && <span className="tx-tm-replay-note">{stopped}</span>}
+      <button
+        type="button"
+        className="tx-tm-paper-chip"
+        onClick={() => updateScreener({ open: true, view: "paper" })}
+        title="Your paper trades in this replay, graded as of the day shown"
+        data-testid="paper-chip"
+      >
+        Paper{" "}
+        {summary && summary.taken > 0 ? (
+          <>
+            {summary.open + summary.pending > 0 && <span>{summary.open + summary.pending} open · </span>}
+            <b className={summary.netR >= 0 ? "is-up" : "is-down"}>{signedR(summary.netR)}</b> · {summary.closed} closed
+          </>
+        ) : (
+          <span className="tx-dim">no trades yet</span>
+        )}
+      </button>
     </div>
   );
 }
