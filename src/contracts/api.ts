@@ -22,6 +22,7 @@ import type { CardSummary, WorksIn } from "@/core/lab/receipt";
 import type { RunStamp } from "@/core/repro/stamp";
 import type { DataQualityFinding, DataQualityReport } from "@/core/quality/findings";
 import type { ExitReason, JournalSummary } from "@/core/plan/journal";
+import type { LedgerRecord, LedgerVerification, SealKind } from "@/core/plan/seal";
 import type { TradeTrack } from "@/core/plan/tracker";
 import type { FactorKey, StockFacts } from "@/core/screener/score";
 import type { MarketOverview, ScreenerRow, TradePlan } from "@/core/screener/screens";
@@ -357,6 +358,48 @@ export type EvidenceResponse =
 /** POST /api/plan/evidence/replay: the stamped table computed again from scratch, with its own stamp. */
 export type EvidenceReplayResponse =
   | { status: "ready"; error?: undefined; table: EvidenceTable; universeNote: string; ms: number; stamp: RunStamp }
+  | { status: "error"; error: string };
+
+// ------------------------------------------------------------------ /api/plan/ledger (the sealed daily plan, #33)
+
+/** The server's sealing job (src/server/services/planLedger.ts). */
+export interface PlanLedgerJob {
+  /** False when sealing is switched off (PLAN_LEDGER=off) or no Market Data Hub is configured; `reason` says which. */
+  enabled: boolean;
+  reason: string | null;
+  /** Holidays come from the hub's trading calendar; false: weekends only. */
+  calendar: boolean;
+  /** When the next close seal is due (epoch ms). */
+  nextCloseAt: number | null;
+  /** The latest attempt per day and kind, newest first (a skip says why). */
+  recent: Array<{ day: number; kind: SealKind; outcome: "sealed" | "skipped" | "failed"; reason: string | null; at: number }>;
+  /** Each seal's hash is published outside the ledger (PLAN_LEDGER_PUBLISH_CMD). */
+  publish: boolean;
+}
+
+/**
+ * GET /api/plan/ledger?from&to (YYYY-MM-DD; default the last 30 days): the sealed records, oldest
+ * first, with the record before the first one (`after`), so the slice verifies on its own
+ * (verifyLedger(entries, after)). A whole-ledger export: ?from=2000-01-01.
+ */
+export type PlanLedgerResponse =
+  | { status: "ready"; error?: undefined; entries: LedgerRecord[]; after: { seq: number; hash: string } | null; total: number; head: { seq: number; hash: string; day: number; kind: SealKind } | null; today: number; job: PlanLedgerJob }
+  | { status: "past"; error: string }
+  | { status: "error"; error: string };
+
+/** GET /api/plan/ledger/verify: the whole chain checked end to end, published hashes against it, and the trading days with no seal. */
+export type PlanLedgerVerifyResponse =
+  | {
+      status: "ready";
+      error?: undefined;
+      verification: LedgerVerification;
+      /** The hashes the server published outside (when PLAN_LEDGER_PUBLISH_CMD is set), checked against the chain. */
+      anchors: { checked: number; ok: boolean; problems: string[] };
+      /** Trading days since the first seal with no close / final seal (the server was down, or had no live prices). */
+      gaps: { close: number[]; final: number[]; calendar: boolean };
+      checkedAt: number;
+    }
+  | { status: "past"; error: string }
   | { status: "error"; error: string };
 
 /** Body of POST /api/backtest/replay and /api/plan/evidence/replay. */

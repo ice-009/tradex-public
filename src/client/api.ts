@@ -27,6 +27,8 @@ import type {
   LabTrialsResponse,
   LiveRecordResponse,
   LotsResponse,
+  PlanLedgerResponse,
+  PlanLedgerVerifyResponse,
   PresetList,
   PresetsResponse,
   QuotesResponse,
@@ -148,6 +150,12 @@ export const api = {
 
   /** Daily returns of open trades and plan ideas for the risk model (issue #40); "syncing" while a past day's bars are read. */
   riskReturns: (symbols: string[]) => getStatusJson<RiskReturnsResponse>("/api/plan/returns", withAsOf({ symbols: csv(symbols) })),
+
+  /** The sealed daily plans (#33) between two YYYY-MM-DD dates (default: the last 30 days); "past" in the Time Machine. */
+  planLedger: (range?: { from?: string; to?: string }) => getStatusJson<PlanLedgerResponse>("/api/plan/ledger", withAsOf({ ...(range?.from ? { from: range.from } : {}), ...(range?.to ? { to: range.to } : {}) })),
+
+  /** The sealed-plan ledger verified end to end. */
+  verifyPlanLedger: () => getStatusJson<PlanLedgerVerifyResponse>("/api/plan/ledger/verify", withAsOf({})),
 
   /** The trade journal: open trades with today's action, closed ones with the summary. */
   trades: () => getJson<TradesResponse>("/api/trades"),

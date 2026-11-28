@@ -153,11 +153,21 @@ function withLots(size: PlanSize, lots: number, entry: number, stop: number): Pl
   return { ...size, lots, qty, risk: qty * (entry - stop), notional: qty * entry };
 }
 
-export function buildPlan(input: PlanInput): Plan {
-  const { results, evidence, state, banned, open, lots, settings, prices } = input;
+/** The ranked candidates before sizing: what `buildPlan` sizes, and what a sealed plan records (src/core/plan/seal.ts). */
+export interface RankedCandidates {
+  /** Screens allowed in this state, best expected R first. */
+  eligible: string[];
+  /** One idea per stock whose plan holds at the live price, in rank order; `size` holds only the lot. */
+  candidates: PlanIdea[];
+  /** Matches whose plan no longer holds at the live price. */
+  invalid: PlanIdea[];
+  skipped: { banned: string[]; held: string[]; noLot: string[] };
+}
+
+/** Steps 1–4 of the plan (see the top of this file): eligible screens, one candidate per stock, ranked; nothing sized. */
+export function rankCandidates(input: Omit<PlanInput, "settings">): RankedCandidates {
+  const { results, evidence, state, banned, open, lots, prices } = input;
   const held = new Set(open.map((position) => position.symbol));
-  const riskBudget = (settings.capital * settings.riskPct) / 100;
-  const freeSlots = Math.max(0, Math.round(settings.maxOpen) - open.length);
   const eligible = Object.values(evidence)
     .filter((entry) => SCREEN_MAP[entry.screenId] && eligibleIn(entry, state))
     .sort((a, b) => (bucketFor(b, state).mean ?? 0) - (bucketFor(a, state).mean ?? 0))
@@ -231,7 +241,16 @@ export function buildPlan(input: PlanInput): Plan {
       (a.screenId === b.screenId && a.scoreRanks ? b.row.score - a.row.score : 0) ||
       a.symbol.localeCompare(b.symbol),
   );
+  for (const list of Object.values(skipped)) list.sort();
+  invalid.sort((a, b) => b.expectedR - a.expectedR || a.symbol.localeCompare(b.symbol));
+  return { eligible, candidates, invalid, skipped };
+}
 
+export function buildPlan(input: PlanInput): Plan {
+  const { open, settings } = input;
+  const riskBudget = (settings.capital * settings.riskPct) / 100;
+  const freeSlots = Math.max(0, Math.round(settings.maxOpen) - open.length);
+  const { eligible, candidates, invalid, skipped } = rankCandidates(input);
   const openNotional = open.reduce((sum, position) => sum + position.notional, 0);
   let room = settings.capital * settings.maxLeverage - openNotional;
   let taken = 0;
@@ -268,7 +287,5 @@ export function buildPlan(input: PlanInput): Plan {
     taken += 1;
     room -= idea.size.notional;
   }
-  for (const list of Object.values(skipped)) list.sort();
-  invalid.sort((a, b) => b.expectedR - a.expectedR || a.symbol.localeCompare(b.symbol));
-  return { state, riskBudget, openCount: open.length, openNotional, freeSlots, eligible, ideas, unsized, more, invalid, correlated, skipped };
+  return { state: input.state, riskBudget, openCount: open.length, openNotional, freeSlots, eligible, ideas, unsized, more, invalid, correlated, skipped };
 }

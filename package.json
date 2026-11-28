@@ -18,6 +18,7 @@
     "db:setup": "prisma db push",
     "postinstall": "prisma generate",
     "lab": "node scripts/lab.mjs",
+    "ledger": "node scripts/ledger.mjs",
     "research": "node scripts/research.mjs"
   },
   "dependencies": {
