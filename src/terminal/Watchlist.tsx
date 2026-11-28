@@ -23,6 +23,7 @@ import {
 import { Splitter } from "./Splitter";
 import { MarketPanel } from "./MarketPanel";
 import { AlertsPanel } from "./Alerts";
+import { OptionsPanel } from "./OptionsPanel";
 import type { PresetList } from "@/contracts/api";
 import { api } from "@/client/api";
 import { Icons } from "./icons";
@@ -124,7 +125,7 @@ const SORT_COLUMNS: Array<{ key: WatchlistSortKey; label: string }> = [
   { key: "ch", label: "Chg" },
   { key: "chp", label: "Chg%" },
 ];
-const PANEL_TITLE = { movers: "Market movers", sectors: "Sectors", results: "Results calendar", alerts: "Price alerts" } as const;
+const PANEL_TITLE = { movers: "Market movers", sectors: "Sectors", results: "Results calendar", alerts: "Price alerts", options: "Options" } as const;
 const MIN_SIDEBAR = 260;
 const MAX_SIDEBAR = 620;
 const ROW_HEIGHT_FALLBACK = 32;
@@ -335,7 +336,7 @@ export function Watchlist() {
       </div>
         </>
       ) : (
-        panel === "alerts" ? <AlertsPanel /> : <MarketPanel panel={panel} />
+        panel === "alerts" ? <AlertsPanel /> : panel === "options" ? <OptionsPanel symbol={activeSymbol} /> : <MarketPanel panel={panel} />
       )}
       <Splitter
         axis="y"

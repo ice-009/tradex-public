@@ -130,6 +130,7 @@ const PANELS: Array<{ id: SidePanel; title: string; icon: keyof typeof Icons }> 
   { id: "movers", title: "Market movers: gainers, losers, volume, 52-week highs", icon: "trending" },
   { id: "sectors", title: "Sector performance and breadth", icon: "sectors" },
   { id: "results", title: "Results calendar (NSE)", icon: "calendar" },
+  { id: "options", title: "Options: implied volatility, skew, put–call ratio, max pain and the move the straddle prices (NSE F&O archive)", icon: "options" },
   { id: "alerts", title: "Price alerts", icon: "bell" },
 ];
 

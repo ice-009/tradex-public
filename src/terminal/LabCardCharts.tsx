@@ -9,7 +9,7 @@ import { isoDay, num, pct } from "@/core/lab/format";
 // decay by horizon with a ±2 Newey–West se band, and the bucket returns.
 // Colours come from the theme tokens (labCard.css).
 
-function useWidth<T extends HTMLElement>() {
+export function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
   const [width, setWidth] = useState(0);
   useEffect(() => {

@@ -8,7 +8,7 @@ import { toggleShortlist, updateScreener, useTerminal } from "./store";
 import { GROUP_LABEL, focusedHit, refreshScreener, riskReward, scoreHit, setIdeaOrder, useScreenerFeed, type SetupHit, type TradeIdea } from "@/client/screenerFeed";
 import { openIdea } from "./ideaActions";
 import { drawPlanOnChart } from "./SetupCard";
-import { OiChip, ScoreChip } from "./ScoreBits";
+import { IvChip, OiChip, ScoreChip } from "./ScoreBits";
 import { ReceiptLink } from "./Receipt";
 import { useFactorReceipts, useScoreGate, useScreenReceipts } from "./useReceipts";
 import type { Receipt } from "@/core/lab/receipt";
@@ -666,6 +666,7 @@ function ScreenerRowView({
                 </span>
               ))}
               {row.oi && <OiChip fact={row.oi} />}
+              {row.options && <IvChip fact={row.options} />}
             </span>
           </td>
         </>

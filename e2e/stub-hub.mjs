@@ -21,6 +21,13 @@
 //    /v1/adjustments/batch knows one split/bonus: RELIANCE 1:1 on 1 Sep 2025
 //    (factor 0.5), so the Time Machine (#31) can be seen re-expressing prices as
 //    they traded before it. The candles stay as they are (already "adjusted").
+//  - Daily option summaries (/v1/options/summary and /v1/options/day,
+//    market-data-hub#30) for every F&O stock and NIFTY / BANKNIFTY on every
+//    session: a seeded mean-reverting iv30 (stocks ~20–45%, indices ~10–20%),
+//    the near/next expiry priced off the day's close with Black-76's ATM
+//    approximation (straddle ≈ 0.8·σ√T·F), put skew, max pain and OI walls near
+//    the money, and ivPercentile over the 365 days up to each day, as the hub
+//    computes it. TCS answers 503 not_ready, so the panel's message can be seen.
 //
 // Usage: node e2e/stub-hub.mjs  (STUB_HUB_PORT, default 8797; STUB_HUB_KEY, default "mdh_e2e")
 
@@ -274,6 +281,155 @@ function tradingDays(from, to) {
   return out;
 }
 
+// ------------------------------------------------------------------ option summaries (market-data-hub#30)
+
+const OPTION_INDICES = ["NIFTY", "BANKNIFTY"];
+const OPTION_UNDERLYINGS = [...OPTION_INDICES, ...FNO];
+/** A symbol the stub has no summaries for at all: the hub's "nothing stored yet" answer, for the panel's message. */
+const OPTIONS_NOT_READY = "TCS";
+const optionCache = new Map();
+const r4 = (value) => (value === null || !Number.isFinite(value) ? null : Math.round(value * 10_000) / 10_000);
+const r2 = (value) => (value === null || !Number.isFinite(value) ? null : Math.round(value * 100) / 100);
+
+/** The last Thursday of a month (NSE's monthly expiry in the stub), as a day key. */
+function lastThursday(year, month) {
+  let t = Date.UTC(year, month + 1, 0);
+  while (new Date(t).getUTCDay() !== 4) t -= DAY;
+  return t;
+}
+
+/** The first two expiries after `t`: weekly Thursdays for indices, monthlies for stocks. */
+function expiriesAfter(t, index) {
+  if (index) {
+    let next = t + DAY;
+    while (new Date(next).getUTCDay() !== 4) next += DAY;
+    return [next, next + 7 * DAY];
+  }
+  const date = new Date(t);
+  const out = [];
+  for (let k = 0; out.length < 2; k += 1) {
+    const expiry = lastThursday(date.getUTCFullYear(), date.getUTCMonth() + k);
+    if (expiry > t) out.push(expiry);
+  }
+  return out;
+}
+
+function strikeStep(price, index) {
+  if (index) return price > 30_000 ? 100 : 50;
+  return price < 250 ? 2.5 : price < 1_000 ? 10 : price < 3_000 ? 20 : 50;
+}
+
+function optionLeg(t, expiry, spot, iv, index, rand, rate) {
+  const days = Math.round((expiry - t) / DAY);
+  const years = days / 365;
+  const forward = spot * Math.exp(rate * years);
+  const step = strikeStep(spot, index);
+  const atmStrike = Math.round(forward / step) * step;
+  const straddle = 0.8 * iv * Math.sqrt(years) * forward;
+  const skew = (index ? 0.03 : 0.012) + (rand() - 0.5) * 0.01;
+  const callOi = Math.round((index ? 8e6 : 2e6) * (0.5 + rand()));
+  const putOi = Math.round(callOi * (0.7 + rand() * 0.6));
+  const wall = (side) => atmStrike + side * step * (1 + Math.floor(rand() * 4));
+  return {
+    expiry: iso(expiry),
+    expiryDay: expiry,
+    days,
+    forward: r2(forward),
+    atmStrike,
+    straddle: r2(straddle),
+    expectedMovePct: r4((100 * straddle) / forward),
+    atmIv: r4(iv),
+    callIv: r4(iv - 0.002),
+    putIv: r4(iv + 0.002),
+    cpSpread: index ? null : r4((rand() - 0.6) * 0.01),
+    iv25Put: r4(iv + skew * 0.7),
+    iv25Call: r4(iv - skew * 0.3),
+    skew25: r4(skew),
+    maxPain: atmStrike + step * Math.round((rand() - 0.5) * 4),
+    callWall: wall(1),
+    callWallOi: Math.round(callOi * (0.08 + rand() * 0.05)),
+    putWall: wall(-1),
+    putWallOi: Math.round(putOi * (0.08 + rand() * 0.05)),
+    callOi,
+    putOi,
+    pcrOi: r4(putOi / callOi),
+    strikes: index ? 80 : 30,
+    liquidStrikes: index ? 60 : 22,
+    flags: index ? ["FORWARD_PARITY"] : [],
+  };
+}
+
+/** Every session's summary for one underlying (oldest first), ivPercentile over the trailing 365 days. */
+function optionSeries(symbol) {
+  const cached = optionCache.get(symbol);
+  if (cached) return cached;
+  const index = OPTION_INDICES.includes(symbol);
+  const rand = random(hash(`${symbol}:options`));
+  const base = index ? 0.12 + rand() * 0.04 : 0.22 + rand() * 0.16;
+  let logIv = Math.log(base);
+  const bars = daily(symbol);
+  const lot = index ? 25 : lotFor(symbol);
+  const rows = bars.map((bar, i) => {
+    // Mean-reverting log IV with the odd shock: fear spikes and decays.
+    logIv += 0.04 * (Math.log(base) - logIv) + (rand() - 0.5) * 0.08 + (rand() < 0.01 ? 0.35 : 0);
+    const iv30 = Math.min(1.2, Math.max(0.06, Math.exp(logIv)));
+    const [nearExpiry, nextExpiry] = expiriesAfter(bar.t, index);
+    const nearDays = (nearExpiry - bar.t) / DAY;
+    // Near-term IV moves more than the 30-day point; usually a little below it when calm.
+    const nearIv = Math.max(0.05, iv30 * (1 + (iv30 / base - 1) * 0.3 - 0.02 + (rand() - 0.5) * 0.04) * (nearDays < 5 ? 1.05 : 1));
+    const nextIv = Math.max(0.05, iv30 * (1 + (rand() - 0.5) * 0.03));
+    const near = optionLeg(bar.t, nearExpiry, bar.c, nearIv, index, rand, 0.065);
+    const next = optionLeg(bar.t, nextExpiry, bar.c, nextIv, index, rand, 0.065);
+    const callVolume = Math.round((index ? 4e6 : 4e4) * (0.4 + rand()));
+    const putVolume = Math.round(callVolume * (0.6 + rand() * 0.7));
+    const callOi = Math.round((near.callOi + next.callOi) * 1.15);
+    const putOi = Math.round((near.putOi + next.putOi) * 1.15);
+    const optionShares = (callVolume + putVolume) * lot;
+    const stockVolume = index ? null : bar.v;
+    return {
+      date: iso(bar.t),
+      day: bar.t,
+      ticker: symbol,
+      kind: index ? "index" : "stock",
+      spot: bar.c,
+      lot,
+      lotEstimated: false,
+      expiries: index ? 6 : 3,
+      callOi,
+      putOi,
+      callChgOi: Math.round(callOi * (rand() - 0.5) * 0.08),
+      putChgOi: Math.round(putOi * (rand() - 0.5) * 0.08),
+      callVolume,
+      putVolume,
+      pcrOi: r4(putOi / callOi),
+      pcrVolume: r4(putVolume / callVolume),
+      optionShares,
+      stockVolume,
+      optionToStock: stockVolume ? r4(optionShares / stockVolume) : null,
+      iv30: r4(iv30),
+      ivPercentile: null,
+      flags: [],
+      near,
+      next,
+      i,
+    };
+  });
+  // The hub's ivPercentile: the share of the 365 days up to and including the day whose iv30 was lower (null with under 60).
+  let start = 0;
+  for (const [end, row] of rows.entries()) {
+    while (rows[start].day <= row.day - 365 * DAY) start += 1;
+    const window = rows.slice(start, end + 1);
+    row.ivPercentile = window.length < 60 ? null : Math.round((1000 * window.filter((other) => other.iv30 < row.iv30).length) / window.length) / 10;
+    delete row.i;
+  }
+  optionCache.set(symbol, rows);
+  return rows;
+}
+
+const OPTIONS_SPAN = { knownFrom: iso(SESSIONS[0]), knownFromDay: SESSIONS[0], lastDate: iso(LAST_SESSION), lastDay: LAST_SESSION };
+const notReady = (res) => send(res, 503, { error: "No option summaries are stored yet: they come with the evening's F&O bhavcopy, and `hub data nse-history --only options` reads the archive.", code: "not_ready" });
+const dateParam = (value) => (value ? Date.parse(`${value}T00:00:00Z`) : NaN);
+
 // ------------------------------------------------------------------ server
 
 function send(res, status, body, headers = {}) {
@@ -388,6 +544,30 @@ const routes = {
     if (!Number.isFinite(from) || !Number.isFinite(to)) return send(res, 400, { error: "from and to are required", code: "bad_request" });
     const days = SESSIONS.filter((t) => t >= from && t <= to).map((t) => ({ date: iso(t), day: t, symbols: FNO }));
     send(res, 200, { from: iso(from), to: iso(to), days });
+  },
+
+  "/v1/options/summary": (url, res) => {
+    const symbol = (url.searchParams.get("symbol") ?? "").toUpperCase();
+    if (!symbol) return send(res, 400, { error: "symbol is required: an NSE ticker or index such as SBIN or NIFTY.", code: "bad_request" });
+    if (symbol === OPTIONS_NOT_READY) return notReady(res);
+    const toAsked = dateParam(url.searchParams.get("to"));
+    const to = Number.isFinite(toAsked) ? toAsked : LAST_SESSION + DAY;
+    const fromAsked = dateParam(url.searchParams.get("from"));
+    // "The last year" from the real clock, as it would have been at FROZEN_NOW (see asOfFrozen).
+    const from = Number.isFinite(fromAsked) ? (Number.isFinite(toAsked) && toAsked < LAST_SESSION ? fromAsked : asOfFrozen(fromAsked)) : to - 365 * DAY;
+    const days = OPTION_UNDERLYINGS.includes(symbol) ? optionSeries(symbol).filter((row) => row.day >= from && row.day <= to) : [];
+    send(res, 200, { symbol, from: iso(from), to: iso(to), ...OPTIONS_SPAN, days });
+  },
+
+  "/v1/options/day": (url, res) => {
+    const asked = dateParam(url.searchParams.get("date"));
+    const kind = url.searchParams.get("kind");
+    const day = SESSIONS.filter((t) => !Number.isFinite(asked) || t <= asked).at(-1);
+    if (day === undefined) return notFound(res, `No option summaries stored on or before ${url.searchParams.get("date")}.`);
+    const rows = OPTION_UNDERLYINGS.filter((symbol) => symbol !== OPTIONS_NOT_READY)
+      .map((symbol) => ({ symbol, ...optionSeries(symbol).find((row) => row.day === day) }))
+      .filter((row) => !kind || row.kind === kind);
+    send(res, 200, { date: iso(day), day, count: rows.length, rows });
   },
 
   "/v1/fo/contracts": (url, res) => {

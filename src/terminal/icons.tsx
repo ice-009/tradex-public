@@ -295,6 +295,14 @@ export const Icons = {
       <rect x={3} y={15} width={8} height={6} rx={1.5} />
     </Svg>
   ),
+  /** A volatility smile over a baseline: the Options panel. */
+  options: (p: IconProps) => (
+    <Svg {...p}>
+      <path d="M3 20h18" />
+      <path d="M4 6c3 9 13 9 16 0" />
+      <path d="M12 13.2V20" strokeDasharray="1.5 2" />
+    </Svg>
+  ),
   calendar: (p: IconProps) => (
     <Svg {...p}>
       <rect x={3.5} y={5} width={17} height={15} rx={2} />

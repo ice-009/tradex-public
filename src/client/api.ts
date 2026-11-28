@@ -27,6 +27,9 @@ import type {
   LabTrialsResponse,
   LiveRecordResponse,
   LotsResponse,
+  OptionRange,
+  OptionsDayResponse,
+  OptionsResponse,
   PlanLedgerResponse,
   PlanLedgerVerifyResponse,
   PresetList,
@@ -71,9 +74,9 @@ async function getJson<T>(path: string, params?: Record<string, string | number 
  * Like getJson, but endpoints that answer errors in their own shape (`{ status: "error", … }`)
  * return the body instead of throwing.
  */
-async function getStatusJson<T extends { status: string }>(path: string, params: Record<string, string>): Promise<T> {
+async function getStatusJson<T extends { status: string }>(path: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const query = new URLSearchParams(params).toString();
-  const response = await fetch(`${path}?${query}`, { cache: "no-store" });
+  const response = await fetch(query ? `${path}?${query}` : path, { cache: "no-store", signal });
   const body = (await response.json().catch(() => null)) as (T & { error?: string }) | null;
   if (body?.status) return body;
   throw new ApiError(body?.error ?? `${path} failed (${response.status})`, response.status);
@@ -182,6 +185,12 @@ export const api = {
   highLow: (after: number) => getJson<HighLowResponse>("/api/highlow", { after }),
 
   lots: () => getJson<LotsResponse>("/api/lots", { asOf: asOf() }),
+
+  /** An underlying's daily option summaries (IV term, skew, PCR, max pain, straddle) and IV history, as of the Time Machine's day when set. */
+  options: (symbol: string, range: OptionRange, signal?: AbortSignal) => getStatusJson<OptionsResponse>("/api/options", withAsOf({ symbol, range }), signal),
+
+  /** Every underlying's option summary on the newest stored day (on or before the Time Machine's day). */
+  optionsDay: (signal?: AbortSignal) => getStatusJson<OptionsDayResponse>("/api/options/day", withAsOf({}), signal),
 
   /** A stock's listed futures contracts (near and next month, as hub tickers) and lot size. */
   futures: (symbol: string) => getJson<FuturesResponse>("/api/futures", { symbol }),

@@ -310,6 +310,8 @@ select.tx-input option { background: var(--surface-2); color: var(--text); }
 }
 .tx-tag-index { background: var(--accent-soft); color: var(--accent-text); }
 .tx-tag-oi { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted, var(--text-subtle)); cursor: help; }
+/* Options (#36): neutral like the OI tag — information, not a signal. */
+.tx-tag-iv { background: transparent; border: 1px dashed var(--border-strong); color: var(--text-muted, var(--text-subtle)); cursor: help; }
 .tx-eod-tag { margin-right: 2px; background: transparent; color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn-border); }
 
 /* Count pill used in tabs, menus and the dock */

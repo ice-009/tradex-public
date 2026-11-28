@@ -16,7 +16,7 @@ const pct = (value: number, digits = 2) => (Number.isFinite(value) ? `${value >=
 const tone = (value: number) => (value > 0 ? "is-up" : value < 0 ? "is-down" : "");
 
 /** Movers / Sectors / Results: the other sidebar panels (the watchlist is its own component). */
-export function MarketPanel({ panel }: { panel: Exclude<SidePanel, "watchlist" | "alerts"> }) {
+export function MarketPanel({ panel }: { panel: Exclude<SidePanel, "watchlist" | "alerts" | "options"> }) {
   if (panel === "movers") return <Movers />;
   if (panel === "sectors") return <Sectors />;
   return <Results />;

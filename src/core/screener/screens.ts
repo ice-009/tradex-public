@@ -2,6 +2,7 @@ import { roundToTick } from "@/core/market/ticks";
 import { FAR_ATR } from "@/core/screener/planStatus";
 import type { Features } from "@/core/screener/features";
 import type { OiFact } from "@/core/market/openInterest";
+import type { OptionFact } from "@/core/options/summary";
 import type { StockFacts } from "@/core/screener/score";
 import type { SectorIndexStat } from "@/core/screener/sectorIndex";
 
@@ -57,6 +58,12 @@ export interface ScreenerRow {
    * Information only: it showed no tested edge on its own and is not a score input.
    */
   oi?: OiFact;
+  /**
+   * Options on the newest stored day (the hub's option summaries, issue #36):
+   * iv30, its rank against the stock's own prior year, the near straddle's move.
+   * Information only: no option signal has passed the Signal Lab (#38), so it is not a score input.
+   */
+  options?: OptionFact;
 }
 
 /** One stock in the market overview (movers / sectors), whether or not it matched a screen. */

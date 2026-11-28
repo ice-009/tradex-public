@@ -9,7 +9,7 @@ import { HOLD_BARS, verdictFor } from "@/core/screener/backtest";
 import { GROUP_LABEL, focusSetup, focusedHit, resultsNote, scoreHit, useIdea, useScreenerFeed, type SetupHit } from "@/client/screenerFeed";
 import { lotsForRisk } from "@/core/market/futures";
 import { useLotSize } from "@/client/lotsFeed";
-import { OiChip, ScoreBreakdown, ScoreChip } from "./ScoreBits";
+import { IvChip, OiChip, ScoreBreakdown, ScoreChip } from "./ScoreBits";
 import { ReceiptLine } from "./Receipt";
 import { useFactorReceipts, useScoreGate, useScreenReceipts } from "./useReceipts";
 import { OrderTicket } from "./OrderTicket";
@@ -181,6 +181,12 @@ export function SetupCard({ symbol }: { symbol: string }) {
       {hit.row.oi && (
         <p className="tx-setup-note">
           Futures <OiChip fact={hit.row.oi} /> <span className="tx-dim">— information only, not scored (no tested edge on its own).</span>
+        </p>
+      )}
+      {hit.row.options && (
+        <p className="tx-setup-note">
+          Options <IvChip fact={hit.row.options} />
+          {hit.row.options.movePct !== null && <> · straddle ±{hit.row.options.movePct.toFixed(1)}% to expiry</>} <span className="tx-dim">— information only, not scored.</span>
         </p>
       )}
       {facts?.pattern && (
