@@ -38,7 +38,8 @@ const WINDOW = 300 * DAY;
 const options = { costs: COST_PRESETS["futures-2026"].model, lots: {}, states: marketStates(benchmark) };
 const between = (bars: DailyBar[], from: number, to: number) => bars.filter((bar) => bar.t >= from && bar.t <= to);
 
-describe("cutting one block scan at each day", () => {
+// Scans a few hundred synthetic sessions several times over: ~2 s here, ~40 s on CI with coverage.
+describe("cutting one block scan at each day", { timeout: 120_000 }, () => {
   it("equals each day's own scan from the day's first counted session", async () => {
     const blockFrom = T0 + 920 * DAY;
     const blockTo = T0 + (N - 1) * DAY;
