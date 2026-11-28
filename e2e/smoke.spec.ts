@@ -113,6 +113,11 @@ test("open the plan", async ({ page }) => {
   await expect(plan.locator(".tx-plan-ideas li").first()).toBeVisible({ timeout: 60_000 });
   await expect(plan).not.toContainText("couldn't be computed");
   await expect(page.getByText("Show the evidence")).toBeVisible();
+  // The sealed plan (#33): its section reads the ledger (the job is off in these runs) and says so.
+  const sealed = page.locator(".tx-ledger");
+  await expect(sealed).toContainText("SEALED PLAN");
+  await expect(sealed).toContainText("Sealing is switched off");
+  await expect(sealed.getByRole("button", { name: "Verify the chain" })).toBeDisabled();
   // Every idea carries its receipt (#29): the tested period and expectancy, and a link to its screen's report card.
   const receipt = plan.locator(".tx-plan-ideas li").first().locator(".tx-receipt");
   await expect(receipt).toContainText(/R\/trade/);

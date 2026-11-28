@@ -32,6 +32,7 @@ import { ReceiptLine } from "./Receipt";
 import { useScreenReceipts } from "./useReceipts";
 import { useTimeMachine } from "@/client/timeMachine";
 import { LiveOnlyNote } from "./TimeMachine";
+import { PlanLedger } from "./PlanLedger";
 
 // The Plan tab: today's trades to take (from screens with a tested edge in
 // this market), how many lots, how to get in and out; your open trades with
@@ -101,6 +102,7 @@ export function PlanPanel() {
       <div className="tx-plan-body">
         <div className="tx-plan-col">
           <TodaysPlan plan={plan} state={state} evidence={ready} trades={trades} live={Boolean(data?.asOf?.live)} eodDate={data?.asOf?.eodDate ?? null} onSizing={() => setSettingsOpen(true)} />
+          <PlanLedger />
         </div>
         <div className="tx-plan-col">
           <JournalColumn trades={trades} error={tradesError} />
