@@ -11,7 +11,8 @@ import { LayoutNameDialog, LayoutToast, type LayoutDialogState } from "./Layouts
 import { SymbolSearch } from "./SymbolSearch";
 import { TopBar } from "./TopBar";
 import { HubBanner } from "./HubBanner";
-import { LiveOnly, TimeMachineBanner } from "./TimeMachine";
+import { LiveOnly, ReplayBar, TimeMachineBanner } from "./TimeMachine";
+import { PaperPanel } from "./PaperPanel";
 import { useTimeMachine } from "@/client/timeMachine";
 import { ScreenerPanel } from "./ScreenerPanel";
 import { ComparePanel } from "./ComparePanel";
@@ -180,6 +181,7 @@ function Workspace() {
         <TopBar onLayoutDialog={setLayoutDialog} />
         <HubBanner />
         <TimeMachineBanner />
+        <ReplayBar />
         <div className="tx-body">
           <DrawingToolbar />
           <div className={`tx-center ${screenerOpen && screenerMax ? "is-max" : ""}`}>
@@ -198,6 +200,8 @@ function Workspace() {
                 <LabPanel />
               ) : screenerView === "plan" ? (
                 <PlanPanel />
+              ) : screenerView === "paper" ? (
+                <PaperPanel />
               ) : (
                 <ScreenerPanel />
               ))}
